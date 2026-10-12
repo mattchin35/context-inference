@@ -36,12 +36,12 @@ summary.
 | PW-WP9a dry-run correction HEAD | `7a60043` (RED: `25de6ce`) |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
 | Current work package | PW-WP9a: CT026 all-window validation |
-| Current phase | Corrected all-window dry-run complete; execution is awaiting explicit user authorization |
+| Current phase | PW-WP9a CT026 all-window execution is running detached; final validation is pending |
 | Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction; PW-WP6 CT026 benchmark and reporting correction |
 | Active implementation files | None; external overlay `pooled_task_decoding_config_pw9a_all_windows.json` selects all three windows and has SHA-256 `f755b26f...c4113e` |
-| Latest validation | 2026-10-12: focused dry-run tests `2 passed`; pooled suite `69 passed`; full task-decoding suite `947 passed, 27 warnings`; Ruff passed; corrected CT026 dry-run reports 3,230 maximum rows for each half-second window and 25,840 for `full`; no run directory was created |
-| Open blockers | Explicit user authorization to prepare and detach the all-window run; the full-window direct-unit fits may scale worse than the tenfold aggregate stacked-row exposure relative to the accepted pre-choice benchmark |
-| Exact next action | Review the corrected dry-run and runtime implication; if approved, prepare and launch the immutable CT026 all-window run detached, then await completion without holding active Codex execution |
+| Latest validation | 2026-10-12: focused dry-run tests `2 passed`; pooled suite `69 passed`; full task-decoding suite `947 passed, 27 warnings`; Ruff passed; corrected CT026 dry-run reports 3,230 maximum rows for each half-second window and 25,840 for `full`; detached run `pooled_task_variable_decoding_20261012T045944Z` is running with zero completed checkpoints at launch |
+| Open blockers | Final run completion and post-run scientific/resource validation; the full-window direct-unit fits may scale worse than the tenfold aggregate stacked-row exposure relative to the accepted pre-choice benchmark |
+| Exact next action | Poll the detached run status until completion, then validate all result arrays, metadata, checkpoints, telemetry, and figures against the pooled contracts |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -511,8 +511,18 @@ configuration changed. The resource envelope is exactly unchanged. Aggregate
 stacked-row exposure across the three windows is ten times the accepted
 pre-choice-only benchmark. Linear scaling of its 1,612-second modeling stage
 would suggest about 4.5 hours, but this is only a planning reference because
-the 25,840-row direct-unit fits may scale nonlinearly. Execution remains behind
-the explicit review gate.
+the 25,840-row direct-unit fits may scale nonlinearly. Execution is now active
+under the explicit review gate.
+
+The user authorized execution on 2026-10-12. The immutable run was prepared
+and launched detached at `2026-10-12T04:59:44Z`:
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference/analysis_runs/pooled_task_variable_decoding_20261012T045944Z`
+
+Its frozen run fingerprint is
+`9f2e776e073c3d0e2494b39b070f120d59c0ded1ebccf5835d6ad9de0ad148c1`, and its
+detached child was PID `2670329` at launch. Initial status was `running` with no
+completed checkpoints, scientific results, or measured runtime telemetry yet.
 
 ## 2. Fixed revision-1 decisions
 
