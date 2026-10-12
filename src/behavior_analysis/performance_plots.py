@@ -56,6 +56,10 @@ AGENT_MOUSE_AGREEMENT_COLORS = {
     "Probe+P": "#e377c2",
     "Expect+D+P": "#7f7f7f",
 }
+EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS = {
+    "simple_probe_persistence_mouse_agreement": "simple_probe_persistence_value",
+    "expectancy_persistence_doubt_mouse_agreement": "expectancy_persistence_doubt_value",
+}
 
 
 def save_performance_figure(fig: plt.Figure, save_path: Path) -> None:
@@ -79,6 +83,80 @@ def save_performance_figure(fig: plt.Figure, save_path: Path) -> None:
     plt.close(fig)
 
 
+def prepare_expectant_block_agreement_spans(
+    trial_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Align expectant-model block agreement scores to trial-coordinate spans.
+
+    Parameters
+    ----------
+    trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Chronological trial table containing ``cur_block``, ``action``, and
+        both signed left-positive expectant-model value columns. Choices use
+        ``0=right`` and ``1=left``. Block ids must be present and each block
+        must occupy one contiguous run of rows.
+
+    Returns
+    -------
+    pandas.DataFrame, shape (n_blocks, 6)
+        One row per first-seen block with columns ``block_id``,
+        ``trial_start``, ``trial_end``, ``trial_midpoint``, and the two
+        unitless agreement fractions. Trial spans use plot coordinates and
+        include half a trial beyond the first and last trial centers. A block
+        without valid mouse-agent comparisons has ``NaN`` agreement.
+
+    Raises
+    ------
+    ValueError
+        If required columns or block ids are missing, or a block's rows are
+        not contiguous in trial order.
+    """
+    required_columns = {
+        "cur_block",
+        "action",
+        *EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS.values(),
+    }
+    missing_columns = sorted(required_columns.difference(trial_df.columns))
+    if missing_columns:
+        raise ValueError(
+            f"trial_df is missing block-agreement columns: {missing_columns}"
+        )
+    if trial_df["cur_block"].isna().any():
+        raise ValueError("trial_df cur_block must be present for every trial.")
+
+    block_ids = pd.unique(trial_df["cur_block"]).tolist()
+    block_summary = pd.DataFrame({"block_ix": block_ids})
+    block_summary = session_analysis.add_block_agent_mouse_agreement_columns(
+        block_summary,
+        trial_df,
+        agent_value_columns=EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS,
+    )
+
+    rows = []
+    for row_position, block_id in enumerate(block_ids):
+        trial_positions = np.flatnonzero(trial_df["cur_block"].eq(block_id).to_numpy())
+        if trial_positions.size == 0:
+            continue
+        if trial_positions.size > 1 and np.any(np.diff(trial_positions) != 1):
+            raise ValueError(
+                f"cur_block {block_id!r} does not occupy contiguous trial rows."
+            )
+        row = {
+            "block_id": block_id,
+            "trial_start": float(trial_positions[0]) - 0.5,
+            "trial_end": float(trial_positions[-1]) + 0.5,
+            "trial_midpoint": float(trial_positions.mean()),
+        }
+        for agreement_column in EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS:
+            row[agreement_column] = pd.to_numeric(
+                pd.Series([block_summary.iloc[row_position][agreement_column]]),
+                errors="coerce",
+            ).iloc[0]
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
 def plot_expectant_switching_diagnostics(
     trial_df: pd.DataFrame,
     plot_path: Path,
@@ -90,10 +168,11 @@ def plot_expectant_switching_diagnostics(
     ----------
     trial_df : pandas.DataFrame, shape (n_trials, n_columns)
         Aligned trial table containing observed ``action`` and ``reward`` plus
-        both exemplar probability traces, signed components, reward count, and
-        expectancy strength. Choices use ``0=right`` and ``1=left``; signed
-        model components are left-positive. An optional ``state`` column is
-        shown only as post hoc true-context annotation.
+        ``cur_block``, both exemplar probability and signed-value traces,
+        signed components, reward count, and expectancy strength. Choices use
+        ``0=right`` and ``1=left``; signed model components are left-positive.
+        An optional ``state`` column is shown only as post hoc true-context
+        annotation. Block ids must occupy contiguous trial rows.
     plot_path : pathlib.Path
         Existing output directory.
     sess_id_full : str
@@ -107,6 +186,9 @@ def plot_expectant_switching_diagnostics(
     required_columns = {
         "action",
         "reward",
+        "cur_block",
+        "simple_probe_persistence_value",
+        "expectancy_persistence_doubt_value",
         "simple_probe_persistence_prob_left",
         "expectancy_persistence_doubt_prob_left",
         "previous_choice",
@@ -121,7 +203,9 @@ def plot_expectant_switching_diagnostics(
         raise ValueError(f"trial_df is missing diagnostic columns: {missing_columns}")
 
     trial_index = np.arange(trial_df.shape[0])
-    numeric = trial_df[list(required_columns)].apply(pd.to_numeric, errors="coerce")
+    numeric_columns = required_columns.difference({"cur_block"})
+    numeric = trial_df[list(numeric_columns)].apply(pd.to_numeric, errors="coerce")
+    block_spans = prepare_expectant_block_agreement_spans(trial_df)
     fig, axes = plt.subplots(
         4,
         1,
@@ -163,28 +247,68 @@ def plot_expectant_switching_diagnostics(
             where="mid",
             color="#7f7f7f",
             linestyle="--",
+            linewidth=0.9,
             label="True context (post hoc)",
+            zorder=1,
         )
-    axes[0].set_ylabel("Choice / state")
-    axes[0].set_ylim(-0.15, 1.15)
-    axes[0].legend(loc="upper right", frameon=False, ncol=3)
-
-    axes[1].plot(
+    axes[0].plot(
         trial_index,
         numeric["simple_probe_persistence_prob_left"],
         color=AGENT_MOUSE_AGREEMENT_COLORS["Probe+P"],
-        label="Probe+P",
+        linewidth=0.8,
+        alpha=0.75,
+        label="Probe+P P(left)",
+        zorder=2,
     )
-    axes[1].plot(
+    axes[0].plot(
         trial_index,
         numeric["expectancy_persistence_doubt_prob_left"],
         color=AGENT_MOUSE_AGREEMENT_COLORS["Expect+D+P"],
-        label="Expect+D+P",
+        linewidth=0.8,
+        alpha=0.75,
+        label="Expect+D+P P(left)",
+        zorder=2,
     )
-    axes[1].axhline(0.5, color="#777777", linewidth=1, linestyle=":")
-    axes[1].set_ylabel("P(left)")
+    axes[0].set_ylabel("Choice / state / P(left)")
+    axes[0].set_ylim(-0.15, 1.15)
+    axes[0].legend(loc="upper right", frameon=False, ncol=5)
+
+    agreement_specs = (
+        ("simple_probe_persistence_mouse_agreement", "Probe+P"),
+        ("expectancy_persistence_doubt_mouse_agreement", "Expect+D+P"),
+    )
+    for agreement_column, agent_label in agreement_specs:
+        first_segment = True
+        for _, block_row in block_spans.iterrows():
+            agreement = block_row[agreement_column]
+            if pd.isna(agreement):
+                continue
+            axes[1].plot(
+                [block_row["trial_start"], block_row["trial_end"]],
+                [agreement, agreement],
+                color=AGENT_MOUSE_AGREEMENT_COLORS[agent_label],
+                linewidth=2.5,
+                solid_capstyle="butt",
+                label=(
+                    f"{agent_label} block agreement"
+                    if first_segment
+                    else "_nolegend_"
+                ),
+            )
+            first_segment = False
+    axes[1].set_ylabel("Block agreement")
     axes[1].set_ylim(-0.02, 1.02)
     axes[1].legend(loc="upper right", frameon=False)
+
+    for boundary in block_spans["trial_start"].iloc[1:]:
+        for axis in axes:
+            axis.axvline(
+                boundary,
+                color="#b8b8b8",
+                linewidth=0.7,
+                linestyle=":",
+                zorder=0,
+            )
 
     component_styles = {
         "previous_choice": ("Persistence", "#111111"),
@@ -247,6 +371,7 @@ def plot_expectant_switching_diagnostics(
         0.005,
         "Pre-trial model traces use only preceding valid choices and outcomes; "
         "true context is displayed only for post hoc interpretation. "
+        "Block-agreement segments span the contributing trial rows. "
         f"Post-reward excursions: {excursion_summary.n_excursions}/"
         f"{excursion_summary.n_opportunities} (rate={rate_text}).",
         color="black",
