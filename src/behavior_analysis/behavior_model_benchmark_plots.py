@@ -228,7 +228,13 @@ def _plot_atlas_page(
         fontsize=9,
         color="black",
     )
-    handles, labels = figure.axes[0].get_legend_handles_labels()
+    legend_entries = [
+        (handle, label)
+        for handle, label in zip(*figure.axes[0].get_legend_handles_labels())
+        if label != "Model value (single trial)"
+    ]
+    handles = [entry[0] for entry in legend_entries]
+    labels = [entry[1] for entry in legend_entries]
     figure.legend(handles, labels, loc="upper right", frameon=False)
     figure.tight_layout(rect=(0.0, 0.04, 1.0, 0.95))
     return figure
@@ -250,6 +256,17 @@ def _plot_sample_axis(
         label="Model value",
         zorder=2,
     )
+    if scenario.action.size == 1 and scenario.valid[0]:
+        axis.scatter(
+            trial_index,
+            replay.model_value,
+            marker="_",
+            s=90,
+            color="#355f8a",
+            linewidths=1.2,
+            label="Model value (single trial)",
+            zorder=3,
+        )
     signed_choice = np.where(scenario.action == 1, 1.0, -1.0)
     marker_sizes = np.where(scenario.reward > 0, 52.0, 20.0)
     axis.scatter(
