@@ -10,7 +10,14 @@ import pandas as pd
 import pytest
 
 matplotlib.use("Agg")
+from src.behavior_analysis.session_analysis import (  # noqa: E402
+    add_block_agent_mouse_agreement_columns,
+)
+
 session_analysis = ModuleType("src.behavior_analysis.session_analysis")
+session_analysis.add_block_agent_mouse_agreement_columns = (
+    add_block_agent_mouse_agreement_columns
+)
 
 
 def _import_performance_plots():
@@ -163,7 +170,10 @@ def test_plot_expectant_switching_diagnostics_saves_light_mode_png(tmp_path: Pat
         {
             "action": [1, 1, 0, 1],
             "reward": [1, 1, 0, 1],
+            "cur_block": [0, 0, 1, 1],
             "state": ["left", "left", "left", "left"],
+            "simple_probe_persistence_value": [1.0, 1.0, -1.0, 1.0],
+            "expectancy_persistence_doubt_value": [1.0, -1.0, -1.0, 1.0],
             "simple_probe_persistence_prob_left": [0.5, 0.5, 0.5, 0.12],
             "expectancy_persistence_doubt_prob_left": [0.5, 0.49, 0.42, 0.21],
             "previous_choice": [0, 1, 1, -1],
@@ -198,7 +208,10 @@ def test_expectant_diagnostic_choices_use_size_coded_markers_without_choice_line
         {
             "action": [1, 0, "no_choice", 1],
             "reward": [1, 0, 0, 1],
+            "cur_block": [10, 10, 20, 20],
             "state": ["left", "left", "right", "right"],
+            "simple_probe_persistence_value": [1.0, -1.0, np.nan, 1.0],
+            "expectancy_persistence_doubt_value": [-1.0, -1.0, np.nan, 1.0],
             "simple_probe_persistence_prob_left": [0.5, 0.4, np.nan, 0.7],
             "expectancy_persistence_doubt_prob_left": [0.5, 0.3, np.nan, 0.8],
             "previous_choice": [0, 1, np.nan, -1],
@@ -246,6 +259,9 @@ def test_expectant_diagnostic_reward_count_and_strength_use_separate_y_axes(
         {
             "action": [1, 1, 0, 1],
             "reward": [1, 1, 0, 1],
+            "cur_block": [10, 10, 20, 20],
+            "simple_probe_persistence_value": [1.0, 1.0, -1.0, 1.0],
+            "expectancy_persistence_doubt_value": [-1.0, -1.0, -1.0, 1.0],
             "simple_probe_persistence_prob_left": [0.5, 0.5, 0.5, 0.12],
             "expectancy_persistence_doubt_prob_left": [0.5, 0.49, 0.42, 0.21],
             "previous_choice": [0, 1, 1, -1],
@@ -270,6 +286,36 @@ def test_expectant_diagnostic_reward_count_and_strength_use_separate_y_axes(
 
     assert tuple(captured["fig"].get_size_inches()) == (24.0, 10.0)
     assert len(captured["fig"].axes) == 5
+    combined_axis = captured["fig"].axes[0]
+    combined_lines = {
+        line.get_label(): line
+        for line in combined_axis.lines
+    }
+    assert combined_lines["Probe+P P(left)"].get_linewidth() < 1.0
+    assert combined_lines["Expect+D+P P(left)"].get_linewidth() < 1.0
+
+    agreement_axis = captured["fig"].axes[1]
+    assert agreement_axis.get_ylabel() == "Block agreement"
+    assert agreement_axis.get_ylim() == pytest.approx((-0.02, 1.02))
+    probe_segments = [
+        line
+        for line in agreement_axis.lines
+        if line.get_color() == performance_plots.AGENT_MOUSE_AGREEMENT_COLORS["Probe+P"]
+    ]
+    expect_segments = [
+        line
+        for line in agreement_axis.lines
+        if line.get_color() == performance_plots.AGENT_MOUSE_AGREEMENT_COLORS["Expect+D+P"]
+    ]
+    assert [line.get_xdata().tolist() for line in probe_segments] == [
+        [-0.5, 1.5],
+        [1.5, 3.5],
+    ]
+    assert [line.get_xdata().tolist() for line in expect_segments] == [
+        [-0.5, 1.5],
+        [1.5, 3.5],
+    ]
+
     count_axis = captured["fig"].axes[3]
     strength_axis = captured["fig"].axes[4]
     assert count_axis.get_ylabel() == "Reward count"
@@ -281,6 +327,34 @@ def test_expectant_diagnostic_reward_count_and_strength_use_separate_y_axes(
     assert count_axis.get_ylim()[1] > 15
     assert strength_axis.get_ylim()[1] < 1
     plt.close(captured["fig"])
+
+
+def test_prepare_expectant_block_agreement_spans_aligns_nonconsecutive_blocks():
+    """Block scores should span the exact contributing trial positions."""
+    performance_plots = _import_performance_plots()
+    trial_df = pd.DataFrame(
+        {
+            "cur_block": [10, 10, 20, 20, 20, 30],
+            "action": [1, 0, 1, 0, 1, "no_choice"],
+            "reward": [1, 0, 1, 0, 1, 0],
+            "simple_probe_persistence_value": [1, -1, 1, 1, 1, np.nan],
+            "expectancy_persistence_doubt_value": [-1, -1, -1, -1, 1, np.nan],
+        }
+    )
+
+    spans = performance_plots.prepare_expectant_block_agreement_spans(trial_df)
+
+    assert spans["block_id"].tolist() == [10, 20, 30]
+    assert spans["trial_start"].tolist() == [-0.5, 1.5, 4.5]
+    assert spans["trial_end"].tolist() == [1.5, 4.5, 5.5]
+    assert spans.loc[:1, "simple_probe_persistence_mouse_agreement"].tolist() == pytest.approx(
+        [1.0, 2 / 3]
+    )
+    assert spans.loc[:1, "expectancy_persistence_doubt_mouse_agreement"].tolist() == pytest.approx(
+        [0.5, 2 / 3]
+    )
+    assert np.isnan(spans.loc[2, "simple_probe_persistence_mouse_agreement"])
+    assert np.isnan(spans.loc[2, "expectancy_persistence_doubt_mouse_agreement"])
 
 
 def test_plot_session_agent_mouse_agreement_saves_overall_lines(monkeypatch, tmp_path: Path):
