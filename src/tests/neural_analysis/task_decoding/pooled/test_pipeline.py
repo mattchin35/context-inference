@@ -347,6 +347,67 @@ def test_dry_run_reports_exact_pooled_counts_and_bytes_without_scientific_loadin
     )
 
 
+def test_dry_run_reports_canonical_window_stack_shapes_without_heavy_work(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Planning reports bounded stack shapes without neural or model allocation."""
+    overlay, _paths = _write_real_pooled_overlay(
+        tmp_path,
+        training_window_names=("full", "post_choice", "pre_choice"),
+    )
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        """Fail if stack-shape planning reaches a heavy scientific operation."""
+        raise AssertionError("dry run reached a forbidden scientific operation")
+
+    monkeypatch.setattr(pipeline.activity, "load_region_activity", forbidden)
+    monkeypatch.setattr(pipeline.activity, "build_session_rate_tensors", forbidden)
+    monkeypatch.setattr(pipeline.modeling, "make_estimator", forbidden)
+    monkeypatch.setattr(results, "initialize_pooled_result_arrays", forbidden)
+    monkeypatch.setattr(results, "validate_pooled_source_cleanliness", lambda *_: None)
+
+    plan = pipeline.plan_pooled_decoding_session(overlay)
+    stack_shapes = plan["training_window_stack_shapes"]
+
+    assert tuple(record["window_name"] for record in stack_shapes) == (
+        "pre_choice",
+        "post_choice",
+        "full",
+    )
+    assert tuple(record["training_bin_count"] for record in stack_shapes) == (1, 1, 8)
+    assert tuple(record["maximum_stacked_row_count"] for record in stack_shapes) == (
+        12,
+        12,
+        96,
+    )
+    for record, maximum_row_count in zip(
+        stack_shapes,
+        (12, 12, 96),
+        strict=True,
+    ):
+        assert set(record) == {
+            "window_name",
+            "training_bin_count",
+            "maximum_stacked_row_count",
+            "maximum_requested_model_input_shapes",
+        }
+        assert record["maximum_requested_model_input_shapes"] == {
+            "PFC": {
+                "pca": (maximum_row_count, 1),
+                "units": (maximum_row_count, 2),
+            },
+            "HPC": {
+                "pca": (maximum_row_count, 1),
+                "units": (maximum_row_count, 2),
+            },
+            "PFC+HPC": {
+                "pca": (maximum_row_count, 2),
+                "units": (maximum_row_count, 4),
+            },
+        }
+
+
 def _complete_resource_payload() -> dict[str, object]:
     """Return one minimal complete lean pooled resource payload.
 
