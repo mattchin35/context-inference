@@ -32,8 +32,10 @@ not a duplicate specification.
 | `run_session.py` | Standard-library CLI `main` for public `dry-run`, `new`, `resume`, and `status` modes; numerical imports occur only after one-thread environment variables are set. |
 | `run_batch.py` | Standard-library CLI `main` plus `read_config_list`; bounded multi-session `dry-run` and foreground `new`, with evidence-gated cross-session workers. |
 | `slurm.py` | Standard-library one-shot `submit-new`, exact-directory `submit-resume`, and read-only `status` operations; it owns reviewed `standard` and `condition_validation` resource receipts and `sacct` parsing but no scientific computation. |
+| `pooled/` | Separate fixed-regularization pooled-window analysis with overlay configuration, window-target checkpoints, compact native/transfer/gap reporting, and a single-session CLI. |
 | `../psth_webapp.py` and `../webapp/task_decoding_views.py` | Existing Streamlit entrypoint and early-routed **Task-variable decoding results** view. Discovery and rendering use completed saved runs only. |
 | `../../../docs/examples/neural_analysis/task_decoding_config.json` | Portable, explicit configuration template. Its repository path is `docs/examples/neural_analysis/task_decoding_config.json`. |
+| `../../../docs/examples/neural_analysis/pooled_task_decoding_config.json` | Portable pooled overlay selecting the sibling all-condition/all-target base example. |
 | `../../shell_scripts/task_variable_decoding_slurm.sh` | Thin single-session Slurm wrapper with one-CPU defaults, tracked-clean checkout checks, offline locked execution, and direct TERM propagation. Python submission applies either the standard 3-GiB/48-hour request or the 8-GiB/72-hour condition-validation override. Its repository path is `src/shell_scripts/task_variable_decoding_slurm.sh`. |
 
 ## Data contracts
@@ -237,6 +239,46 @@ scheduler state or hide completed results. Exact-commit/offline checks and
 non-destructive staged transfer are documented in the scientist README. WP13
 separately owns any array wrapper; it must reuse this preparation/execution
 path rather than duplicate scientific logic.
+
+## Pooled-window single-session usage
+
+The pooled revision-1 workflow uses
+`docs/examples/neural_analysis/pooled_task_decoding_config.json` as a small
+overlay on the sibling base configuration. Copy both files into the session
+root, update the base input/probe paths, and run a bounded dry run first:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.pooled.run_session dry-run --config /path/to/session/pooled_task_decoding_config.json
+```
+
+Create and execute a new foreground run with:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.pooled.run_session new --config /path/to/session/pooled_task_decoding_config.json
+```
+
+Add `--detach` to `new` for a local background child. The command prints the
+new immutable run directory. Resume only that exact directory; configuration
+is reconstructed from its canonical sidecars, not from the submitted audit
+copies:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.pooled.run_session resume --run-directory /path/to/session/analysis_runs/pooled_task_variable_decoding_YYYYMMDDTHHMMSSZ
+```
+
+Read bounded lifecycle and validation evidence without modifying the run:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.pooled.run_session status --run-directory /path/to/session/analysis_runs/pooled_task_variable_decoding_YYYYMMDDTHHMMSSZ
+```
+
+Each completed window/target cell has exactly three PNGs under `figures/`:
+native, transfer, and native-minus-transfer gap. `results.npz` remains the
+validated scientific source for every plot. `summary.md`, `run.log`, source
+snapshots, checkpoint files, and `resource_usage.json` stay in the same
+immutable run directory. Existing per-time-bin runs retain their original
+loader and command surface; they are not discovered or interpreted as pooled
+runs.
 
 ## Focused test ownership
 

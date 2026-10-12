@@ -1,0 +1,6 @@
+{
+  "base_config_path": "task_decoding_config.json",
+  "training_window_names": [
+    "pre_choice"
+  ]
+}
