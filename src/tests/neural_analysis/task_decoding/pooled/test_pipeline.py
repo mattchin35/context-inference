@@ -91,14 +91,14 @@ def _context_for_config(
     config : PooledDecodingConfig
         Validated overlay and base target/condition settings.
     windows : tuple[TrainingWindow, ...]
-        Canonical windows resolved on the 40-bin base time axis.
+        Canonical windows resolved on the configured base time axis.
 
     Returns
     -------
     pipeline.PooledComputationContext
         Independent schema arrays, canonical metadata, and fixed fingerprint.
     """
-    edges = canonical_edges()
+    edges = canonical_edges(config.base_config.bin_width_ms)
     centers = (edges[:-1] + edges[1:]) / 2.0
     arrays, metadata = results.initialize_pooled_result_arrays(
         training_windows=windows,
@@ -475,6 +475,28 @@ def test_prepared_lifecycle_interrupts_resumes_completes_and_reenters_read_only(
     overlay, _paths = _write_real_pooled_overlay(tmp_path)
     monkeypatch.setattr(results, "validate_pooled_source_cleanliness", lambda *_: None)
     run_directory = pipeline.prepare_pooled_decoding_run(overlay)
+    prepared_config, prepared_windows = pooled_config.load_prepared_pooled_decoding_config(
+        run_directory
+    )
+    context = _context_for_config(prepared_config, prepared_windows)
+    execution_identity = json.loads(
+        (run_directory / "execution.json").read_text(encoding="utf-8")
+    )["run_fingerprint"]
+    context_metadata = dict(context.metadata)
+    context_metadata["provenance"] = {
+        **context.metadata["provenance"],
+        "run_fingerprint": execution_identity,
+    }
+    monkeypatch.setattr(
+        pipeline,
+        "_prepare_pooled_computation_context",
+        lambda *_: replace(
+            context,
+            arrays={name: value.copy() for name, value in context.arrays.items()},
+            metadata=dict(context_metadata),
+            run_fingerprint=execution_identity,
+        ),
+    )
 
     required_prepared = {
         "config.json",
