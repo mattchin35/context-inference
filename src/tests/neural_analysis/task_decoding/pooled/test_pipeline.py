@@ -705,3 +705,30 @@ def test_thin_cli_routes_dry_run_new_resume_detached_and_status(
         ("detach", prepared),
         ("status", prepared),
     ]
+
+
+def test_detached_private_child_waits_for_parent_receipt_before_execution(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Detached output accounting starts only after the launch receipt exists."""
+    from src.neural_analysis.task_decoding.pooled import run_session
+
+    prepared = tmp_path / "prepared-pooled-run"
+    prepared.mkdir()
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        run_session,
+        "_wait_for_detached_receipt",
+        lambda path: calls.append(("receipt", Path(path))),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "run_prepared_pooled_decoding",
+        lambda path: calls.append(("run", Path(path))),
+    )
+
+    assert run_session.main(
+        ["_execute-prepared", "--run-directory", str(prepared)]
+    ) == 0
+    assert calls == [("receipt", prepared), ("run", prepared)]
