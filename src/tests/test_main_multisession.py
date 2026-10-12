@@ -369,7 +369,7 @@ def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monk
 
 
 def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
-    """Agreement alignment should not require concatenation or HMM execution."""
+    """Agreement/selectivity plots should not require concatenation or HMM work."""
     main_module = load_main_module()
     session = SimpleNamespace(sess_id_full="CT016_test", date="2026-06-10")
     saved_session = object()
@@ -396,6 +396,11 @@ def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
     )
     monkeypatch.setattr(
         main_module,
+        "save_and_plot_multisession_expectant_model_selectivity",
+        lambda **_kwargs: calls.append("selectivity"),
+    )
+    monkeypatch.setattr(
+        main_module,
         "concatenate_saved_sessions",
         lambda _sessions: (_ for _ in ()).throw(AssertionError("HMM path reached")),
     )
@@ -403,7 +408,7 @@ def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
     result = main_module.main_multisession(agent_agreement_only=True)
 
     assert result is None
-    assert calls == ["agreement"]
+    assert calls == ["agreement", "selectivity"]
 
 
 def write_saved_session(
