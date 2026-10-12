@@ -34,14 +34,15 @@ summary.
 | PW-WP6 reporting correction HEAD | `ed09fe7` |
 | PW-WP9a dry-run correction HEAD | `7a60043` (RED: `25de6ce`) |
 | PW-WP8 cluster/batch RED HEAD | `29ddd56` |
+| PW-WP8 cluster/batch GREEN HEAD | `62bccb7` |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
 | Current work package | PW-WP8: cluster and batch execution |
-| Current phase | GREEN implementation and regression validation are complete; commit and user review are pending |
+| Current phase | GREEN implementation and regression validation are committed; user review is pending |
 | Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction; PW-WP6 CT026 benchmark and reporting correction; PW-WP9a CT026 all-window validation |
 | Active implementation files | `pooled/slurm.py`, `pooled/run_batch.py`, `pooled/run_session.py`, `pooled/pipeline.py`, pooled Slurm wrapper, scientist README, and this handoff |
 | Latest validation | 2026-10-12: WP8 contracts `13 passed`; focused CLI compatibility gate `14 passed`; pooled suite `82 passed`; full task-decoding suite `960 passed, 27 warnings`; Ruff, `git diff --check`, and wrapper shell syntax passed. The accepted PW-WP9a run completed 54/54 checkpoints in 3:35:20 with 1,107,640,320-byte peak RSS and 150,824,741 output bytes. |
-| Open blockers | GREEN commit and user review; no external synchronization or cluster submission has been performed or authorized by implementation alone |
-| Exact next action | Commit the validated GREEN implementation, record its commit in this handoff, and stop before any external cluster action |
+| Open blockers | User review; no external synchronization or cluster submission has been performed or authorized by implementation alone |
+| Exact next action | User reviews commit `62bccb7`; after separate approval, perform the documented manual session sync and first single-session cluster submission |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -65,7 +66,7 @@ user approval all pass.
 | PW-WP6 CT026 benchmark | Reporting correction `3342579`; test-fixture correction `5049e47` | Reporting correction `ed09fe7` | Plotting `4 passed`; pooled `68 passed`; 54/54 actual layouts pass geometry audit; fresh result exact-equality audit passed | `946 passed, 27 warnings` | User accepted the corrected figures, fresh telemetry, and benchmark on 2026-10-11 | Complete |
 | PW-WP7 optional descriptive comparison | - | - | - | - | - | Deferred |
 | PW-WP9a CT026 all-window validation | `25de6ce` | `7a60043`; launch record `3f8a238` | Existing focused contracts `5 passed`; exact dry-run and completed artifact validation passed | `947 passed, 27 warnings` before execution | User accepted completed run and prioritized PW-WP8 | Complete |
-| PW-WP8 cluster and batch execution | `29ddd56` | Pending | WP8 contracts `13 passed`; pooled suite `82 passed`; Ruff and shell syntax passed | `960 passed, 27 warnings` | User approved the implementation plan; final implementation review pending | GREEN validated |
+| PW-WP8 cluster and batch execution | `29ddd56` | `62bccb7` | WP8 contracts `13 passed`; pooled suite `82 passed`; Ruff and shell syntax passed | `960 passed, 27 warnings` | User approved the implementation plan; final implementation review pending | GREEN committed |
 | PW-WP9b experimental batch | - | - | - | - | Depends on PW-WP8 and reviewed manifest | Deferred |
 
 ### 1.2 Handoff update requirements
