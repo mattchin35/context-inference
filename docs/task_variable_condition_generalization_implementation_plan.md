@@ -33,14 +33,15 @@ summary.
 | PW-WP5 implementation HEAD | `1ff6b13d309bc85828bb547be387cd67b6c9ac9b` |
 | PW-WP5 provenance correction HEAD | `715ab95` |
 | PW-WP6 reporting correction HEAD | `ed09fe7` |
+| PW-WP9a dry-run correction HEAD | `7a60043` (RED: `25de6ce`) |
 | Approved documentation commit | `7df0100` (`updating task variable plans for generalized encoding analysis`) |
 | Current work package | PW-WP9a: CT026 all-window validation |
-| Current phase | All-window dry-run complete; required stacked-row dry-run evidence is missing and execution is not authorized |
+| Current phase | Corrected all-window dry-run complete; execution is awaiting explicit user authorization |
 | Completed work packages | PW-WP0 documentation; PW-WP1 configuration and master folds; PW-WP2 pooled scientific core; PW-WP3 result schema and synchronous computation; PW-WP4 synthetic scientific gate; PW-WP5 reporting, lifecycle, resources, usage, and runtime-provenance correction; PW-WP6 CT026 benchmark and reporting correction |
 | Active implementation files | None; external overlay `pooled_task_decoding_config_pw9a_all_windows.json` selects all three windows and has SHA-256 `f755b26f...c4113e` |
-| Latest validation | 2026-10-12: five existing multi-window/configuration/dry-run contracts passed; CT026 all-window dry-run reports 9,720 model fits, 3,240 transforms, 1,029,600 evaluation-metric cells, and 174,332,600 planned major-array bytes; no run directory was created |
-| Open blockers | Dry-run output omits the stacked-row dimensions required by Sections 16 and 9; the forty-bin full-window runtime must not be extrapolated from aggregate fit counts alone |
-| Exact next action | Present a narrow test-first dry-run reporting correction for approval; do not prepare or execute the all-window run until corrected dry-run evidence is reviewed |
+| Latest validation | 2026-10-12: focused dry-run tests `2 passed`; pooled suite `69 passed`; full task-decoding suite `947 passed, 27 warnings`; Ruff passed; corrected CT026 dry-run reports 3,230 maximum rows for each half-second window and 25,840 for `full`; no run directory was created |
+| Open blockers | Explicit user authorization to prepare and detach the all-window run; the full-window direct-unit fits may scale worse than the tenfold aggregate stacked-row exposure relative to the accepted pre-choice benchmark |
+| Exact next action | Review the corrected dry-run and runtime implication; if approved, prepare and launch the immutable CT026 all-window run detached, then await completion without holding active Codex execution |
 
 The repository contains unrelated untracked files. They are outside this
 analysis and must not be added, changed, or removed. Before each implementation
@@ -478,7 +479,8 @@ no production code or redundant scientific test was added.
 The external overlay
 `pooled_task_decoding_config_pw9a_all_windows.json` has SHA-256
 `f755b26fe67a28d5a55e37b51ba32feb480a2af2afd523922908dd5568c4113e`.
-Its clean dry-run has scientific-source fingerprint
+Before the reporting correction, its clean dry-run had scientific-source
+fingerprint
 `31f015ed7f0ff16601d2e8e914e5228cc14bfccfdf447e193097c7c715479080`
 and run fingerprint
 `8281d9b2ab1b8ffce921f7f8862d24507c633bb5299a955c3aace7ef454c22da`.
@@ -490,12 +492,27 @@ pairs, 18 targets, five folds, and coefficient capacity 469. Requested work is
 planned major arrays increase to 174,332,600 bytes. Dry-run created no analysis
 run directory.
 
-The dry-run does not report the required stacked-row dimensions. This omission
-is material because `pre_choice` and `post_choice` use five rows per training
-trial while `full` uses forty. Fit counts therefore do not support a runtime
-forecast for the all-window run. Add only the missing bounded planning evidence
-under a separately approved test-first correction, then rerun dry-run and stop
-for execution review.
+The approved test-first reporting correction is commits `25de6ce` (RED) and
+`7a60043` (GREEN). The bounded planner now reports five bins and at most 3,230
+stacked rows for each half-second window, and 40 bins and at most 25,840 rows
+for `full`. Requested input shapes are `(3230, 10)`, `(3230, 160)` for PFC,
+`(3230, 10)`, `(3230, 309)` for HPC, and `(3230, 20)`, `(3230, 469)` for
+combined PCA/direct-unit inputs in each half-second window; `full` replaces
+3230 with 25840. These are bounded maxima before condition, target, and fold
+filtering, not claims about independent sample count.
+
+The corrected dry-run has scientific-source fingerprint
+`ca8a892c9795d80c300baad9df040b69670a5c857edc8f26b5cbfb00688d739a`
+and run fingerprint
+`9f2e776e073c3d0e2494b39b070f120d59c0ded1ebccf5835d6ad9de0ad148c1`.
+The source fingerprint rotated because `pooled/pipeline.py` is deliberately in
+the reviewed source manifest; neither the fingerprint algorithm nor scientific
+configuration changed. The resource envelope is exactly unchanged. Aggregate
+stacked-row exposure across the three windows is ten times the accepted
+pre-choice-only benchmark. Linear scaling of its 1,612-second modeling stage
+would suggest about 4.5 hours, but this is only a planning reference because
+the 25,840-row direct-unit fits may scale nonlinearly. Execution remains behind
+the explicit review gate.
 
 ## 2. Fixed revision-1 decisions
 
