@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 import streamlit as st
 
@@ -13,9 +14,43 @@ from src.neural_analysis.lfp_summary.session import (
 )
 from src.neural_analysis.session_metadata import ResolvedSession
 from src.neural_analysis.webapp.data_loading import (
+    load_channel_quality_cached,
     load_summary_channel_metadata,
     load_summary_cluster_metadata,
 )
+
+
+def _metadata_channel_loader(session: ResolvedSession) -> Callable[[Path], object]:
+    """Build a lazy loader using each probe's explicitly declared quality file.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        Resolved probe sources. Sorter and channel-quality paths are absolute
+        filesystem identities with no physical units or array axes.
+
+    Returns
+    -------
+    Callable[[pathlib.Path], object]
+        Loader accepting one exact sorter directory and returning its normalized
+        channel-quality table through the existing Streamlit-cached reader.
+    """
+    quality_path_by_sorter = {
+        probe.sorter_directory: probe.channel_quality_file
+        for probe in session.probes
+        if probe.sorter_directory is not None and probe.channel_quality_file is not None
+    }
+
+    def load_declared_channel_metadata(sorter_path: Path) -> object:
+        """Load the quality table declared alongside one exact sorter path."""
+        quality_path = quality_path_by_sorter.get(Path(sorter_path))
+        if quality_path is None:
+            raise ValueError(
+                f"No declared channel-quality path matches sorter: {sorter_path}"
+            )
+        return load_channel_quality_cached(str(quality_path))
+
+    return load_declared_channel_metadata
 
 
 def render_metadata_lfp_summary_view(
@@ -66,7 +101,7 @@ def render_metadata_lfp_summary_view(
         sorter_paths=sorter_paths,
         aligned_spike_paths=aligned_spike_paths,
         cluster_metadata_loader=load_summary_cluster_metadata,
-        channel_metadata_loader=load_summary_channel_metadata,
+        channel_metadata_loader=_metadata_channel_loader(session),
         trial_table_path=config.trial_table_path,
     )
 
