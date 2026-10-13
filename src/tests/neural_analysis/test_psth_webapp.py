@@ -186,8 +186,28 @@ def test_metadata_summary_route_forwards_arbitrary_probe_sources_lazily(
     """Metadata-defined probe IDs reach the existing summary UI without array loading."""
     from src.tests.neural_analysis.test_lfp_summary_session import _write_resolved_session
 
-    session = _write_resolved_session(tmp_path)
+    original_session = _write_resolved_session(tmp_path)
+    versioned_probes = tuple(
+        replace(
+            probe,
+            sorter_directory=probe.sorter_directory.parent
+            / f"Kilosort4.1.3_{probe.probe_id}",
+            spike_times_file=probe.sorter_directory.parent
+            / f"Kilosort4.1.3_{probe.probe_id}"
+            / "spike_times.npy",
+            spike_clusters_file=probe.sorter_directory.parent
+            / f"Kilosort4.1.3_{probe.probe_id}"
+            / "spike_clusters.npy",
+            cluster_info_file=probe.sorter_directory.parent
+            / f"Kilosort4.1.3_{probe.probe_id}"
+            / "cluster_info.tsv",
+        )
+        for probe in original_session.probes
+    )
+    session = replace(original_session, probes=versioned_probes)
     received: dict[str, object] = {}
+    loaded_quality_paths: list[str] = []
+    expected_channels = pd.DataFrame({"channel": [7]})
 
     def fake_build(active_session: object, request: object) -> object:
         """Return a config marker while recording the exact session request."""
@@ -208,7 +228,18 @@ def test_metadata_summary_route_forwards_arbitrary_probe_sources_lazily(
         received["streamlit"] = args[0]
         received.update(kwargs)
 
+    def fake_load_channel_quality(path: str) -> pd.DataFrame:
+        """Record the explicit metadata quality file without opening it."""
+        loaded_quality_paths.append(path)
+        return expected_channels
+
     monkeypatch.setattr(summary_view, "build_lfp_summary_config", fake_build)
+    monkeypatch.setattr(
+        summary_view,
+        "load_channel_quality_cached",
+        fake_load_channel_quality,
+        raising=False,
+    )
     monkeypatch.setattr(psth_webapp.lfp_summary_webapp, "render_lfp_summary_view", fake_render)
     sentinel_streamlit = object()
 
@@ -220,14 +251,21 @@ def test_metadata_summary_route_forwards_arbitrary_probe_sources_lazily(
 
     assert received["streamlit"] is sentinel_streamlit
     assert received["sorter_paths"] == {
-        "front-probe": (tmp_path / "ephys/front/kilosort4").resolve(),
-        "rear-probe": (tmp_path / "ephys/rear/kilosort4").resolve(),
+        "front-probe": (tmp_path / "ephys/front/Kilosort4.1.3_front-probe").resolve(),
+        "rear-probe": (tmp_path / "ephys/rear/Kilosort4.1.3_rear-probe").resolve(),
     }
     assert received["aligned_spike_paths"] == {
         "front-probe": (tmp_path / "ephys/front_sync.npz").resolve(),
         "rear-probe": (tmp_path / "ephys/rear_sync.npz").resolve(),
     }
     assert received["trial_table_path"] == (tmp_path / "behavior/trials.csv").resolve()
+    channel_loader = received["channel_metadata_loader"]
+    assert callable(channel_loader)
+    loaded = channel_loader(received["sorter_paths"]["rear-probe"])
+    assert loaded is expected_channels
+    assert loaded_quality_paths == [
+        str((tmp_path / "ephys/rear/channel_quality.csv").resolve())
+    ]
 
 
 def test_active_summary_population_accepts_metadata_probe_ids() -> None:
