@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 import json
 from pathlib import Path
+import shutil
 
 import numpy as np
 import pytest
@@ -275,22 +276,73 @@ def test_analysis_dependencies_and_canonical_order_are_enforced(tmp_path: Path) 
     assert config.analyses == ("linear_granger",)
 
 
-def test_versions_and_execution_paths_are_strict(tmp_path: Path) -> None:
-    """Version mismatches and nonnormalized relative execution paths are rejected."""
+def test_versions_and_nonnormalized_paths_are_strict(tmp_path: Path) -> None:
+    """Version mismatches and lexically nonnormalized paths are rejected."""
     payload = _documented_payload((tmp_path / "neural_session.json").resolve())
     payload["analysis_version"] = "future"
     with pytest.raises(ValueError, match="analysis_version"):
         _load(tmp_path, payload)
 
     payload = _documented_payload((tmp_path / "neural_session.json").resolve())
-    payload["session_metadata_path"] = "relative/neural_session.json"
-    with pytest.raises(ValueError, match="absolute"):
+    payload["session_metadata_path"] = "nested/../neural_session.json"
+    with pytest.raises(ValueError, match="normalized"):
         _load(tmp_path, payload)
 
     payload = _documented_payload((tmp_path / "neural_session.json").resolve())
-    payload["run"]["output_root"] = "relative/results"  # type: ignore[index]
-    with pytest.raises(ValueError, match="absolute"):
+    payload["run"]["output_root"] = "results/../analysis_runs"  # type: ignore[index]
+    with pytest.raises(ValueError, match="normalized"):
         _load(tmp_path, payload)
+
+
+def test_relative_paths_resolve_against_config_directory_not_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Portable paths use the configuration location as their stable base."""
+    session_root = tmp_path / "session"
+    session_root.mkdir()
+    payload = _documented_payload(session_root / "neural_session.json")
+    payload["session_metadata_path"] = "neural_session.json"
+    payload["run"]["output_root"] = "analysis_runs"  # type: ignore[index]
+    config_path = _write_config(session_root, payload)
+    unrelated_directory = tmp_path / "unrelated"
+    unrelated_directory.mkdir()
+    monkeypatch.chdir(unrelated_directory)
+
+    config, run_options = configuration.load_interregional_config(config_path)
+
+    assert config.session_metadata_path == session_root / "neural_session.json"
+    assert run_options.output_root == session_root / "analysis_runs"
+
+
+def test_moving_relative_configuration_rebinds_only_execution_paths(
+    tmp_path: Path,
+) -> None:
+    """Copying one portable session tree changes roots without changing settings."""
+    original_root = tmp_path / "original"
+    original_root.mkdir()
+    payload = _documented_payload(original_root / "neural_session.json")
+    payload["session_metadata_path"] = "neural_session.json"
+    payload["run"]["output_root"] = "analysis_runs"  # type: ignore[index]
+    original_path = _write_config(original_root, payload)
+    original_config, original_run = configuration.load_interregional_config(
+        original_path
+    )
+
+    moved_root = tmp_path / "moved"
+    shutil.copytree(original_root, moved_root)
+    moved_config, moved_run = configuration.load_interregional_config(
+        moved_root / original_path.name
+    )
+
+    assert moved_config.session_metadata_path == moved_root / "neural_session.json"
+    assert moved_run.output_root == moved_root / "analysis_runs"
+    original_portable = configuration.configuration_to_dict(original_config, original_run)
+    moved_portable = configuration.configuration_to_dict(moved_config, moved_run)
+    original_portable.pop("session_metadata_path")
+    moved_portable.pop("session_metadata_path")
+    original_portable.pop("run")
+    moved_portable.pop("run")
+    assert moved_portable == original_portable
 
 
 def test_loader_reports_invalid_selection_container_as_configuration_error(tmp_path: Path) -> None:

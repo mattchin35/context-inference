@@ -190,6 +190,27 @@ def test_dry_run_reports_plan_without_hashing_or_creating_output(
     assert not plan.output_root.exists()
 
 
+def test_dry_run_accepts_session_relative_configuration(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A copied session configuration plans without workstation-specific paths."""
+    config_path = _write_synthetic_session(tmp_path)
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload["session_metadata_path"] = "session/neural_session.json"
+    payload["run"]["output_root"] = "analysis_outputs"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    unrelated_directory = tmp_path / "unrelated"
+    unrelated_directory.mkdir()
+    monkeypatch.chdir(unrelated_directory)
+    monkeypatch.setattr(run_session, "_git_identity", lambda root: ("1" * 40, ()))
+
+    report = run_session.run_single_session(config_path, command="dry-run")
+
+    assert report.status == "planned"
+    assert report.run_path is None
+    assert not (tmp_path / "analysis_outputs").exists()
+
+
 def test_failure_is_logged_per_session_without_finalizing(tmp_path: Path, monkeypatch) -> None:
     """A caught computation error leaves one incomplete directory and failure record."""
     plan = _plan(tmp_path)

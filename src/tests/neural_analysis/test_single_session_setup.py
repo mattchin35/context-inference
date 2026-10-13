@@ -83,6 +83,11 @@ def test_scaffold_creates_editable_files_without_overwriting_metadata(tmp_path: 
         "base_config_path": "task_decoding_config.json",
         "training_window_names": ["pre_choice", "post_choice", "full"],
     }
+    interregional = json.loads(
+        (tmp_path / "interregional_regression_config.json").read_text()
+    )
+    assert interregional["session_metadata_path"] == "neural_session.json"
+    assert interregional["run"]["output_root"] == "analysis_runs"
 
 
 def test_scaffold_second_call_preserves_every_existing_file(tmp_path: Path) -> None:
