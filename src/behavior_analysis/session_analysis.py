@@ -35,6 +35,10 @@ DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS = {
     "observer_mouse_agreement": "observer_value",
     "simple_probe_persistence_mouse_agreement": "simple_probe_persistence_value",
     "expectancy_persistence_doubt_mouse_agreement": "expectancy_persistence_doubt_value",
+    "probe_persistence_doubt_mouse_agreement": "probe_persistence_doubt_value",
+    "home_referenced_expectancy_doubt_mouse_agreement": (
+        "home_referenced_expectancy_doubt_value"
+    ),
 }
 
 

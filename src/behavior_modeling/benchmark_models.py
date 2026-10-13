@@ -25,12 +25,16 @@ from src.behavior_modeling.expectant_switching import (
     ExpectancyCurveParams,
     ExpectancyPersistenceDoubtParams,
     ExpectantSwitchingFeatureConfig,
+    HomeReferencedExpectancyDoubtParams,
     PreviousOutcomeState,
+    ProbePersistenceDoubtParams,
     RewardConfirmedExpectancyState,
     SimpleProbePersistenceParams,
     expectancy_strength,
     previous_outcome_signals,
     replay_expectant_switching,
+    replay_home_referenced_expectancy_doubt as replay_home_expectancy_features,
+    replay_probe_persistence_doubt as replay_probe_doubt_features,
     update_previous_outcome,
     update_reward_confirmed_expectancy,
 )
@@ -528,46 +532,36 @@ def _replay_probe_persistence_doubt(
     history: ObservableHistory,
     parameters: Mapping[str, float | int | str],
 ) -> ModelReplay:
-    previous = PreviousOutcomeState()
-    doubt = CounterfactualDoubtState()
-    drive = _empty_output(history)
-    p_left = _empty_output(history)
-    states = _state_outputs(
-        history,
-        "previous_choice",
-        "previous_reward",
-        "reward_probe",
-        "doubt_raw_value",
-        "doubt_choice",
+    outputs = replay_probe_doubt_features(
+        history.action,
+        history.reward,
+        history.valid,
+        ProbePersistenceDoubtParams(
+            persistence_weight=float(parameters["persistence_weight"]),
+            probe_weight=float(parameters["probe_weight"]),
+            doubt_weight=float(parameters["doubt_weight"]),
+            doubt_lambda=float(parameters["doubt_lambda"]),
+        ),
     )
-    for index in np.flatnonzero(history.valid):
-        persistence, probe = previous_outcome_signals(previous)
-        doubt_raw = counterfactual_doubt_raw_value(
-            doubt, float(parameters["doubt_lambda"])
-        )
-        doubt_choice = -doubt_raw
-        drive[index] = (
-            float(parameters["persistence_weight"]) * persistence
-            + float(parameters["probe_weight"]) * probe
-            + float(parameters["doubt_weight"]) * doubt_choice
-        )
-        p_left[index] = (1.0 + np.tanh(drive[index])) / 2.0
-        states["previous_choice"][index] = persistence
-        states["previous_reward"][index] = previous.previous_reward
-        states["reward_probe"][index] = probe
-        states["doubt_raw_value"][index] = doubt_raw
-        states["doubt_choice"][index] = doubt_choice
-        action = int(history.action[index])
-        reward = float(history.reward[index])
-        previous = update_previous_outcome(previous, action, reward)
-        doubt = update_counterfactual_doubt(doubt, action, reward)
     return _finalize(
         "probe_persistence_doubt",
         history.action,
         history.valid,
-        p_left,
-        drive,
-        states,
+        outputs["probe_persistence_doubt_prob_left"],
+        outputs["probe_persistence_doubt_drive"],
+        {
+            "previous_choice": outputs[
+                "probe_persistence_doubt_previous_choice"
+            ],
+            "previous_reward": outputs[
+                "probe_persistence_doubt_previous_reward"
+            ],
+            "reward_probe": outputs["probe_persistence_doubt_reward_probe"],
+            "doubt_raw_value": outputs[
+                "probe_persistence_doubt_doubt_raw_value"
+            ],
+            "doubt_choice": outputs["probe_persistence_doubt_doubt_choice"],
+        },
     )
 
 
@@ -719,62 +713,47 @@ def _replay_home_referenced_expectancy_doubt(
         Aligned pre-trial probabilities, left-positive values and drive, and
         component states. Every array has shape ``(n_trials,)``.
     """
-    expectancy = RewardConfirmedExpectancyState()
-    doubt = CounterfactualDoubtState()
-    drive = _empty_output(history)
-    p_left = _empty_output(history)
-    states = _state_outputs(
-        history,
-        "expectancy_confirmed_side",
-        "expectancy_reward_count",
-        "expectancy_strength",
-        "expectancy_choice",
-        "doubt_raw_value",
-        "doubt_choice",
+    outputs = replay_home_expectancy_features(
+        history.action,
+        history.reward,
+        history.valid,
+        HomeReferencedExpectancyDoubtParams(
+            curve=ExpectancyCurveParams(
+                threshold=float(parameters["expectancy_threshold"]),
+                scale=float(parameters["expectancy_scale"]),
+            ),
+            expectancy_weight=float(parameters["expectancy_weight"]),
+            doubt_weight=float(parameters["doubt_weight"]),
+            doubt_lambda=float(parameters["doubt_lambda"]),
+        ),
     )
-    curve = ExpectancyCurveParams(
-        threshold=float(parameters["expectancy_threshold"]),
-        scale=float(parameters["expectancy_scale"]),
-    )
-    expectancy_weight = float(parameters["expectancy_weight"])
-    doubt_weight = float(parameters["doubt_weight"])
-    doubt_lambda = float(parameters["doubt_lambda"])
-
-    for index in np.flatnonzero(history.valid):
-        strength = float(expectancy_strength(expectancy.reward_count, curve))
-        if expectancy.confirmed_side is None:
-            confirmed_side = np.nan
-            expectancy_choice = 0.0
-        else:
-            confirmed_side = float(expectancy.confirmed_side)
-            home_sign = 1.0 if expectancy.confirmed_side == 1 else -1.0
-            expectancy_choice = home_sign * (1.0 - 2.0 * strength)
-        doubt_raw = counterfactual_doubt_raw_value(doubt, doubt_lambda)
-        doubt_choice = -doubt_raw
-        drive[index] = (
-            expectancy_weight * expectancy_choice + doubt_weight * doubt_choice
-        )
-        p_left[index] = (1.0 + np.tanh(drive[index])) / 2.0
-
-        states["expectancy_confirmed_side"][index] = confirmed_side
-        states["expectancy_reward_count"][index] = expectancy.reward_count
-        states["expectancy_strength"][index] = strength
-        states["expectancy_choice"][index] = expectancy_choice
-        states["doubt_raw_value"][index] = doubt_raw
-        states["doubt_choice"][index] = doubt_choice
-
-        action = int(history.action[index])
-        reward = float(history.reward[index])
-        expectancy = update_reward_confirmed_expectancy(expectancy, action, reward)
-        doubt = update_counterfactual_doubt(doubt, action, reward)
 
     return _finalize(
         "home_referenced_expectancy_doubt",
         history.action,
         history.valid,
-        p_left,
-        drive,
-        states,
+        outputs["home_referenced_expectancy_doubt_prob_left"],
+        outputs["home_referenced_expectancy_doubt_drive"],
+        {
+            "expectancy_confirmed_side": outputs[
+                "home_referenced_expectancy_doubt_confirmed_side"
+            ],
+            "expectancy_reward_count": outputs[
+                "home_referenced_expectancy_doubt_reward_count"
+            ],
+            "expectancy_strength": outputs[
+                "home_referenced_expectancy_doubt_expectancy_strength"
+            ],
+            "expectancy_choice": outputs[
+                "home_referenced_expectancy_doubt_expectancy_choice"
+            ],
+            "doubt_raw_value": outputs[
+                "home_referenced_expectancy_doubt_doubt_raw_value"
+            ],
+            "doubt_choice": outputs[
+                "home_referenced_expectancy_doubt_doubt_choice"
+            ],
+        },
     )
 
 

@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.ticker import MaxNLocator
 from pathlib import Path
 try:
     from . import session_analysis
@@ -43,6 +44,8 @@ DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS = {
     "Ideal": "observer_mouse_agreement",
     "Probe+P": "simple_probe_persistence_mouse_agreement",
     "Expect+D+P": "expectancy_persistence_doubt_mouse_agreement",
+    "Probe+P+D": "probe_persistence_doubt_mouse_agreement",
+    "Home E+D": "home_referenced_expectancy_doubt_mouse_agreement",
 }
 AGENT_MOUSE_AGREEMENT_COLORS = {
     "QL": "#1f77b4",
@@ -55,10 +58,20 @@ AGENT_MOUSE_AGREEMENT_COLORS = {
     "Ideal": "#111111",
     "Probe+P": "#e377c2",
     "Expect+D+P": "#7f7f7f",
+    "Probe+P+D": "#0072B2",
+    "Home E+D": "#D55E00",
 }
 EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS = {
     "simple_probe_persistence_mouse_agreement": "simple_probe_persistence_value",
     "expectancy_persistence_doubt_mouse_agreement": "expectancy_persistence_doubt_value",
+    "observer_mouse_agreement": "observer_value",
+}
+CANDIDATE_EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS = {
+    "probe_persistence_doubt_mouse_agreement": "probe_persistence_doubt_value",
+    "home_referenced_expectancy_doubt_mouse_agreement": (
+        "home_referenced_expectancy_doubt_value"
+    ),
+    "observer_mouse_agreement": "observer_value",
 }
 
 
@@ -83,24 +96,26 @@ def save_performance_figure(fig: plt.Figure, save_path: Path) -> None:
     plt.close(fig)
 
 
-def prepare_expectant_block_agreement_spans(
+def _prepare_model_block_agreement_spans(
     trial_df: pd.DataFrame,
+    agreement_columns: dict[str, str],
 ) -> pd.DataFrame:
-    """Align expectant-model block agreement scores to trial-coordinate spans.
+    """Align configured model agreement scores to trial-coordinate spans.
 
     Parameters
     ----------
     trial_df : pandas.DataFrame, shape (n_trials, n_columns)
         Chronological trial table containing ``cur_block``, ``action``, and
-        both signed left-positive expectant-model value columns. Choices use
-        ``0=right`` and ``1=left``. Block ids must be present and each block
-        must occupy one contiguous run of rows.
+        signed left-positive value columns in ``agreement_columns``. Choices
+        use ``0=right`` and ``1=left``. Every block must be contiguous.
+    agreement_columns : dict[str, str]
+        Mapping from block-agreement output column to trialwise value column.
 
     Returns
     -------
-    pandas.DataFrame, shape (n_blocks, 6)
+    pandas.DataFrame, shape (n_blocks, 4 + n_agreement_columns)
         One row per first-seen block with columns ``block_id``,
-        ``trial_start``, ``trial_end``, ``trial_midpoint``, and the two
+        ``trial_start``, ``trial_end``, ``trial_midpoint``, and configured
         unitless agreement fractions. Trial spans use plot coordinates and
         include half a trial beyond the first and last trial centers. A block
         without valid mouse-agent comparisons has ``NaN`` agreement.
@@ -114,7 +129,7 @@ def prepare_expectant_block_agreement_spans(
     required_columns = {
         "cur_block",
         "action",
-        *EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS.values(),
+        *agreement_columns.values(),
     }
     missing_columns = sorted(required_columns.difference(trial_df.columns))
     if missing_columns:
@@ -129,7 +144,7 @@ def prepare_expectant_block_agreement_spans(
     block_summary = session_analysis.add_block_agent_mouse_agreement_columns(
         block_summary,
         trial_df,
-        agent_value_columns=EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS,
+        agent_value_columns=agreement_columns,
     )
 
     rows = []
@@ -147,7 +162,7 @@ def prepare_expectant_block_agreement_spans(
             "trial_end": float(trial_positions[-1]) + 0.5,
             "trial_midpoint": float(trial_positions.mean()),
         }
-        for agreement_column in EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS:
+        for agreement_column in agreement_columns:
             row[agreement_column] = pd.to_numeric(
                 pd.Series([block_summary.iloc[row_position][agreement_column]]),
                 errors="coerce",
@@ -155,6 +170,38 @@ def prepare_expectant_block_agreement_spans(
         rows.append(row)
 
     return pd.DataFrame(rows)
+
+
+def prepare_expectant_block_agreement_spans(
+    trial_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Align legacy expectant-model block agreement to trial coordinates.
+
+    ``trial_df`` has shape ``(n_trials, n_columns)`` and contains block IDs,
+    choices, the legacy left-positive value columns, and ``observer_value``.
+    The returned table has one row per contiguous block with trial-coordinate
+    spans and all three unitless agreement fractions.
+    """
+    return _prepare_model_block_agreement_spans(
+        trial_df,
+        EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS,
+    )
+
+
+def prepare_candidate_expectant_block_agreement_spans(
+    trial_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Align candidate-model block agreement to trial coordinates.
+
+    ``trial_df`` has shape ``(n_trials, n_columns)`` and contains block IDs,
+    choices, both candidate left-positive value columns, and
+    ``observer_value``. The returned table has one row per contiguous block
+    with trial-coordinate spans and all three unitless agreement fractions.
+    """
+    return _prepare_model_block_agreement_spans(
+        trial_df,
+        CANDIDATE_EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS,
+    )
 
 
 def plot_expectant_switching_diagnostics(
@@ -168,11 +215,12 @@ def plot_expectant_switching_diagnostics(
     ----------
     trial_df : pandas.DataFrame, shape (n_trials, n_columns)
         Aligned trial table containing observed ``action`` and ``reward`` plus
-        ``cur_block``, both exemplar probability and signed-value traces,
-        signed components, reward count, and expectancy strength. Choices use
-        ``0=right`` and ``1=left``; signed model components are left-positive.
-        An optional ``state`` column is shown only as post hoc true-context
-        annotation. Block ids must occupy contiguous trial rows.
+        ``cur_block``, the exemplar and mouse-history ideal signed-value
+        traces, signed components, reward count, and expectancy strength.
+        Choices use ``0=right`` and ``1=left`` in the table and are displayed
+        as ``right=-1`` and ``left=+1``. All signed model values are
+        left-positive. An optional ``state`` column is shown only as post hoc
+        true-context annotation. Block ids must occupy contiguous trial rows.
     plot_path : pathlib.Path
         Existing output directory.
     sess_id_full : str
@@ -189,8 +237,7 @@ def plot_expectant_switching_diagnostics(
         "cur_block",
         "simple_probe_persistence_value",
         "expectancy_persistence_doubt_value",
-        "simple_probe_persistence_prob_left",
-        "expectancy_persistence_doubt_prob_left",
+        "observer_value",
         "previous_choice",
         "reward_triggered_probe",
         "expectant_switch",
@@ -219,19 +266,20 @@ def plot_expectant_switching_diagnostics(
         axis.grid(alpha=0.2)
 
     valid_choices = numeric["action"].isin([0, 1])
+    signed_choices = (2.0 * numeric["action"]) - 1.0
     axes[0].scatter(
         trial_index[valid_choices],
-        numeric.loc[valid_choices, "action"],
+        signed_choices.loc[valid_choices],
         color="#111111",
         marker="o",
         s=12,
-        label="Observed choice (1=left)",
+        label="Observed choice (left=+1)",
         zorder=3,
     )
     rewarded = valid_choices & (numeric["reward"] > 0)
     axes[0].scatter(
         trial_index[rewarded],
-        numeric.loc[rewarded, "action"],
+        signed_choices.loc[rewarded],
         color="#2ca02c",
         marker="o",
         s=42,
@@ -239,7 +287,16 @@ def plot_expectant_switching_diagnostics(
         zorder=4,
     )
     if "state" in trial_df.columns:
-        state_values = trial_df["state"].replace({"right": 0, "left": 1})
+        state_values = trial_df["state"].replace(
+            {
+                "right": -1,
+                "left": 1,
+                "right_patch": -1,
+                "left_patch": 1,
+                0: -1,
+                1: 1,
+            }
+        )
         state_numeric = pd.to_numeric(state_values, errors="coerce")
         axes[0].step(
             trial_index,
@@ -253,29 +310,41 @@ def plot_expectant_switching_diagnostics(
         )
     axes[0].plot(
         trial_index,
-        numeric["simple_probe_persistence_prob_left"],
+        numeric["simple_probe_persistence_value"],
         color=AGENT_MOUSE_AGREEMENT_COLORS["Probe+P"],
         linewidth=0.8,
         alpha=0.75,
-        label="Probe+P P(left)",
+        label="Probe+P value",
         zorder=2,
     )
     axes[0].plot(
         trial_index,
-        numeric["expectancy_persistence_doubt_prob_left"],
+        numeric["expectancy_persistence_doubt_value"],
         color=AGENT_MOUSE_AGREEMENT_COLORS["Expect+D+P"],
         linewidth=0.8,
         alpha=0.75,
-        label="Expect+D+P P(left)",
+        label="Expect+D+P value",
         zorder=2,
     )
-    axes[0].set_ylabel("Choice / state / P(left)")
-    axes[0].set_ylim(-0.15, 1.15)
+    axes[0].plot(
+        trial_index,
+        numeric["observer_value"],
+        color=AGENT_MOUSE_AGREEMENT_COLORS["Ideal"],
+        linewidth=0.8,
+        linestyle="--",
+        alpha=0.85,
+        label="History ideal value",
+        zorder=2,
+    )
+    axes[0].axhline(0.0, color="#aaaaaa", linewidth=0.6, zorder=0)
+    axes[0].set_ylabel("Choice / context / model value")
+    axes[0].margins(y=0.08)
     axes[0].legend(loc="upper right", frameon=False, ncol=5)
 
     agreement_specs = (
         ("simple_probe_persistence_mouse_agreement", "Probe+P"),
         ("expectancy_persistence_doubt_mouse_agreement", "Expect+D+P"),
+        ("observer_mouse_agreement", "Ideal"),
     )
     for agreement_column, agent_label in agreement_specs:
         first_segment = True
@@ -288,6 +357,7 @@ def plot_expectant_switching_diagnostics(
                 [agreement, agreement],
                 color=AGENT_MOUSE_AGREEMENT_COLORS[agent_label],
                 linewidth=2.5,
+                linestyle="--" if agent_label == "Ideal" else "-",
                 solid_capstyle="butt",
                 label=(
                     f"{agent_label} block agreement"
@@ -378,6 +448,601 @@ def plot_expectant_switching_diagnostics(
         fontsize=9,
     )
     save_path = plot_path / f"{sess_id_full}_expectant_switching.png"
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
+def plot_candidate_expectant_switching_diagnostics(
+    trial_df: pd.DataFrame,
+    plot_path: Path,
+    sess_id_full: str,
+) -> Path:
+    """Save a light-mode diagnostic for the two candidate expectant models.
+
+    Parameters
+    ----------
+    trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Aligned trial table containing action, reward, block, both candidate
+        signed-value traces, the mouse-history ideal ``observer_value``, and
+        candidate component states. Actions use ``0=right, 1=left`` in the
+        table and are displayed as ``right=-1, left=+1``. Signed quantities
+        are left-positive. An optional ``state`` column is displayed only as
+        post hoc context.
+    plot_path : pathlib.Path
+        Output directory for the PNG.
+    sess_id_full : str
+        Session identifier used in the title and filename.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved opaque-white PNG path.
+    """
+    required_columns = {
+        "action",
+        "reward",
+        "cur_block",
+        "probe_persistence_doubt_value",
+        "probe_persistence_doubt_previous_choice",
+        "probe_persistence_doubt_reward_probe",
+        "probe_persistence_doubt_doubt_choice",
+        "home_referenced_expectancy_doubt_value",
+        "observer_value",
+        "home_referenced_expectancy_doubt_expectancy_choice",
+        "home_referenced_expectancy_doubt_doubt_choice",
+        "home_referenced_expectancy_doubt_reward_count",
+        "home_referenced_expectancy_doubt_expectancy_strength",
+    }
+    missing_columns = sorted(required_columns.difference(trial_df.columns))
+    if missing_columns:
+        raise ValueError(
+            f"trial_df is missing candidate diagnostic columns: {missing_columns}"
+        )
+
+    trial_index = np.arange(trial_df.shape[0])
+    numeric_columns = required_columns.difference({"cur_block"})
+    numeric = trial_df[list(numeric_columns)].apply(pd.to_numeric, errors="coerce")
+    block_spans = prepare_candidate_expectant_block_agreement_spans(trial_df)
+    fig, axes = plt.subplots(
+        4,
+        1,
+        figsize=(24, 10),
+        sharex=True,
+        facecolor="white",
+    )
+    for axis in axes:
+        axis.set_facecolor("white")
+        axis.tick_params(colors="black")
+        axis.grid(alpha=0.2)
+
+    valid_choices = numeric["action"].isin([0, 1])
+    signed_choices = (2.0 * numeric["action"]) - 1.0
+    axes[0].scatter(
+        trial_index[valid_choices],
+        signed_choices.loc[valid_choices],
+        color="#111111",
+        marker="o",
+        s=12,
+        label="Observed choice (left=+1)",
+        zorder=3,
+    )
+    rewarded = valid_choices & (numeric["reward"] > 0)
+    axes[0].scatter(
+        trial_index[rewarded],
+        signed_choices.loc[rewarded],
+        color="#2ca02c",
+        marker="o",
+        s=42,
+        label="Rewarded choice",
+        zorder=4,
+    )
+    if "state" in trial_df.columns:
+        state_values = trial_df["state"].replace(
+            {
+                "right": -1,
+                "left": 1,
+                "right_patch": -1,
+                "left_patch": 1,
+                0: -1,
+                1: 1,
+            }
+        )
+        state_numeric = pd.to_numeric(state_values, errors="coerce")
+        axes[0].step(
+            trial_index,
+            state_numeric,
+            where="mid",
+            color="#7f7f7f",
+            linestyle="--",
+            linewidth=0.9,
+            label="True context (post hoc)",
+            zorder=1,
+        )
+    axes[0].plot(
+        trial_index,
+        numeric["probe_persistence_doubt_value"],
+        color=AGENT_MOUSE_AGREEMENT_COLORS["Probe+P+D"],
+        linewidth=0.8,
+        alpha=0.75,
+        label="Probe+P+D value",
+        zorder=2,
+    )
+    axes[0].plot(
+        trial_index,
+        numeric["home_referenced_expectancy_doubt_value"],
+        color=AGENT_MOUSE_AGREEMENT_COLORS["Home E+D"],
+        linewidth=0.8,
+        alpha=0.75,
+        label="Home E+D value",
+        zorder=2,
+    )
+    axes[0].plot(
+        trial_index,
+        numeric["observer_value"],
+        color=AGENT_MOUSE_AGREEMENT_COLORS["Ideal"],
+        linewidth=0.8,
+        linestyle="--",
+        alpha=0.85,
+        label="History ideal value",
+        zorder=2,
+    )
+    axes[0].axhline(0.0, color="#aaaaaa", linewidth=0.6, zorder=0)
+    axes[0].set_ylabel("Choice / context / model value")
+    axes[0].margins(y=0.08)
+    axes[0].legend(loc="upper right", frameon=False, ncol=5)
+
+    agreement_specs = (
+        ("probe_persistence_doubt_mouse_agreement", "Probe+P+D"),
+        ("home_referenced_expectancy_doubt_mouse_agreement", "Home E+D"),
+        ("observer_mouse_agreement", "Ideal"),
+    )
+    for agreement_column, agent_label in agreement_specs:
+        first_segment = True
+        for _, block_row in block_spans.iterrows():
+            agreement = block_row[agreement_column]
+            if pd.isna(agreement):
+                continue
+            axes[1].plot(
+                [block_row["trial_start"], block_row["trial_end"]],
+                [agreement, agreement],
+                color=AGENT_MOUSE_AGREEMENT_COLORS[agent_label],
+                linewidth=2.5,
+                linestyle="--" if agent_label == "Ideal" else "-",
+                solid_capstyle="butt",
+                label=(
+                    f"{agent_label} block agreement"
+                    if first_segment
+                    else "_nolegend_"
+                ),
+            )
+            first_segment = False
+    axes[1].set_ylabel("Block agreement")
+    axes[1].set_ylim(-0.02, 1.02)
+    axes[1].legend(loc="upper right", frameon=False)
+
+    for boundary in block_spans["trial_start"].iloc[1:]:
+        for axis in axes:
+            axis.axvline(
+                boundary,
+                color="#b8b8b8",
+                linewidth=0.7,
+                linestyle=":",
+                zorder=0,
+            )
+
+    component_styles = {
+        "probe_persistence_doubt_previous_choice": (
+            "Probe-model persistence",
+            "#111111",
+        ),
+        "probe_persistence_doubt_reward_probe": ("Reward probe", "#0072B2"),
+        "probe_persistence_doubt_doubt_choice": ("Probe-model doubt", "#56B4E9"),
+        "home_referenced_expectancy_doubt_expectancy_choice": (
+            "Home expectancy",
+            "#D55E00",
+        ),
+        "home_referenced_expectancy_doubt_doubt_choice": (
+            "Home-model doubt",
+            "#CC79A7",
+        ),
+    }
+    for column, (label, color) in component_styles.items():
+        axes[2].plot(
+            trial_index,
+            numeric[column],
+            label=label,
+            color=color,
+            linewidth=0.9,
+        )
+    axes[2].axhline(0.0, color="#777777", linewidth=1)
+    axes[2].set_ylabel("Signed component")
+    axes[2].legend(loc="upper right", frameon=False, ncol=3)
+
+    reward_count_line = axes[3].plot(
+        trial_index,
+        numeric["home_referenced_expectancy_doubt_reward_count"],
+        color="#1f77b4",
+        label="Home reward count",
+    )
+    axes[3].set_ylabel("Reward count", color="#1f77b4")
+    axes[3].tick_params(axis="y", labelcolor="#1f77b4")
+    axes[3].set_xlabel("Trial")
+    axes[3].xaxis.set_major_locator(MaxNLocator(integer=True))
+
+    expectancy_axis = axes[3].twinx()
+    expectancy_axis.set_facecolor("none")
+    expectancy_strength_line = expectancy_axis.plot(
+        trial_index,
+        numeric["home_referenced_expectancy_doubt_expectancy_strength"],
+        color="#2ca02c",
+        label="Home expectancy strength",
+    )
+    expectancy_axis.set_ylabel("Expectancy strength", color="#2ca02c")
+    expectancy_axis.tick_params(axis="y", colors="#2ca02c")
+    expectancy_axis.grid(False)
+    diagnostic_lines = reward_count_line + expectancy_strength_line
+    axes[3].legend(
+        diagnostic_lines,
+        [line.get_label() for line in diagnostic_lines],
+        loc="upper right",
+        frameon=False,
+    )
+
+    fig.suptitle(
+        f"Candidate expectant-switching diagnostics: {sess_id_full}",
+        color="black",
+    )
+    fig.text(
+        0.01,
+        0.005,
+        "Pre-trial model traces use only preceding valid choices and outcomes; "
+        "true context is displayed only for post hoc interpretation. "
+        "Block-agreement segments span the contributing trial rows.",
+        color="black",
+        fontsize=9,
+    )
+    save_path = plot_path / f"{sess_id_full}_candidate_expectant_switching.png"
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
+def _selectivity_marker_sizes(counts: pd.Series) -> np.ndarray:
+    """Scale nonnegative trial counts to readable scatter-marker areas.
+
+    Parameters
+    ----------
+    counts : pandas.Series, shape (n_points,)
+        Trial counts. Missing and negative values are treated as zero.
+
+    Returns
+    -------
+    numpy.ndarray, shape (n_points,)
+        Marker areas from 24 to 104 points squared.
+    """
+    numeric_counts = pd.to_numeric(counts, errors="coerce").fillna(0).clip(lower=0)
+    maximum = float(numeric_counts.max()) if not numeric_counts.empty else 0.0
+    if maximum <= 0:
+        return np.full(numeric_counts.shape[0], 24.0)
+    return 24.0 + 80.0 * np.sqrt(numeric_counts.to_numpy(dtype=float) / maximum)
+
+
+def plot_session_expectant_model_selectivity(
+    block_selectivity: pd.DataFrame,
+    plot_path: Path,
+    sess_id_full: str,
+) -> Path:
+    """Plot blockwise candidate advantage beside rewarded switching.
+
+    Parameters
+    ----------
+    block_selectivity : pandas.DataFrame
+        Long block table with shape ``(n_blocks * n_models, n_columns)`` from
+        ``compute_block_model_selectivity``. Agreements and rates are unitless;
+        counts are trials. ``block_position`` gives the shared x-axis.
+    plot_path : pathlib.Path
+        Directory where the light-mode PNG is saved.
+    sess_id_full : str
+        Session identifier used in the title and filename.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved PNG path.
+    """
+    required_columns = {
+        "block_position",
+        "model",
+        "model_agreement",
+        "ideal_agreement",
+        "agreement_delta",
+        "n_valid_comparisons",
+        "reward_switch_opportunities",
+        "reward_switch_rate",
+        "summary_eligible",
+    }
+    missing_columns = sorted(required_columns.difference(block_selectivity.columns))
+    if missing_columns:
+        raise ValueError(
+            f"block_selectivity is missing plotting columns: {missing_columns}"
+        )
+    if block_selectivity.empty:
+        raise ValueError("block_selectivity must contain at least one block.")
+
+    plot_path.mkdir(parents=True, exist_ok=True)
+    model_labels = list(pd.unique(block_selectivity["model"]))
+    model_colors = {
+        "Probe+P+D": AGENT_MOUSE_AGREEMENT_COLORS["Probe+P+D"],
+        "Home E+D": AGENT_MOUSE_AGREEMENT_COLORS["Home E+D"],
+    }
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(24, 10),
+        sharex=True,
+        facecolor="white",
+    )
+    for axis in axes:
+        axis.set_facecolor("white")
+        axis.grid(alpha=0.2)
+        axis.tick_params(colors="black")
+
+    first_model = block_selectivity.loc[
+        block_selectivity["model"].eq(model_labels[0])
+    ].sort_values("block_position")
+    block_x = pd.to_numeric(first_model["block_position"], errors="raise").to_numpy()
+    axes[0].plot(
+        block_x,
+        pd.to_numeric(first_model["ideal_agreement"], errors="coerce").to_numpy(),
+        color=AGENT_MOUSE_AGREEMENT_COLORS["Ideal"],
+        linestyle="--",
+        linewidth=1.2,
+        label="Ideal",
+    )
+
+    for model_label in model_labels:
+        model_rows = block_selectivity.loc[
+            block_selectivity["model"].eq(model_label)
+        ].sort_values("block_position")
+        x_values = pd.to_numeric(model_rows["block_position"], errors="raise").to_numpy()
+        marker_sizes = _selectivity_marker_sizes(model_rows["n_valid_comparisons"])
+        eligible = model_rows["summary_eligible"].astype(bool).to_numpy()
+        color = model_colors.get(model_label, "#666666")
+        model_agreement = pd.to_numeric(
+            model_rows["model_agreement"], errors="coerce"
+        ).to_numpy()
+        agreement_delta = pd.to_numeric(
+            model_rows["agreement_delta"], errors="coerce"
+        ).to_numpy()
+
+        axes[0].plot(
+            x_values,
+            model_agreement,
+            color=color,
+            linewidth=1.2,
+            label=model_label,
+        )
+        axes[0].scatter(
+            x_values[eligible],
+            model_agreement[eligible],
+            s=marker_sizes[eligible],
+            color=color,
+            alpha=0.8,
+            zorder=3,
+        )
+        axes[0].scatter(
+            x_values[~eligible],
+            model_agreement[~eligible],
+            s=marker_sizes[~eligible],
+            facecolors="none",
+            edgecolors=color,
+            alpha=0.45,
+            zorder=3,
+        )
+        axes[1].plot(
+            x_values,
+            agreement_delta,
+            color=color,
+            linewidth=1.2,
+            label=f"{model_label} - ideal",
+        )
+        axes[1].scatter(
+            x_values[eligible],
+            agreement_delta[eligible],
+            s=marker_sizes[eligible],
+            color=color,
+            alpha=0.8,
+            zorder=3,
+        )
+        axes[1].scatter(
+            x_values[~eligible],
+            agreement_delta[~eligible],
+            s=marker_sizes[~eligible],
+            facecolors="none",
+            edgecolors=color,
+            alpha=0.45,
+            zorder=3,
+        )
+
+    switch_rates = pd.to_numeric(
+        first_model["reward_switch_rate"], errors="coerce"
+    ).to_numpy()
+    opportunity_sizes = _selectivity_marker_sizes(
+        first_model["reward_switch_opportunities"]
+    )
+    axes[2].plot(
+        block_x,
+        switch_rates,
+        color="#E69F00",
+        linewidth=1.2,
+        label="Within-block reward -> switch rate",
+    )
+    axes[2].scatter(
+        block_x,
+        switch_rates,
+        s=opportunity_sizes,
+        color="#E69F00",
+        alpha=0.75,
+        zorder=3,
+    )
+
+    axes[0].set_ylabel("Block agreement")
+    axes[0].set_ylim(-0.02, 1.02)
+    axes[0].legend(loc="upper right", frameon=False, ncol=3)
+    axes[1].axhline(0.0, color="#555555", linewidth=0.9, linestyle=":")
+    axes[1].set_ylabel("Candidate - ideal")
+    axes[1].legend(loc="upper right", frameon=False, ncol=2)
+    axes[2].set_ylabel("Reward -> switch rate")
+    axes[2].set_ylim(-0.02, 1.02)
+    axes[2].set_xlabel("Block")
+    axes[2].xaxis.set_major_locator(MaxNLocator(integer=True))
+    axes[2].legend(loc="upper right", frameon=False)
+    fig.suptitle(f"Expectant-model block selectivity: {sess_id_full}")
+    fig.text(
+        0.01,
+        0.005,
+        "Reward-switch rates exclude block-entry trials. Marker area shows "
+        "valid comparisons or opportunities; open markers have fewer than "
+        "the configured minimum valid choices.",
+        fontsize=9,
+        color="black",
+    )
+    save_path = plot_path / f"{sess_id_full}_expectant_model_selectivity.png"
+    save_performance_figure(fig, save_path)
+    return save_path
+
+
+def plot_session_expectant_model_selectivity_scatter(
+    block_selectivity: pd.DataFrame,
+    plot_path: Path,
+    sess_id_full: str,
+) -> Path:
+    """Plot rewarded-switch rate against model advantage within one session.
+
+    Parameters
+    ----------
+    block_selectivity : pandas.DataFrame
+        Long block table with shape ``(n_blocks * n_models, n_columns)`` from
+        ``compute_block_model_selectivity``. Agreements and reward-switch rates
+        are unitless; counts are trials.
+    plot_path : pathlib.Path
+        Directory where the light-mode PNG is saved.
+    sess_id_full : str
+        Session identifier used in the title and filename.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved light-mode PNG path.
+    """
+    required_columns = {
+        "model",
+        "agreement_delta",
+        "reward_switch_rate",
+        "n_valid_comparisons",
+        "summary_eligible",
+    }
+    missing_columns = sorted(required_columns.difference(block_selectivity.columns))
+    if missing_columns:
+        raise ValueError(
+            f"block_selectivity is missing scatter columns: {missing_columns}"
+        )
+    if block_selectivity.empty:
+        raise ValueError("block_selectivity must contain at least one block.")
+
+    plot_path.mkdir(parents=True, exist_ok=True)
+    model_labels = list(pd.unique(block_selectivity["model"]))
+    model_colors = {
+        "Probe+P+D": AGENT_MOUSE_AGREEMENT_COLORS["Probe+P+D"],
+        "Home E+D": AGENT_MOUSE_AGREEMENT_COLORS["Home E+D"],
+    }
+    fig, axes = plt.subplots(
+        1,
+        len(model_labels),
+        figsize=(18, 6),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+        facecolor="white",
+    )
+    model_axes = axes[0]
+    for axis, model_label in zip(model_axes, model_labels):
+        model_rows = block_selectivity.loc[
+            block_selectivity["model"].eq(model_label)
+        ].copy()
+        x_values = pd.to_numeric(
+            model_rows["reward_switch_rate"], errors="coerce"
+        ).to_numpy()
+        y_values = pd.to_numeric(
+            model_rows["agreement_delta"], errors="coerce"
+        ).to_numpy()
+        eligible = model_rows["summary_eligible"].astype(bool).to_numpy()
+        finite = np.isfinite(x_values) & np.isfinite(y_values)
+        marker_sizes = _selectivity_marker_sizes(model_rows["n_valid_comparisons"])
+        eligible_finite = eligible & finite
+        low_count_finite = ~eligible & finite
+        color = model_colors.get(model_label, "#666666")
+
+        axis.scatter(
+            x_values[eligible_finite],
+            y_values[eligible_finite],
+            s=marker_sizes[eligible_finite],
+            color=color,
+            alpha=0.75,
+            edgecolors="white",
+            linewidths=0.4,
+            label="Meets valid-choice threshold",
+        )
+        axis.scatter(
+            x_values[low_count_finite],
+            y_values[low_count_finite],
+            s=marker_sizes[low_count_finite],
+            facecolors="none",
+            edgecolors=color,
+            alpha=0.45,
+            label="Below valid-choice threshold",
+        )
+        eligible_rows = model_rows.loc[eligible_finite, [
+            "reward_switch_rate",
+            "agreement_delta",
+        ]].apply(pd.to_numeric, errors="coerce").dropna()
+        has_variable_rate = eligible_rows["reward_switch_rate"].nunique() > 1
+        has_variable_delta = eligible_rows["agreement_delta"].nunique() > 1
+        if (
+            eligible_rows.shape[0] >= 2
+            and has_variable_rate
+            and has_variable_delta
+        ):
+            rho = eligible_rows["reward_switch_rate"].corr(
+                eligible_rows["agreement_delta"], method="spearman"
+            )
+            rho_text = "NA" if pd.isna(rho) else f"{rho:.2f}"
+            axis.text(
+                0.03,
+                0.97,
+                f"eligible blocks={eligible_rows.shape[0]}\nSpearman rho={rho_text}",
+                transform=axis.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+            )
+        axis.axhline(0.0, color="#555555", linewidth=0.9, linestyle=":")
+        axis.set_xlim(-0.02, 1.02)
+        axis.set_xlabel("Within-block reward -> switch rate")
+        axis.set_title(model_label)
+        axis.grid(alpha=0.2)
+    model_axes[0].set_ylabel("Candidate - ideal agreement")
+    model_axes[-1].legend(loc="best", frameon=False)
+    fig.suptitle(f"Expectant-model selectivity: {sess_id_full}")
+    fig.text(
+        0.01,
+        0.01,
+        "Filled points meet the valid-choice threshold; open points remain "
+        "visible but are excluded from the displayed association. The "
+        "association is descriptive because model values and the behavioral "
+        "phenotype share reward/choice history.",
+        fontsize=9,
+    )
+    save_path = plot_path / f"{sess_id_full}_expectant_model_selectivity_scatter.png"
     save_performance_figure(fig, save_path)
     return save_path
 

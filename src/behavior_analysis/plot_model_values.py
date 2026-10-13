@@ -884,6 +884,171 @@ def prepare_expectant_switch_markers(
     )
 
 
+def _plot_mouse_history_expectant_value_pair(
+    trial_df: pd.DataFrame,
+    figure_path: Path,
+    sess_id_full: str,
+    value_columns: list[str],
+    title_suffix: str,
+    filename_suffix: str,
+    caption: str,
+    theme: str,
+    xtick_interval: int | None,
+    value_styles: dict[str, dict] | None = None,
+) -> tuple[pd.DataFrame, Path]:
+    """Plot one configured expectant-model pair with existing switch markers.
+
+    Parameters
+    ----------
+    trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Trial table containing state, action, reward, existing switch flags,
+        and the two left-positive unitless columns in ``value_columns``.
+    figure_path : pathlib.Path
+        Directory where the PNG is saved.
+    sess_id_full : str
+        Session identifier used in the title and filename.
+    value_columns : list[str]
+        Exactly two signed model-value column names.
+    title_suffix : str
+        Text appended to ``sess_id_full`` in the figure title.
+    filename_suffix : str
+        Filename stem appended after ``sess_id_full``.
+    caption : str
+        Parameter record displayed below the axes.
+    theme : {"light", "dark"}
+        Color theme forwarded to ``plot_run_dataframe``.
+    xtick_interval : int or None
+        Trial-position tick interval; None uses context switches.
+    value_styles : dict[str, dict] or None, default=None
+        Optional mapping from value column to Matplotlib line properties.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pathlib.Path]
+        Valid plotted rows in original order and the saved PNG path.
+    """
+    if len(value_columns) != 2:
+        raise ValueError("value_columns must contain exactly two model values.")
+    required_columns = {
+        "state",
+        "action",
+        "reward",
+        "switch_trial",
+        "prev_correct",
+        "explore_trial",
+        *value_columns,
+    }
+    missing_columns = sorted(required_columns.difference(trial_df.columns))
+    if missing_columns:
+        raise ValueError(f"trial_df is missing expectant value columns: {missing_columns}")
+
+    normalized = normalize_experimenter_reward_column(trial_df)
+    actions = pd.to_numeric(normalized["action"], errors="coerce")
+    rewards = pd.to_numeric(normalized["reward"], errors="coerce")
+    values = normalized[value_columns].apply(pd.to_numeric, errors="coerce")
+    no_choice = make_no_choice_action_mask(normalized["action"]).to_numpy(dtype=bool)
+    experimenter_reward = ~is_zero_flag(
+        get_experimenter_reward_flags(normalized)
+    ).to_numpy(dtype=bool)
+    valid_rows = (
+        ~no_choice
+        & ~experimenter_reward
+        & actions.isin([RIGHT_IX, LEFT_IX]).to_numpy()
+        & rewards.notna().to_numpy()
+        & values.notna().all(axis=1).to_numpy()
+    )
+    switch_markers = prepare_expectant_switch_markers(normalized, valid_rows)
+    plot_df = normalized.loc[valid_rows].copy()
+    if plot_df.empty:
+        raise ValueError("trial_df contains no valid rows with both expectant model values.")
+    plot_df["action"] = actions.loc[valid_rows].to_numpy(dtype=int)
+    plot_df["reward"] = rewards.loc[valid_rows].to_numpy(dtype=float)
+    for column in value_columns:
+        plot_df[column] = values.loc[valid_rows, column].to_numpy(dtype=float)
+
+    fig, axis = plot_run_dataframe(
+        plot_df,
+        title=f"{sess_id_full} {title_suffix}",
+        value_columns=value_columns,
+        show_action_probability=False,
+        show_legend=True,
+        xtick_interval=xtick_interval,
+        save_path=None,
+        show=False,
+        theme=theme,
+        figsize=(24, 5),
+    )
+    if value_styles is not None:
+        for line in axis.lines:
+            if line.get_label() in value_styles:
+                line.set(**value_styles[line.get_label()])
+    marker_styles = {
+        "correct_predecessor": {
+            "label": "Correct before switch",
+            "s": 72,
+            "facecolors": "none",
+            "edgecolors": "#009E73",
+            "linewidths": 1.6,
+            "zorder": 7,
+        },
+        "reward_to_switch": {
+            "label": "Reward -> switch",
+            "s": 48,
+            "c": "#E69F00",
+            "edgecolors": "#222222",
+            "linewidths": 0.6,
+            "zorder": 8,
+        },
+        "omission_to_switch": {
+            "label": "Omission -> switch",
+            "s": 48,
+            "c": "#6F42C1",
+            "edgecolors": "#222222",
+            "linewidths": 0.6,
+            "zorder": 8,
+        },
+    }
+    for marker_role, style in marker_styles.items():
+        role_markers = switch_markers.loc[
+            switch_markers["marker_role"].eq(marker_role)
+        ]
+        if role_markers.empty:
+            continue
+        axis.scatter(
+            role_markers["plot_position"].to_numpy(),
+            role_markers["signed_action"].to_numpy(),
+            marker="o",
+            **style,
+        )
+    legend_handles, legend_labels = axis.get_legend_handles_labels()
+    legend = (
+        axis.legend(legend_handles, legend_labels, fancybox=False, ncol=3)
+        if legend_handles
+        else None
+    )
+    if legend is not None:
+        legend_facecolor = "#ffffff" if theme == "light" else "#111111"
+        legend_text_color = "#111111" if theme == "light" else "#f5f5f5"
+        legend.get_frame().set_facecolor(legend_facecolor)
+        legend.get_frame().set_edgecolor("#cccccc")
+        for legend_text in legend.get_texts():
+            legend_text.set_color(legend_text_color)
+    fig.text(
+        0.01,
+        0.01,
+        caption,
+        color="#111111" if theme == "light" else "#f5f5f5",
+        fontsize=9,
+    )
+    fig.subplots_adjust(bottom=0.16)
+    save_path = figure_path / f"{sess_id_full}_{filename_suffix}.png"
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=300, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print("saved figure as {}".format(save_path))
+    return plot_df, save_path
+
+
 def plot_mouse_history_expectant_switching_values(
     trial_df: pd.DataFrame,
     figure_path: Path,
@@ -922,110 +1087,6 @@ def plot_mouse_history_expectant_switching_values(
         Valid plotted rows, preserving their original dataframe index, and the
         saved one-panel PNG path.
     """
-    value_columns = [
-        "simple_probe_persistence_value",
-        "expectancy_persistence_doubt_value",
-    ]
-    required_columns = {
-        "state",
-        "action",
-        "reward",
-        "switch_trial",
-        "prev_correct",
-        "explore_trial",
-        *value_columns,
-    }
-    missing_columns = sorted(required_columns.difference(trial_df.columns))
-    if missing_columns:
-        raise ValueError(f"trial_df is missing expectant value columns: {missing_columns}")
-
-    normalized = normalize_experimenter_reward_column(trial_df)
-    actions = pd.to_numeric(normalized["action"], errors="coerce")
-    rewards = pd.to_numeric(normalized["reward"], errors="coerce")
-    values = normalized[value_columns].apply(pd.to_numeric, errors="coerce")
-    no_choice = make_no_choice_action_mask(normalized["action"]).to_numpy(dtype=bool)
-    experimenter_reward = ~is_zero_flag(
-        get_experimenter_reward_flags(normalized)
-    ).to_numpy(dtype=bool)
-    valid_rows = (
-        ~no_choice
-        & ~experimenter_reward
-        & actions.isin([RIGHT_IX, LEFT_IX]).to_numpy()
-        & rewards.notna().to_numpy()
-        & values.notna().all(axis=1).to_numpy()
-    )
-    switch_markers = prepare_expectant_switch_markers(normalized, valid_rows)
-    plot_df = normalized.loc[valid_rows].copy()
-    if plot_df.empty:
-        raise ValueError("trial_df contains no valid rows with both expectant model values.")
-    plot_df["action"] = actions.loc[valid_rows].to_numpy(dtype=int)
-    plot_df["reward"] = rewards.loc[valid_rows].to_numpy(dtype=float)
-    for column in value_columns:
-        plot_df[column] = values.loc[valid_rows, column].to_numpy(dtype=float)
-
-    fig, _axis = plot_run_dataframe(
-        plot_df,
-        title=f"{sess_id_full} mouse-history expectant-switching values",
-        value_columns=value_columns,
-        show_action_probability=False,
-        show_legend=True,
-        xtick_interval=xtick_interval,
-        save_path=None,
-        show=False,
-        theme=theme,
-        figsize=(24, 5),
-    )
-    marker_styles = {
-        "correct_predecessor": {
-            "label": "Correct before switch",
-            "s": 72,
-            "facecolors": "none",
-            "edgecolors": "#009E73",
-            "linewidths": 1.6,
-            "zorder": 7,
-        },
-        "reward_to_switch": {
-            "label": "Reward -> switch",
-            "s": 48,
-            "c": "#E69F00",
-            "edgecolors": "#222222",
-            "linewidths": 0.6,
-            "zorder": 8,
-        },
-        "omission_to_switch": {
-            "label": "Omission -> switch",
-            "s": 48,
-            "c": "#6F42C1",
-            "edgecolors": "#222222",
-            "linewidths": 0.6,
-            "zorder": 8,
-        },
-    }
-    for marker_role, style in marker_styles.items():
-        role_markers = switch_markers.loc[
-            switch_markers["marker_role"].eq(marker_role)
-        ]
-        if role_markers.empty:
-            continue
-        _axis.scatter(
-            role_markers["plot_position"].to_numpy(),
-            role_markers["signed_action"].to_numpy(),
-            marker="o",
-            **style,
-        )
-    legend_handles, legend_labels = _axis.get_legend_handles_labels()
-    legend = (
-        _axis.legend(legend_handles, legend_labels, fancybox=False, ncol=3)
-        if legend_handles
-        else None
-    )
-    if legend is not None:
-        legend_facecolor = "#ffffff" if theme == "light" else "#111111"
-        legend_text_color = "#111111" if theme == "light" else "#f5f5f5"
-        legend.get_frame().set_facecolor(legend_facecolor)
-        legend.get_frame().set_edgecolor("#cccccc")
-        for legend_text in legend.get_texts():
-            legend_text.set_color(legend_text_color)
     caption = (
         f"k0={params.expectancy_threshold:g}, scale={params.expectancy_scale:g}, "
         f"lambda={params.omission_lam:g}; "
@@ -1035,14 +1096,77 @@ def plot_mouse_history_expectant_switching_values(
         f"wE={params.full_expectancy_weight:g}, "
         f"wD={params.full_doubt_weight:g})"
     )
-    fig.text(0.01, 0.01, caption, color="#111111" if theme == "light" else "#f5f5f5", fontsize=9)
-    fig.subplots_adjust(bottom=0.16)
-    save_path = figure_path / f"{sess_id_full}_mouse_history_expectant_switching_values.png"
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=300, bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
-    print("saved figure as {}".format(save_path))
-    return plot_df, save_path
+    return _plot_mouse_history_expectant_value_pair(
+        trial_df=trial_df,
+        figure_path=figure_path,
+        sess_id_full=sess_id_full,
+        value_columns=[
+            "simple_probe_persistence_value",
+            "expectancy_persistence_doubt_value",
+        ],
+        title_suffix="mouse-history expectant-switching values",
+        filename_suffix="mouse_history_expectant_switching_values",
+        caption=caption,
+        theme=theme,
+        xtick_interval=xtick_interval,
+        value_styles=None,
+    )
+
+
+def plot_mouse_history_candidate_expectant_switching_values(
+    trial_df: pd.DataFrame,
+    figure_path: Path,
+    sess_id_full: str,
+    params,
+    theme: str = "light",
+    xtick_interval: int | None = 50,
+) -> tuple[pd.DataFrame, Path]:
+    """Plot both candidate model values over the mouse's trial history.
+
+    ``trial_df`` has shape ``(n_trials, n_columns)`` and contains state,
+    action, reward, existing switch flags, and both candidate left-positive
+    unitless values. The returned dataframe contains valid behavioral rows in
+    original order; the returned path is the saved one-panel PNG.
+    """
+    caption = (
+        "probe+doubt("
+        f"wP={params.probe_doubt_persistence_weight:g}, "
+        f"wR={params.probe_doubt_probe_weight:g}, "
+        f"wD={params.probe_doubt_doubt_weight:g}, "
+        f"lambda={params.probe_doubt_lambda:g}); "
+        "home("
+        f"k0={params.home_expectancy_threshold:g}, "
+        f"scale={params.home_expectancy_scale:g}, "
+        f"wE={params.home_expectancy_weight:g}, "
+        f"wD={params.home_doubt_weight:g}, "
+        f"lambda={params.home_doubt_lambda:g})"
+    )
+    return _plot_mouse_history_expectant_value_pair(
+        trial_df=trial_df,
+        figure_path=figure_path,
+        sess_id_full=sess_id_full,
+        value_columns=[
+            "probe_persistence_doubt_value",
+            "home_referenced_expectancy_doubt_value",
+        ],
+        title_suffix="mouse-history candidate expectant values",
+        filename_suffix="mouse_history_candidate_expectant_values",
+        caption=caption,
+        theme=theme,
+        xtick_interval=xtick_interval,
+        value_styles={
+            "probe_persistence_doubt_value": {
+                "color": "#0072B2",
+                "linewidth": 0.9,
+                "alpha": 0.85,
+            },
+            "home_referenced_expectancy_doubt_value": {
+                "color": "#D55E00",
+                "linewidth": 0.9,
+                "alpha": 0.85,
+            },
+        },
+    )
 
 
 def plot_mouse_history_ideal_observer_value_on_ax(

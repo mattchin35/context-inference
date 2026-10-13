@@ -98,6 +98,17 @@ def test_signed_expectant_columns_are_side_equivalent_but_counts_are_not():
         "simple_probe_persistence_value",
         "expectancy_persistence_doubt_drive",
         "expectancy_persistence_doubt_value",
+        "probe_persistence_doubt_previous_choice",
+        "probe_persistence_doubt_reward_probe",
+        "probe_persistence_doubt_doubt_raw_value",
+        "probe_persistence_doubt_doubt_choice",
+        "probe_persistence_doubt_drive",
+        "probe_persistence_doubt_value",
+        "home_referenced_expectancy_doubt_expectancy_choice",
+        "home_referenced_expectancy_doubt_doubt_raw_value",
+        "home_referenced_expectancy_doubt_doubt_choice",
+        "home_referenced_expectancy_doubt_drive",
+        "home_referenced_expectancy_doubt_value",
     ):
         assert column in directional
     for column in (
@@ -107,6 +118,12 @@ def test_signed_expectant_columns_are_side_equivalent_but_counts_are_not():
         "expectancy_strength",
         "simple_probe_persistence_prob_left",
         "expectancy_persistence_doubt_prob_left",
+        "probe_persistence_doubt_previous_reward",
+        "probe_persistence_doubt_prob_left",
+        "home_referenced_expectancy_doubt_confirmed_side",
+        "home_referenced_expectancy_doubt_reward_count",
+        "home_referenced_expectancy_doubt_expectancy_strength",
+        "home_referenced_expectancy_doubt_prob_left",
     ):
         assert column not in directional
 

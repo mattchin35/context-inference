@@ -3,7 +3,13 @@ import numpy as np
 import re
 import warnings
 from behavior_analysis import performance_plots
-from behavior_analysis import plot_model_values, raster_plots, session_analysis, simulate_priors
+from behavior_analysis import (
+    expectant_switching_selectivity,
+    plot_model_values,
+    raster_plots,
+    session_analysis,
+    simulate_priors,
+)
 from mouse_behavior_preprocessing import process_behavior_log
 from behavior_analysis import block_state_space_modeling as bssm
 from behavior_analysis import trial_state_space_modeling as tssm
@@ -17,7 +23,7 @@ from src.behavior_analysis.project_utils import (
 import pickle as pkl
 from pathlib import Path
 import pandas as pd
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Sequence
 import seaborn as sns
 from matplotlib.colors import ListedColormap
@@ -528,6 +534,7 @@ def plot_expectant_switching_for_session(
     augmented_trial_df: pd.DataFrame,
     session: Session,
     params,
+    include_legacy: bool = True,
 ) -> dict[str, Path]:
     """Save complementary expectant-switching tuning plots for one session.
 
@@ -540,14 +547,39 @@ def plot_expectant_switching_for_session(
         Session metadata providing ``figure_path`` and ``sess_id_full``.
     params : object
         Exact trial-feature parameter object used to generate model columns.
+    include_legacy : bool, default=True
+        Whether to regenerate plots for the two earlier expectant exemplars.
+        False is intended for candidate-only refreshes of saved sessions.
 
     Returns
     -------
     dict[str, pathlib.Path]
-        Paths keyed by ``value_plot`` and ``diagnostic_plot``.
+        Paths for the legacy and candidate value and diagnostic plots.
     """
-    _plot_df, value_path = (
-        plot_model_values.plot_mouse_history_expectant_switching_values(
+    plot_paths = {}
+    if include_legacy:
+        _plot_df, value_path = (
+            plot_model_values.plot_mouse_history_expectant_switching_values(
+                trial_df=augmented_trial_df,
+                figure_path=session.figure_path,
+                sess_id_full=session.sess_id_full,
+                params=params,
+                theme="light",
+            )
+        )
+        diagnostic_path = performance_plots.plot_expectant_switching_diagnostics(
+            augmented_trial_df,
+            plot_path=session.figure_path,
+            sess_id_full=session.sess_id_full,
+        )
+        plot_paths.update(
+            {
+                "value_plot": value_path,
+                "diagnostic_plot": diagnostic_path,
+            }
+        )
+    _candidate_plot_df, candidate_value_path = (
+        plot_model_values.plot_mouse_history_candidate_expectant_switching_values(
             trial_df=augmented_trial_df,
             figure_path=session.figure_path,
             sess_id_full=session.sess_id_full,
@@ -555,15 +587,213 @@ def plot_expectant_switching_for_session(
             theme="light",
         )
     )
-    diagnostic_path = performance_plots.plot_expectant_switching_diagnostics(
+    candidate_diagnostic_path = (
+        performance_plots.plot_candidate_expectant_switching_diagnostics(
+            augmented_trial_df,
+            plot_path=session.figure_path,
+            sess_id_full=session.sess_id_full,
+        )
+    )
+    plot_paths.update(
+        {
+            "candidate_value_plot": candidate_value_path,
+            "candidate_diagnostic_plot": candidate_diagnostic_path,
+        }
+    )
+    return plot_paths
+
+
+def save_and_plot_expectant_model_selectivity_for_session(
+    augmented_trial_df: pd.DataFrame,
+    session: Session,
+    min_valid_choices: int = 5,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Path]]:
+    """Compute and save one session's expectant-model selectivity outputs.
+
+    Parameters
+    ----------
+    augmented_trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Chronological feature table containing candidate and ideal values plus
+        existing switch-event flags. Choice convention is ``0=right, 1=left``.
+    session : Session
+        Session metadata providing processed-data and figure directories.
+    min_valid_choices : int, default=5
+        Minimum valid mouse choices for inclusion in summary associations.
+        Shorter blocks remain in the saved table and plot.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame, dict[str, pathlib.Path]]
+        Block table, event table, and paths to both CSVs, metadata JSON, and
+        both per-session PNGs. Counts are trials; rates and agreements are
+        unitless fractions.
+    """
+    session.processed_data_path.mkdir(parents=True, exist_ok=True)
+    session.figure_path.mkdir(parents=True, exist_ok=True)
+    block_table = expectant_switching_selectivity.compute_block_model_selectivity(
         augmented_trial_df,
+        min_valid_choices=min_valid_choices,
+        exclude_block_entry=True,
+    )
+    event_table = expectant_switching_selectivity.compute_event_model_selectivity(
+        augmented_trial_df,
+        exclude_block_entry=True,
+    )
+    block_path = (
+        session.processed_data_path
+        / f"{session.sess_id_full}_expectant_model_block_selectivity.csv"
+    )
+    event_path = (
+        session.processed_data_path
+        / f"{session.sess_id_full}_expectant_model_event_selectivity.csv"
+    )
+    metadata_path = (
+        session.processed_data_path
+        / f"{session.sess_id_full}_expectant_model_selectivity_meta.json"
+    )
+    block_table.to_csv(block_path, index=False, na_rep="None")
+    event_table.to_csv(event_path, index=False, na_rep="None")
+    metadata = {
+        "generator": "expectant_switching_selectivity",
+        "analysis_version": getattr(
+            expectant_switching_selectivity, "ANALYSIS_VERSION", "unknown"
+        ),
+        "session_id": session.sess_id_full,
+        "parameters": {
+            "model_value_columns": (
+                getattr(
+                    expectant_switching_selectivity,
+                    "DEFAULT_SELECTIVITY_MODEL_VALUES",
+                    {},
+                )
+            ),
+            "min_valid_choices": min_valid_choices,
+            "exclude_block_entry": True,
+        },
+        "random_seed": None,
+        "units": {
+            "counts": "trials",
+            "agreements": "fraction",
+            "reward_switch_rate": "fraction",
+        },
+        "axis_conventions": {
+            "block_position": "zero-based within-session plotting position",
+            "agreement_delta": "candidate minus mouse-history ideal",
+        },
+    }
+    with open(metadata_path, "w") as metadata_file:
+        json.dump(metadata, metadata_file, indent=2)
+    block_plot_path = performance_plots.plot_session_expectant_model_selectivity(
+        block_table,
         plot_path=session.figure_path,
         sess_id_full=session.sess_id_full,
     )
-    return {
-        "value_plot": value_path,
-        "diagnostic_plot": diagnostic_path,
+    scatter_plot_path = (
+        performance_plots.plot_session_expectant_model_selectivity_scatter(
+            block_table,
+            plot_path=session.figure_path,
+            sess_id_full=session.sess_id_full,
+        )
+    )
+    paths = {
+        "block_table": block_path,
+        "event_table": event_path,
+        "metadata": metadata_path,
+        "block_plot": block_plot_path,
+        "scatter_plot": scatter_plot_path,
     }
+    return block_table, event_table, paths
+
+
+def refresh_expectant_model_outputs_for_session(
+    session: Session,
+    params: object,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Path]]:
+    """Refresh candidate model features and plots from saved session tables.
+
+    Parameters
+    ----------
+    session : Session
+        Session metadata providing ``processed_data_path``, ``figure_path``,
+        and ``sess_id_full``. Existing augmented-trial and block-performance
+        CSVs must be present.
+    params : gather_trial_features.TaskParams
+        Fixed candidate-model parameters. Counts are in rewarded trials,
+        doubt lambdas are in inverse trials, and weights are unitless.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame, dict[str, pathlib.Path]]
+        Refreshed trial table, refreshed block table, and plot paths. Trial and
+        block row counts and ordering are preserved.
+
+    Notes
+    -----
+    This function does not preprocess raw behavior or call GLM/HMM routines.
+    It updates only candidate trial columns, their block agreements, the
+    candidate parameter record, and behavior-model plots.
+    """
+    trial_path = (
+        session.processed_data_path
+        / f"{session.sess_id_full}_augmented_trials.csv"
+    )
+    block_path = (
+        session.processed_data_path
+        / f"{session.sess_id_full}_block_performance.csv"
+    )
+    if not trial_path.exists():
+        raise FileNotFoundError(f"Saved augmented trials were not found: {trial_path}")
+    if not block_path.exists():
+        raise FileNotFoundError(f"Saved block performance was not found: {block_path}")
+
+    augmented_trial_df = pd.read_csv(trial_path, sep=",", na_filter=False)
+    block_performance = pd.read_csv(block_path, sep=",", na_filter=False)
+    refreshed_trials = gtf.collect_candidate_expectant_switching_features(
+        augmented_trial_df,
+        params,
+    )
+    refreshed_trials.to_csv(trial_path, index=False, na_rep="None")
+    gtf.assert_saved_file(trial_path)
+
+    parameter_path = (
+        session.processed_data_path / "candidate_expectant_model_params.json"
+    )
+    with open(parameter_path, "w") as parameter_file:
+        json.dump(
+            asdict(gtf.make_candidate_expectant_switching_config(params)),
+            parameter_file,
+            indent=2,
+        )
+    gtf.assert_saved_file(parameter_path)
+
+    candidate_agreement_columns = {
+        "probe_persistence_doubt_mouse_agreement": (
+            "probe_persistence_doubt_value"
+        ),
+        "home_referenced_expectancy_doubt_mouse_agreement": (
+            "home_referenced_expectancy_doubt_value"
+        ),
+    }
+    refreshed_blocks = session_analysis.add_block_agent_mouse_agreement_columns(
+        block_performance,
+        refreshed_trials,
+        agent_value_columns=candidate_agreement_columns,
+    )
+    refreshed_blocks.to_csv(block_path, index=False, na_rep="None")
+    gtf.assert_saved_file(block_path)
+
+    performance_plots.plot_session_agent_mouse_agreement(
+        refreshed_blocks,
+        session.figure_path,
+        session.sess_id_full,
+    )
+    plot_paths = plot_expectant_switching_for_session(
+        augmented_trial_df=refreshed_trials,
+        session=session,
+        params=params,
+        include_legacy=False,
+    )
+    return refreshed_trials, refreshed_blocks, plot_paths
 
 
 def save_and_plot_switch_persistence_for_session(
@@ -4404,6 +4634,11 @@ def run_single_session_workflow(
         session=sess,
         params=task_params,
     )
+    save_and_plot_expectant_model_selectivity_for_session(
+        augmented_trial_df=augmented_trial_df,
+        session=sess,
+        min_valid_choices=5,
+    )
     plot_mouse_history_ideal_observer_for_session(
         augmented_trial_df=augmented_trial_df,
         session=sess,
@@ -4503,11 +4738,93 @@ def run_single_session_batch(
     return resolved_sessions
 
 
+def run_expectant_model_refresh_batch(
+    mouse: str,
+    dates: Sequence[str],
+    session_data_root: Path,
+    multi_session_save_path: Path,
+    params: object,
+    refresher=refresh_expectant_model_outputs_for_session,
+) -> list[Session]:
+    """Refresh candidate expectant outputs for saved sessions of one mouse.
+
+    Parameters
+    ----------
+    mouse : str
+        Mouse identifier used in saved session directories.
+    dates : Sequence[str]
+        Session dates in ``YYYY-MM-DD`` format, processed in order.
+    session_data_root : pathlib.Path
+        Mouse-level data directory containing saved session analyses.
+    multi_session_save_path : pathlib.Path
+        Cross-session output directory assigned to resolved sessions.
+    params : gather_trial_features.TaskParams
+        Fixed candidate parameters applied independently to every session.
+    refresher : callable
+        Dependency-injected function accepting ``(session, params)``. The
+        default updates candidate features, agreement columns, and plots only.
+
+    Returns
+    -------
+    list[Session]
+        Resolved saved sessions in processing order. No raw preprocessing,
+        GLM, or HMM execution occurs in this batch wrapper.
+    """
+    resolved_sessions = []
+    for date in dates:
+        session = find_saved_session_by_date(
+            mouse=mouse,
+            date=date,
+            session_data_root=session_data_root,
+            multi_session_save_path=multi_session_save_path,
+        )
+        resolved_sessions.append(session)
+        refresher(session, params)
+    return resolved_sessions
+
+
+def main_mouse_expectant_model_refresh() -> None:
+    """Refresh candidate expectant outputs for every saved CT016 session."""
+    mouse = "CT016"
+    task_tag = "latent_inference"
+    session_data_root = Path(
+        f"/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}"
+    )
+    multi_session_save_path = session_data_root / "cross_session_analysis"
+    dates = find_raw_session_dates_for_task_tag(
+        mouse=mouse,
+        session_data_root=session_data_root,
+        task_tag=task_tag,
+    )
+    params = gtf.TaskParams(
+        probe_doubt_persistence_weight=1.0,
+        probe_doubt_probe_weight=2.0,
+        probe_doubt_doubt_weight=1.4,
+        probe_doubt_lambda=0.5,
+        home_expectancy_threshold=2.5,
+        home_expectancy_scale=0.5,
+        home_expectancy_weight=1.0,
+        home_doubt_weight=1.0,
+        home_doubt_lambda=0.5,
+    )
+    run_expectant_model_refresh_batch(
+        mouse=mouse,
+        dates=dates,
+        session_data_root=session_data_root,
+        multi_session_save_path=multi_session_save_path,
+        params=params,
+    )
+
+
 def main_mouse():
     """Analyze a single behavior session from start to finish."""
     mouse = "CT026"
-    date = "2026-08-03"
-    behavior_timestamp = 111938  # Set to "HHMMSS" to choose one session on ambiguous dates.
+    date = "2026-08-10"
+    behavior_timestamp = 130341  # Set to "HHMMSS" to choose one session on ambiguous dates.
+    # date = "2026-05-25"
+    # behavior_timestamp = 145938
+    # date = "2026-05-29"
+    # behavior_timestamp = 132812
     task_tag = "latent_inference"
     session_data_root = Path(f"/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}")
     multi_session_save_path = session_data_root / "cross_session_analysis"
@@ -4531,7 +4848,16 @@ def main_mouse():
             simple_probe_weight=1.0,
             full_persistence_weight=1.0,
             full_expectancy_weight=1.0,
-            full_doubt_weight=1.0,
+            full_doubt_weight=1.1,
+            probe_doubt_persistence_weight=1.0,
+            probe_doubt_probe_weight=2.0,
+            probe_doubt_doubt_weight=1.4,
+            probe_doubt_lambda=0.5,
+            home_expectancy_threshold=2.5,
+            home_expectancy_scale=0.5,
+            home_expectancy_weight=1.0,
+            home_doubt_weight=1.5,
+            home_doubt_lambda=0.5,
         ),
     )
 
@@ -4548,7 +4874,7 @@ def main_mouse():
 
 def main_mouse_batch():
     """Run ordinary single-session analysis for several dates of one mouse."""
-    mouse = "CT016"
+    mouse = "CT026"
     use_all_dates_for_task_tag = True
     dates = [#'2026-04-17', '2026-04-20',
         #'2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
@@ -4596,6 +4922,15 @@ def main_mouse_batch():
             full_persistence_weight=1.0,
             full_expectancy_weight=1.0,
             full_doubt_weight=1.0,
+            probe_doubt_persistence_weight=1.0,
+            probe_doubt_probe_weight=2.0,
+            probe_doubt_doubt_weight=1.4,
+            probe_doubt_lambda=0.5,
+            home_expectancy_threshold=2.5,
+            home_expectancy_scale=0.5,
+            home_expectancy_weight=1.0,
+            home_doubt_weight=1.0,
+            home_doubt_lambda=0.5,
         ),
     )
 
@@ -4706,8 +5041,10 @@ def main_cross_mouse_multisession_block_performance(
 
 
 if __name__ == '__main__':
-    # main_mouse()
-    main_mouse_batch()
-    main_multisession(agent_agreement_only=True)
+    main_mouse()
+    # main_mouse_batch()
+    # main_multisession(agent_agreement_only=True)
     # main_simulation()
     # main_cross_mouse_metrics()
+
+    # main_mouse_expectant_model_refresh()

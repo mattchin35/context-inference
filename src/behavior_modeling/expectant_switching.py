@@ -93,6 +93,61 @@ class ExpectantSwitchingFeatureConfig:
 
 
 @dataclass(frozen=True)
+class ProbePersistenceDoubtParams:
+    """Configuration for persistence, reward probe, and omission doubt.
+
+    All weights are nonnegative and unitless. ``doubt_lambda`` is a positive
+    inverse-trial saturation rate.
+    """
+
+    persistence_weight: float = 1.0
+    probe_weight: float = 2.0
+    doubt_weight: float = 1.4
+    doubt_lambda: float = 0.5
+
+    def __post_init__(self) -> None:
+        _validate_weight("persistence_weight", self.persistence_weight)
+        _validate_weight("probe_weight", self.probe_weight)
+        _validate_weight("doubt_weight", self.doubt_weight)
+        if not np.isfinite(self.doubt_lambda) or self.doubt_lambda <= 0:
+            raise ValueError("doubt_lambda must be finite and greater than zero.")
+
+
+@dataclass(frozen=True)
+class HomeReferencedExpectancyDoubtParams:
+    """Configuration for reward-confirmed expectancy plus omission doubt.
+
+    ``curve`` is expressed in rewarded trials, the weights are nonnegative
+    and unitless, and ``doubt_lambda`` is a positive inverse-trial rate.
+    """
+
+    curve: ExpectancyCurveParams = field(
+        default_factory=lambda: ExpectancyCurveParams(threshold=2.5, scale=0.5)
+    )
+    expectancy_weight: float = 1.0
+    doubt_weight: float = 1.0
+    doubt_lambda: float = 0.5
+
+    def __post_init__(self) -> None:
+        _validate_weight("expectancy_weight", self.expectancy_weight)
+        _validate_weight("doubt_weight", self.doubt_weight)
+        if not np.isfinite(self.doubt_lambda) or self.doubt_lambda <= 0:
+            raise ValueError("doubt_lambda must be finite and greater than zero.")
+
+
+@dataclass(frozen=True)
+class CandidateExpectantSwitchingConfig:
+    """Focused configuration for the two candidate mouse-session models."""
+
+    probe: ProbePersistenceDoubtParams = field(
+        default_factory=ProbePersistenceDoubtParams
+    )
+    home: HomeReferencedExpectancyDoubtParams = field(
+        default_factory=HomeReferencedExpectancyDoubtParams
+    )
+
+
+@dataclass(frozen=True)
 class PreviousOutcomeState:
     """Previous valid choice and binary outcome for a single session.
 
@@ -356,3 +411,235 @@ def replay_expectant_switching(
         doubt_state = update_counterfactual_doubt(doubt_state, action, reward)
 
     return outputs
+
+
+def _validated_replay_arrays(
+    actions: np.ndarray,
+    rewards: np.ndarray,
+    valid_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return validated aligned arrays for one causal model replay.
+
+    Parameters
+    ----------
+    actions : ndarray, shape (n_trials,)
+        Choices encoded ``0=right`` and ``1=left`` on valid rows.
+    rewards : ndarray, shape (n_trials,)
+        Reward amounts in task units; positive means rewarded.
+    valid_mask : ndarray of bool, shape (n_trials,)
+        Rows that emit a pre-trial value and update model state afterward.
+
+    Returns
+    -------
+    tuple of ndarray
+        Action, reward, and boolean validity arrays, each with shape
+        ``(n_trials,)``. Invalid-row action and reward values are not read.
+    """
+    action_array = np.asarray(actions)
+    reward_array = np.asarray(rewards, dtype=float)
+    validity = np.asarray(valid_mask, dtype=bool)
+    if action_array.ndim != 1 or reward_array.ndim != 1 or validity.ndim != 1:
+        raise ValueError("actions, rewards, and valid_mask must be one-dimensional.")
+    if not (action_array.shape == reward_array.shape == validity.shape):
+        raise ValueError("actions, rewards, and valid_mask must have matching shapes.")
+    for trial_index in np.flatnonzero(validity):
+        _validate_valid_observation(
+            int(action_array[trial_index]),
+            float(reward_array[trial_index]),
+        )
+    return action_array, reward_array, validity
+
+
+def replay_probe_persistence_doubt(
+    actions: np.ndarray,
+    rewards: np.ndarray,
+    valid_mask: np.ndarray,
+    params: ProbePersistenceDoubtParams,
+) -> dict[str, np.ndarray]:
+    """Replay persistence, reward-probe, and omission-doubt signals.
+
+    Parameters
+    ----------
+    actions : ndarray, shape (n_trials,)
+        Choices encoded ``0=right`` and ``1=left`` on valid rows.
+    rewards : ndarray, shape (n_trials,)
+        Reward amounts in task units; positive means rewarded.
+    valid_mask : ndarray of bool, shape (n_trials,)
+        Valid completed choice/outcome rows. False rows neither emit values nor
+        update model history.
+    params : ProbePersistenceDoubtParams
+        Fixed nonnegative component weights and positive doubt rate.
+
+    Returns
+    -------
+    dict[str, ndarray]
+        Prefixed pre-trial component, drive, signed-value, and left-probability
+        arrays. Every array has shape ``(n_trials,)``; invalid rows are NaN and
+        signed values are left-positive.
+    """
+    action_array, reward_array, validity = _validated_replay_arrays(
+        actions, rewards, valid_mask
+    )
+    column_names = (
+        "probe_persistence_doubt_previous_choice",
+        "probe_persistence_doubt_previous_reward",
+        "probe_persistence_doubt_reward_probe",
+        "probe_persistence_doubt_doubt_raw_value",
+        "probe_persistence_doubt_doubt_choice",
+        "probe_persistence_doubt_drive",
+        "probe_persistence_doubt_value",
+        "probe_persistence_doubt_prob_left",
+    )
+    outputs = {
+        name: np.full(action_array.shape, np.nan, dtype=float)
+        for name in column_names
+    }
+    previous_state = PreviousOutcomeState()
+    doubt_state = CounterfactualDoubtState()
+
+    for trial_index in np.flatnonzero(validity):
+        persistence, reward_probe = previous_outcome_signals(previous_state)
+        doubt_raw = counterfactual_doubt_raw_value(
+            doubt_state, params.doubt_lambda
+        )
+        doubt_choice = -doubt_raw
+        drive = (
+            params.persistence_weight * persistence
+            + params.probe_weight * reward_probe
+            + params.doubt_weight * doubt_choice
+        )
+        readout = _readout_from_drive(drive)
+
+        outputs["probe_persistence_doubt_previous_choice"][trial_index] = persistence
+        outputs["probe_persistence_doubt_previous_reward"][trial_index] = (
+            previous_state.previous_reward
+        )
+        outputs["probe_persistence_doubt_reward_probe"][trial_index] = reward_probe
+        outputs["probe_persistence_doubt_doubt_raw_value"][trial_index] = doubt_raw
+        outputs["probe_persistence_doubt_doubt_choice"][trial_index] = doubt_choice
+        outputs["probe_persistence_doubt_drive"][trial_index] = readout.decision_drive
+        outputs["probe_persistence_doubt_value"][trial_index] = readout.signed_value
+        outputs["probe_persistence_doubt_prob_left"][trial_index] = readout.p_left
+
+        action = int(action_array[trial_index])
+        reward = float(reward_array[trial_index])
+        previous_state = update_previous_outcome(previous_state, action, reward)
+        doubt_state = update_counterfactual_doubt(doubt_state, action, reward)
+
+    return outputs
+
+
+def replay_home_referenced_expectancy_doubt(
+    actions: np.ndarray,
+    rewards: np.ndarray,
+    valid_mask: np.ndarray,
+    params: HomeReferencedExpectancyDoubtParams,
+) -> dict[str, np.ndarray]:
+    """Replay reward-confirmed home expectancy plus omission doubt.
+
+    Parameters
+    ----------
+    actions : ndarray, shape (n_trials,)
+        Choices encoded ``0=right`` and ``1=left`` on valid rows.
+    rewards : ndarray, shape (n_trials,)
+        Reward amounts in task units; positive means rewarded.
+    valid_mask : ndarray of bool, shape (n_trials,)
+        Valid completed choice/outcome rows. False rows neither emit values nor
+        update model history.
+    params : HomeReferencedExpectancyDoubtParams
+        Fixed expectancy curve, component weights, and doubt rate.
+
+    Returns
+    -------
+    dict[str, ndarray]
+        Prefixed pre-trial component, drive, signed-value, and left-probability
+        arrays. Every array has shape ``(n_trials,)``; invalid rows are NaN and
+        signed values are left-positive.
+    """
+    action_array, reward_array, validity = _validated_replay_arrays(
+        actions, rewards, valid_mask
+    )
+    column_names = (
+        "home_referenced_expectancy_doubt_confirmed_side",
+        "home_referenced_expectancy_doubt_reward_count",
+        "home_referenced_expectancy_doubt_expectancy_strength",
+        "home_referenced_expectancy_doubt_expectancy_choice",
+        "home_referenced_expectancy_doubt_doubt_raw_value",
+        "home_referenced_expectancy_doubt_doubt_choice",
+        "home_referenced_expectancy_doubt_drive",
+        "home_referenced_expectancy_doubt_value",
+        "home_referenced_expectancy_doubt_prob_left",
+    )
+    outputs = {
+        name: np.full(action_array.shape, np.nan, dtype=float)
+        for name in column_names
+    }
+    expectancy_state = RewardConfirmedExpectancyState()
+    doubt_state = CounterfactualDoubtState()
+
+    for trial_index in np.flatnonzero(validity):
+        strength = float(expectancy_strength(expectancy_state.reward_count, params.curve))
+        if expectancy_state.confirmed_side is None:
+            confirmed_side = np.nan
+            expectancy_choice = 0.0
+        else:
+            confirmed_side = float(expectancy_state.confirmed_side)
+            home_sign = 1.0 if expectancy_state.confirmed_side == 1 else -1.0
+            expectancy_choice = home_sign * (1.0 - 2.0 * strength)
+        doubt_raw = counterfactual_doubt_raw_value(
+            doubt_state, params.doubt_lambda
+        )
+        doubt_choice = -doubt_raw
+        drive = (
+            params.expectancy_weight * expectancy_choice
+            + params.doubt_weight * doubt_choice
+        )
+        readout = _readout_from_drive(drive)
+
+        outputs["home_referenced_expectancy_doubt_confirmed_side"][trial_index] = (
+            confirmed_side
+        )
+        outputs["home_referenced_expectancy_doubt_reward_count"][trial_index] = (
+            expectancy_state.reward_count
+        )
+        outputs["home_referenced_expectancy_doubt_expectancy_strength"][trial_index] = (
+            strength
+        )
+        outputs["home_referenced_expectancy_doubt_expectancy_choice"][trial_index] = (
+            expectancy_choice
+        )
+        outputs["home_referenced_expectancy_doubt_doubt_raw_value"][trial_index] = doubt_raw
+        outputs["home_referenced_expectancy_doubt_doubt_choice"][trial_index] = doubt_choice
+        outputs["home_referenced_expectancy_doubt_drive"][trial_index] = readout.decision_drive
+        outputs["home_referenced_expectancy_doubt_value"][trial_index] = readout.signed_value
+        outputs["home_referenced_expectancy_doubt_prob_left"][trial_index] = readout.p_left
+
+        action = int(action_array[trial_index])
+        reward = float(reward_array[trial_index])
+        expectancy_state = update_reward_confirmed_expectancy(
+            expectancy_state, action, reward
+        )
+        doubt_state = update_counterfactual_doubt(doubt_state, action, reward)
+
+    return outputs
+
+
+def replay_candidate_expectant_switching(
+    actions: np.ndarray,
+    rewards: np.ndarray,
+    valid_mask: np.ndarray,
+    config: CandidateExpectantSwitchingConfig,
+) -> dict[str, np.ndarray]:
+    """Replay both candidate expectant models over one independent session.
+
+    Inputs are aligned one-dimensional trial arrays. Outputs are the union of
+    both model-specific dictionaries, with shape ``(n_trials,)``, pre-trial
+    timing, left-positive signs, and NaN on invalid rows.
+    """
+    probe_outputs = replay_probe_persistence_doubt(
+        actions, rewards, valid_mask, config.probe
+    )
+    home_outputs = replay_home_referenced_expectancy_doubt(
+        actions, rewards, valid_mask, config.home
+    )
+    return probe_outputs | home_outputs
