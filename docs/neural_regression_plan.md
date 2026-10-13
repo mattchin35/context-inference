@@ -1863,8 +1863,10 @@ Window/bin compatibility is tested with
 the rounded quotient. Validation rejects incompatible window geometry, empty selections, duplicate
 or overlapping unit identities after resolution, unsupported values, and invalid stage
 dependencies. It does not load data or inspect Streamlit state.
-`session_metadata_path` and a nonnull `output_root` must be normalized absolute paths; relative
-paths are rejected so input resolution and handoffs do not depend on a caller's working directory.
+`session_metadata_path` and a nonnull `output_root` must be lexically normalized paths. Relative
+paths resolve against the configuration file's directory, never the caller's working directory;
+existing normalized absolute paths remain supported for backward compatibility. Runtime records
+hold resolved absolute paths.
 
 The one portable JSON format maps directly to these records and has no undocumented keys:
 
@@ -1873,7 +1875,7 @@ The one portable JSON format maps directly to these records and has no undocumen
   "config_schema_version": "1",
   "analysis_version": "interregional-regression-v1",
   "coverage_assumption_version": "implicit-complete-v1",
-  "session_metadata_path": "/absolute/path/to/session_metadata.json",
+  "session_metadata_path": "neural_session.json",
   "populations": {
     "PFC": {
       "probe_id": "probe_a", "channel_source": "metadata_quality", "selected_channels": [],
@@ -1897,11 +1899,12 @@ The one portable JSON format maps directly to these records and has no undocumen
   "pca": {"pfc_components": 10, "hpc_components": 10},
   "representations": ["units"],
   "analyses": ["ols_cv"],
-  "run": {"output_root": null}
+  "run": {"output_root": "analysis_runs"}
 }
 ```
 
-`output_root=null` resolves to `<session_root>/analysis_runs`. CLI `--output-root` overrides it.
+The example's relative `output_root` resolves beside the configuration. `output_root=null` retains
+the existing default of `<session_root>/analysis_runs`. CLI `--output-root` overrides it.
 `rerun` and batch workers are CLI invocation choices and are never written as scientific settings.
 The loader rejects unknown keys at every level so a typo cannot silently change an analysis. The
 run boundary rejects an output root inside the Git repository; analysis outputs must stay in the

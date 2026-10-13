@@ -2,7 +2,7 @@
   "config_schema_version": "1",
   "analysis_version": "interregional-regression-v1",
   "coverage_assumption_version": "implicit-complete-v1",
-  "session_metadata_path": "/absolute/path/to/session/neural_session.json",
+  "session_metadata_path": "neural_session.json",
   "populations": {
     "PFC": {
       "probe_id": "replace-with-pfc-probe-id",
@@ -40,5 +40,5 @@
   "pca": {"pfc_components": 10, "hpc_components": 10},
   "representations": ["units", "pcs"],
   "analyses": ["ols_cv", "linear_granger"],
-  "run": {"output_root": null}
+  "run": {"output_root": "analysis_runs"}
 }

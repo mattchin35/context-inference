@@ -191,14 +191,14 @@ def _interregional_population(probe_id: str) -> dict[str, object]:
 
 
 def _interregional_payload(
-    metadata_path: Path, pfc_probe_id: str, hpc_probe_id: str
+    pfc_probe_id: str, hpc_probe_id: str
 ) -> dict[str, object]:
-    """Return a fast-first OLS/linear-Granger configuration."""
+    """Return a portable fast-first OLS/linear-Granger configuration."""
     return {
         "config_schema_version": "1",
         "analysis_version": "interregional-regression-v1",
         "coverage_assumption_version": "implicit-complete-v1",
-        "session_metadata_path": str(metadata_path),
+        "session_metadata_path": session_metadata.CANONICAL_FILENAME,
         "populations": {
             "PFC": _interregional_population(pfc_probe_id),
             "HPC": _interregional_population(hpc_probe_id),
@@ -216,7 +216,7 @@ def _interregional_payload(
         "pca": {"pfc_components": 10, "hpc_components": 10},
         "representations": ["units", "pcs"],
         "analyses": ["ols_cv", "linear_granger"],
-        "run": {"output_root": None},
+        "run": {"output_root": "analysis_runs"},
     }
 
 
@@ -283,7 +283,7 @@ def scaffold_session_analysis(
         ),
         (
             root / INTERREGIONAL_CONFIG_FILENAME,
-            _interregional_payload(metadata_path, pfc_probe_id, hpc_probe_id),
+            _interregional_payload(pfc_probe_id, hpc_probe_id),
         ),
     )
     for path, payload in payloads:

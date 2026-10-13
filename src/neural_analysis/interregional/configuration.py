@@ -136,6 +136,36 @@ def _normalized_absolute_path(value: object, name: str) -> Path:
     return normalized
 
 
+def _resolve_configured_path(
+    value: object, name: str, config_directory: Path
+) -> Path:
+    """Resolve one normalized absolute or config-relative path.
+
+    Parameters
+    ----------
+    value : object
+        JSON string or path-like value naming a filesystem location.
+    name : str
+        Configuration field name used in validation errors.
+    config_directory : pathlib.Path
+        Absolute directory containing the loaded configuration file. Relative
+        paths are resolved against this directory, independent of process CWD.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute lexically normalized path. The target need not exist.
+    """
+    if not isinstance(value, (str, os.PathLike)) or isinstance(value, bytes):
+        raise ValueError(f"{name} must be a normalized path.")
+    path = Path(value)
+    normalized = Path(os.path.normpath(os.fspath(path)))
+    if path != normalized:
+        raise ValueError(f"{name} must be a normalized path.")
+    resolved = normalized if normalized.is_absolute() else config_directory / normalized
+    return _normalized_absolute_path(resolved, name)
+
+
 @dataclass(frozen=True)
 class RegionalPopulationConfig:
     """Unresolved selection for one anatomical role.
@@ -374,8 +404,9 @@ def _validate_window_bin_geometry(windows: AnalysisWindows, temporal: TemporalCo
 class InterregionalAnalysisConfig:
     """Complete immutable scientific configuration for one session.
 
-    ``session_metadata_path`` is an absolute normalized filesystem path.
-    Window and bin values use seconds; counts and row selections are unitless.
+    ``session_metadata_path`` is an absolute normalized runtime path. The JSON
+    loader accepts paths relative to the configuration file. Window and bin
+    values use seconds; counts and row selections are unitless.
     """
 
     session_metadata_path: Path | str
@@ -442,8 +473,9 @@ class InterregionalAnalysisConfig:
 class RunOptions:
     """Non-scientific output and execution controls.
 
-    ``output_root`` is an absolute normalized path when supplied. ``batch_workers``
-    is a positive process count without physical units.
+    ``output_root`` is an absolute normalized runtime path when supplied. The
+    JSON loader accepts paths relative to the configuration file.
+    ``batch_workers`` is a positive process count without physical units.
     """
 
     output_root: Path | str | None = None
@@ -503,8 +535,10 @@ def _parse_population(value: object, role: str) -> RegionalPopulationConfig:
     return RegionalPopulationConfig(role=role, **payload)
 
 
-def _parse_payload(payload: Mapping[str, Any]) -> tuple[InterregionalAnalysisConfig, RunOptions]:
-    """Parse an already-decoded portable JSON mapping."""
+def _parse_payload(
+    payload: Mapping[str, Any], config_directory: Path
+) -> tuple[InterregionalAnalysisConfig, RunOptions]:
+    """Parse portable JSON paths relative to the configuration directory."""
     top_fields = {
         "config_schema_version",
         "analysis_version",
@@ -542,7 +576,11 @@ def _parse_payload(payload: Mapping[str, Any]) -> tuple[InterregionalAnalysisCon
         config_schema_version=payload["config_schema_version"],
         analysis_version=payload["analysis_version"],
         coverage_assumption_version=payload["coverage_assumption_version"],
-        session_metadata_path=payload["session_metadata_path"],
+        session_metadata_path=_resolve_configured_path(
+            payload["session_metadata_path"],
+            "session_metadata_path",
+            config_directory,
+        ),
         pfc_population=_parse_population(populations["PFC"], "PFC"),
         hpc_population=_parse_population(populations["HPC"], "HPC"),
         alignment=payload["alignment"],
@@ -559,7 +597,12 @@ def _parse_payload(payload: Mapping[str, Any]) -> tuple[InterregionalAnalysisCon
         representations=payload["representations"],
         analyses=payload["analyses"],
     )
-    return config, RunOptions(output_root=run["output_root"])
+    output_root = run["output_root"]
+    if output_root is not None:
+        output_root = _resolve_configured_path(
+            output_root, "output_root", config_directory
+        )
+    return config, RunOptions(output_root=output_root)
 
 
 def load_interregional_config(
@@ -570,8 +613,9 @@ def load_interregional_config(
     Parameters
     ----------
     path : pathlib.Path or str
-        JSON file path. The path itself may be relative to the caller; paths
-        stored inside the JSON must already be absolute and normalized.
+        JSON file path. The path itself may be relative to the caller. Relative
+        paths stored inside the JSON resolve against this file's directory;
+        existing absolute paths remain supported.
 
     Returns
     -------
@@ -585,7 +629,7 @@ def load_interregional_config(
     ValueError
         If decoding or any configuration contract fails.
     """
-    config_path = Path(path)
+    config_path = Path(path).resolve(strict=True)
     try:
         decoded = json.loads(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -593,7 +637,7 @@ def load_interregional_config(
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"Could not decode inter-regional configuration {config_path}.") from error
     payload = _require_mapping(decoded, "configuration")
-    return _parse_payload(payload)
+    return _parse_payload(payload, config_path.parent)
 
 
 def _population_to_dict(population: RegionalPopulationConfig) -> dict[str, object]:

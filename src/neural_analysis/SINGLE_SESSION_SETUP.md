@@ -40,10 +40,10 @@ scientific analysis.
 
 The generated files are editable templates, not inferred scientific truth.
 Review probe roles, paths, regions, channel filters, target/condition lists,
-and output locations before continuing. In particular, the interregional
-configuration must contain an absolute metadata path because that is the
-existing regression configuration contract. Regenerate or edit that path
-after synchronizing a session to a cluster.
+and output locations before continuing. The generated interregional metadata
+and output paths are relative to its configuration file, so synchronizing the
+complete session tree does not require a cluster-specific rewrite. Existing
+absolute-path configurations remain accepted for backward compatibility.
 
 ## 2. Supply preprocessing products
 
@@ -95,13 +95,13 @@ requirements unchanged.
 
 Synchronize the session non-destructively, excluding existing analysis runs,
 and use a tracked-clean cluster checkout. Then run `check` against the
-cluster-visible session path. This is important because interregional paths
-are absolute and every existing launcher validates paths in the environment
+cluster-visible session path. Every launcher validates paths in the environment
 where it will run.
 
-Do not add deletion to the synchronization command and do not copy a local
-configuration containing unusable local absolute paths. The detailed sync,
-submission, status, resume, and result-return procedures remain in the main
+Do not add deletion to the synchronization command. Prefer the generated
+relative interregional paths; older absolute-path configurations must be made
+valid for the destination before submission. The detailed sync, submission,
+status, resume, and result-return procedures remain in the main
 [`README.md`](README.md), the task-decoding
 [`README.md`](task_decoding/README.md), and the interregional
 [`README.md`](interregional/README.md).

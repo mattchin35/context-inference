@@ -196,7 +196,7 @@ def test_dry_run_accepts_session_relative_configuration(
     """A copied session configuration plans without workstation-specific paths."""
     config_path = _write_synthetic_session(tmp_path)
     payload = json.loads(config_path.read_text(encoding="utf-8"))
-    payload["session_metadata_path"] = "session/neural_session.json"
+    payload["session_metadata_path"] = "synthetic_session/neural_session.json"
     payload["run"]["output_root"] = "analysis_outputs"
     config_path.write_text(json.dumps(payload), encoding="utf-8")
     unrelated_directory = tmp_path / "unrelated"

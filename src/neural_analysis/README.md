@@ -194,7 +194,10 @@ Granger-style comparisons. The four stages are independently configured except
 that Poisson CV retains its matched OLS CV comparison. Its scientific
 configuration is separate from session metadata; copy
 `docs/examples/neural_analysis/interregional_regression_config.json.example`,
-replace the absolute metadata path and explicit probe roles, then run:
+place it beside `neural_session.json`, and replace the explicit probe roles.
+Relative metadata and output paths resolve against the configuration file's
+directory, so the same configuration works after the session tree is copied to
+the cluster. Existing absolute paths remain supported. Then run:
 
 ```bash
 uv run python -m src.neural_analysis.interregional.run_session dry-run \

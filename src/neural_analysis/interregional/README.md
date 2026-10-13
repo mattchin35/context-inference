@@ -62,17 +62,20 @@ separate scope and is rejected by cross-validation.
 
 Start from
 `docs/examples/neural_analysis/interregional_regression_config.json.example`,
-replace its absolute metadata path and probe IDs, and keep outputs outside the
-Git checkout. The example intentionally runs every non-Poisson analysis first:
+replace its probe IDs, and keep the configuration beside `neural_session.json`.
+Relative metadata and output paths resolve against the configuration directory,
+so the same session tree can be copied to the cluster unchanged. Existing
+absolute paths remain supported. The example intentionally runs every
+non-Poisson analysis first:
 
 ```json
 "representations": ["units", "pcs"],
 "analyses": ["ols_cv", "linear_granger"]
 ```
 
-Use a descriptive output root such as
-`/absolute/session/path/analysis_runs/interregional_fast`. Run the dry-run, then
-create the immutable result:
+Use a descriptive relative output root such as
+`analysis_runs/interregional_fast`. Run the dry-run, then create the immutable
+result:
 
 ```bash
 uv run python -m src.neural_analysis.interregional.run_session dry-run \
