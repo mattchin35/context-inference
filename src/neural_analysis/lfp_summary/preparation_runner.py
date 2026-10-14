@@ -224,42 +224,81 @@ def prepare_session_lfp(
             "cache_pair": "reused",
         }
     else:
-        ppc.prerequisite_cache.mkdir(parents=True, exist_ok=True)
-        source_config = dependencies.load_config(
-            metadata_path,
-            roles.ppc,
-            ppc.prerequisite_cache,
-            ppc.preview_shuffles,
-            _WORKER_COUNT,
+        source_exists = ppc.prerequisite_cache.exists() or ppc.prerequisite_cache.is_symlink()
+        if ppc.prerequisite_cache.is_symlink():
+            raise ValueError("prerequisite cache must not be a symbolic link")
+        source_members = (
+            {item.name for item in ppc.prerequisite_cache.iterdir()}
+            if source_exists and ppc.prerequisite_cache.is_dir()
+            else set()
         )
-        power_state = dependencies.component_status(source_config, "power")
-        synchrony_state = dependencies.component_status(source_config, "synchrony")
-        _require_component_state(power_state, "prerequisite", "power")
-        _require_component_state(synchrony_state, "prerequisite", "synchrony")
-        if power_state == "missing":
-            _require_complete(dependencies.compute_power(source_config), "power")
-        prepared_phase = dependencies.prepare_phase(source_config)
-        if synchrony_state == "missing":
-            _require_complete(
-                dependencies.compute_synchrony(source_config, prepared_phase),
-                "synchrony",
-            )
-        dependencies.adopt_cache_pair(
-            metadata_path=metadata_path,
-            probe=roles.ppc,
-            source=ppc.prerequisite_cache,
-            preview=ppc.preview_cache,
-            final=ppc.final_cache,
-            preview_shuffles=ppc.preview_shuffles,
-            final_shuffles=ppc.final_shuffles,
-            command=request.command,
-        )
-        stages = {
-            "power": "computed" if power_state == "missing" else "reused",
-            "prepared_phase": "reused" if _phase_state(prepared_phase) == "warm" else "computed",
-            "synchrony": "computed" if synchrony_state == "missing" else "reused",
-            "cache_pair": "adopted",
+        transferred_source = source_members == {
+            "manifest.json",
+            "power.npz",
+            "synchrony.npz",
         }
+        if source_members and not transferred_source:
+            raise ValueError(
+                "prerequisite cache is partial or has unexpected members; refusing overwrite"
+            )
+        ppc.prerequisite_cache.mkdir(parents=True, exist_ok=True)
+        adoption_arguments = {
+            "metadata_path": metadata_path,
+            "probe": roles.ppc,
+            "source": ppc.prerequisite_cache,
+            "preview": ppc.preview_cache,
+            "final": ppc.final_cache,
+            "preview_shuffles": ppc.preview_shuffles,
+            "final_shuffles": ppc.final_shuffles,
+            "command": request.command,
+        }
+        if transferred_source:
+            dependencies.adopt_cache_pair(**adoption_arguments)
+            preview_config = dependencies.load_config(
+                metadata_path,
+                roles.ppc,
+                ppc.preview_cache,
+                ppc.preview_shuffles,
+                _WORKER_COUNT,
+            )
+            prepared_phase = dependencies.prepare_phase(preview_config)
+            stages = {
+                "power": "reused",
+                "prepared_phase": (
+                    "reused" if _phase_state(prepared_phase) == "warm" else "computed"
+                ),
+                "synchrony": "reused",
+                "cache_pair": "adopted",
+            }
+        else:
+            source_config = dependencies.load_config(
+                metadata_path,
+                roles.ppc,
+                ppc.prerequisite_cache,
+                ppc.preview_shuffles,
+                _WORKER_COUNT,
+            )
+            power_state = dependencies.component_status(source_config, "power")
+            synchrony_state = dependencies.component_status(source_config, "synchrony")
+            _require_component_state(power_state, "prerequisite", "power")
+            _require_component_state(synchrony_state, "prerequisite", "synchrony")
+            if power_state == "missing":
+                _require_complete(dependencies.compute_power(source_config), "power")
+            prepared_phase = dependencies.prepare_phase(source_config)
+            if synchrony_state == "missing":
+                _require_complete(
+                    dependencies.compute_synchrony(source_config, prepared_phase),
+                    "synchrony",
+                )
+            dependencies.adopt_cache_pair(**adoption_arguments)
+            stages = {
+                "power": "computed" if power_state == "missing" else "reused",
+                "prepared_phase": (
+                    "reused" if _phase_state(prepared_phase) == "warm" else "computed"
+                ),
+                "synchrony": "computed" if synchrony_state == "missing" else "reused",
+                "cache_pair": "adopted",
+            }
 
     timestamp = dependencies.now_utc()
     run_directory = (
