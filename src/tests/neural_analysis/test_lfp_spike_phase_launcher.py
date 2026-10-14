@@ -801,6 +801,315 @@ def test_parser_rejects_cache_replacement_for_every_recovery_mode(mode: str) -> 
         )
 
 
+def test_new_run_accepts_external_ancestor_alias_for_session_path(
+    tmp_path: Path,
+) -> None:
+    """Canonicalize an alias above the session for the legacy CLI route.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty pytest directory. The fixture contains only scalar cache metadata;
+        no signal arrays or physical units are involved.
+
+    Returns
+    -------
+    None
+        The dry run must pass canonical session and cache paths to dependencies
+        and persist only those canonical filesystem identities.
+    """
+    launcher = _launcher()
+    real_parent = tmp_path / "home" / "mchin1"
+    real_session = real_parent / "CT026"
+    real_cache = _corrected_cache_directory(real_parent)
+    _write_prerequisite_cache(real_parent, real_cache)
+    alias_root = tmp_path / "users"
+    try:
+        alias_root.symlink_to(tmp_path / "home", target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"test filesystem does not support symlinks: {error}")
+    alias_session = alias_root / "mchin1" / "CT026"
+    alias_cache = alias_session / "processed" / real_cache.name
+    calls: list[str] = []
+    terminal: list[str] = []
+    loaded_sessions: list[Path] = []
+    dependencies = _dependencies(real_parent, calls, terminal)
+
+    def load_population(session_path: Path, probe_label: str) -> UnitPopulationConfig:
+        """Record one canonical session path and return a scalar population.
+
+        Parameters contain one filesystem path and one probe identifier; no
+        arrays, axis conventions, or physical units are accepted or returned.
+        """
+        loaded_sessions.append(session_path)
+        return _population(probe_label)
+
+    dependencies = replace(
+        dependencies,
+        load_active_population=load_population,
+    )
+    command = launcher.parse_launcher_command(
+        [
+            "new",
+            "--session-path",
+            str(alias_session),
+            "--cache-directory",
+            str(alias_cache),
+            "--probe",
+            "ProbeB",
+            "--shuffles",
+            "100",
+            "--workers",
+            "8",
+            "--analysis-root",
+            str(real_parent / "runs-session-alias"),
+            "--dry-run",
+        ]
+    )
+
+    result = launcher.run_launcher(command, dependencies)
+
+    assert result.exit_code == 0 and result.status == "preflight_complete"
+    assert loaded_sessions == [real_session.resolve()]
+    state = json.loads((result.run_directory / "launcher_state.json").read_text())
+    assert state["identity"]["session_path"] == str(real_session.resolve())
+    assert state["identity"]["cache_directory"] == str(real_cache.resolve())
+
+
+def test_new_run_accepts_external_ancestor_alias_for_session_metadata(
+    tmp_path: Path,
+) -> None:
+    """Canonicalize metadata and cache paths reached through an outer alias.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty pytest directory. The fixture contains only scalar cache metadata;
+        no signal arrays or physical units are involved.
+
+    Returns
+    -------
+    None
+        The dry run must give the metadata loader canonical paths and persist
+        canonical session/cache identities.
+    """
+    launcher = _launcher()
+    real_parent = tmp_path / "home" / "mchin1"
+    real_session = real_parent / "CT026"
+    real_cache = _corrected_cache_directory(real_parent)
+    _write_prerequisite_cache(real_parent, real_cache)
+    real_metadata = real_session / "neural_session.json"
+    real_metadata.write_text("{}\n", encoding="ascii")
+    alias_root = tmp_path / "users"
+    try:
+        alias_root.symlink_to(tmp_path / "home", target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"test filesystem does not support symlinks: {error}")
+    alias_session = alias_root / "mchin1" / "CT026"
+    calls: list[str] = []
+    terminal: list[str] = []
+    loader_arguments: list[tuple[Path, Path]] = []
+    dependencies = _dependencies(real_parent, calls, terminal)
+
+    def load_metadata_config(
+        metadata_path: Path,
+        probe_label: str,
+        cache_directory: Path,
+        shuffle_count: int,
+        worker_count: int,
+    ) -> LFPSummaryConfig:
+        """Record canonical scalar inputs and return their immutable config.
+
+        Paths identify files/directories, counts are dimensionless positive
+        integers, and the returned configuration contains no numerical arrays.
+        """
+        loader_arguments.append((metadata_path, cache_directory))
+        return _cache_config(
+            real_parent,
+            real_cache,
+            probe=probe_label,
+            shuffle_count=shuffle_count,
+            worker_count=worker_count,
+        )
+
+    dependencies = replace(
+        dependencies,
+        load_metadata_config=load_metadata_config,
+    )
+    command = launcher.parse_launcher_command(
+        [
+            "new",
+            "--session-metadata",
+            str(alias_session / "neural_session.json"),
+            "--cache-directory",
+            str(alias_session / "processed" / real_cache.name),
+            "--probe",
+            "ProbeB",
+            "--shuffles",
+            "100",
+            "--workers",
+            "8",
+            "--analysis-root",
+            str(real_parent / "runs-metadata-alias"),
+            "--dry-run",
+        ]
+    )
+
+    result = launcher.run_launcher(command, dependencies)
+
+    assert result.exit_code == 0 and result.status == "preflight_complete"
+    assert loader_arguments == [(real_metadata.resolve(), real_cache.resolve())]
+    state = json.loads((result.run_directory / "launcher_state.json").read_text())
+    assert state["identity"]["session_path"] == str(real_session.resolve())
+    assert state["identity"]["cache_directory"] == str(real_cache.resolve())
+
+
+def test_new_run_rejects_session_directory_symlink_before_loading(
+    tmp_path: Path,
+) -> None:
+    """Reject a symlink at the selected session security boundary.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty pytest directory used for metadata-only filesystem fixtures.
+
+    Returns
+    -------
+    None
+        Rejection must occur before population loading or run creation.
+    """
+    launcher = _launcher()
+    real_parent = tmp_path / "real"
+    real_session = real_parent / "CT026"
+    real_cache = _corrected_cache_directory(real_parent)
+    _write_prerequisite_cache(real_parent, real_cache)
+    linked_session = tmp_path / "linked-session"
+    try:
+        linked_session.symlink_to(real_session, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"test filesystem does not support symlinks: {error}")
+    loader_calls: list[Path] = []
+    calls: list[str] = []
+    terminal: list[str] = []
+    dependencies = _dependencies(real_parent, calls, terminal)
+
+    def load_population(session_path: Path, probe_label: str) -> UnitPopulationConfig:
+        """Record a rejected session selection if validation runs too late.
+
+        Parameters are one filesystem path and one probe identifier. The
+        returned population contains scalar metadata and stable unit IDs; no
+        arrays, axis conventions, or physical units are involved.
+        """
+        loader_calls.append(session_path)
+        return _population(probe_label)
+
+    dependencies = replace(
+        dependencies,
+        load_active_population=load_population,
+    )
+    command = launcher.parse_launcher_command(
+        [
+            "new",
+            "--session-path",
+            str(linked_session),
+            "--cache-directory",
+            str(linked_session / "processed" / real_cache.name),
+            "--probe",
+            "ProbeB",
+            "--shuffles",
+            "100",
+            "--workers",
+            "8",
+            "--analysis-root",
+            str(tmp_path / "runs-linked-session"),
+            "--dry-run",
+        ]
+    )
+
+    result = launcher.run_launcher(command, dependencies)
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert loader_calls == []
+    assert not (tmp_path / "runs-linked-session").exists()
+
+
+def test_new_run_rejects_metadata_file_symlink_before_loading(
+    tmp_path: Path,
+) -> None:
+    """Reject a symlink at the selected metadata-file security boundary.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty pytest directory used for metadata-only filesystem fixtures.
+
+    Returns
+    -------
+    None
+        Rejection must occur before metadata loading or run creation.
+    """
+    launcher = _launcher()
+    real_session = tmp_path / "CT026"
+    real_cache = _corrected_cache_directory(tmp_path)
+    _write_prerequisite_cache(tmp_path, real_cache)
+    real_metadata = real_session / "real_neural_session.json"
+    real_metadata.write_text("{}\n", encoding="ascii")
+    linked_metadata = real_session / "neural_session.json"
+    try:
+        linked_metadata.symlink_to(real_metadata)
+    except OSError as error:
+        pytest.skip(f"test filesystem does not support symlinks: {error}")
+    loader_calls: list[Path] = []
+    calls: list[str] = []
+    terminal: list[str] = []
+
+    def load_metadata_config(
+        metadata_path: Path,
+        _probe_label: str,
+        _cache_directory: Path,
+        _shuffle_count: int,
+        _worker_count: int,
+    ) -> LFPSummaryConfig:
+        """Record a rejected metadata selection if validation runs too late.
+
+        Inputs are filesystem paths, one string identifier, and dimensionless
+        counts. The returned configuration contains scalar metadata only and no
+        numerical arrays or physical-unit-bearing values.
+        """
+        loader_calls.append(metadata_path)
+        return _cache_config(tmp_path, real_cache)
+
+    dependencies = replace(
+        _dependencies(tmp_path, calls, terminal),
+        load_metadata_config=load_metadata_config,
+    )
+    command = launcher.parse_launcher_command(
+        [
+            "new",
+            "--session-metadata",
+            str(linked_metadata),
+            "--cache-directory",
+            str(real_cache),
+            "--probe",
+            "ProbeB",
+            "--shuffles",
+            "100",
+            "--workers",
+            "8",
+            "--analysis-root",
+            str(tmp_path / "runs-linked-metadata"),
+            "--dry-run",
+        ]
+    )
+
+    result = launcher.run_launcher(command, dependencies)
+
+    assert result.exit_code == 2 and result.run_directory is None
+    assert loader_calls == []
+    assert not (tmp_path / "runs-linked-metadata").exists()
+
+
 def test_dry_run_writes_evidence_without_scientific_work(tmp_path: Path) -> None:
     """Metadata preflight is terminal and never invokes computation or reporting."""
     launcher = _launcher()
