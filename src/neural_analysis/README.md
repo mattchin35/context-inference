@@ -122,6 +122,12 @@ dry-run and Slurm commands to use next. It refuses to overwrite any of those
 paths. Preview and final cannot share one cache because the preview adds
 `spike_phase.npz` to its cache.
 
+Normal cluster aliases above the session directory, including a symlinked
+`$HOME`, are accepted and resolved once before validation. The session
+directory itself, `neural_session.json`, `processed`, cache directories, and
+cache members must be real nonsymlink objects. Older checkouts that reject the
+home alias can use `SESSION="$(readlink -f "$SESSION")"` as a workaround.
+
 ### Local preview
 
 Check a new request locally without loading numerical arrays or starting the

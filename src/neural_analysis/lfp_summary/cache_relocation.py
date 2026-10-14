@@ -2007,6 +2007,94 @@ def _repository_provenance() -> dict[str, object]:
     return {"commit": commit, "tracked_clean": not bool(status.strip())}
 
 
+def _resolve_adoption_metadata_path(metadata_path: Path) -> tuple[Path, Path]:
+    """Resolve cluster metadata while allowing aliases above the session root.
+
+    Parameters
+    ----------
+    metadata_path : pathlib.Path
+        User-supplied ``neural_session.json`` path. Ancestors above its parent
+        may be symlinks, as with an HPC ``$HOME`` alias. The metadata file and
+        its immediate session-directory parent must not themselves be symlinks.
+
+    Returns
+    -------
+    tuple[pathlib.Path, pathlib.Path]
+        Canonical metadata file and canonical session directory. Both exist;
+        later adoption reads and writes use only these resolved paths.
+    """
+    lexical_metadata = _absolute_path(metadata_path)
+    if ".." in lexical_metadata.parts:
+        raise ValueError("session metadata path must not contain parent traversal")
+    if lexical_metadata.is_symlink():
+        raise ValueError("session metadata must not be a symlink")
+    lexical_session = lexical_metadata.parent
+    if lexical_session.is_symlink():
+        raise ValueError("cluster session directory must not be a symlink")
+    try:
+        canonical_metadata = lexical_metadata.resolve(strict=True)
+    except OSError as error:
+        raise ValueError("session metadata must be an existing regular file") from error
+    if not canonical_metadata.is_file():
+        raise ValueError("session metadata must be an existing regular file")
+    canonical_session = canonical_metadata.parent
+    if not canonical_session.is_dir():
+        raise ValueError("cluster session root must be an existing directory")
+    return canonical_metadata, canonical_session
+
+
+def _resolve_adoption_source_cache(
+    source_cache_directory: Path,
+    canonical_session_root: Path,
+) -> Path:
+    """Resolve one real source cache directly below the canonical session.
+
+    Parameters
+    ----------
+    source_cache_directory : pathlib.Path
+        User-supplied already-rsynced prerequisite cache. Aliases above the
+        session directory are allowed; the session, ``processed``, and cache
+        directory components themselves must be real directories.
+    canonical_session_root : pathlib.Path
+        Existing canonical session directory returned by
+        :func:`_resolve_adoption_metadata_path`.
+
+    Returns
+    -------
+    pathlib.Path
+        Existing canonical source cache whose parent is exactly the session's
+        real ``processed`` directory.
+    """
+    lexical_source = _absolute_path(source_cache_directory)
+    if ".." in lexical_source.parts:
+        raise ValueError("source cache path must not contain parent traversal")
+    if lexical_source.is_symlink():
+        raise ValueError("source cache must not be a symlink")
+    lexical_processed = lexical_source.parent
+    if lexical_processed.name != "processed":
+        raise ValueError("source cache must be a direct child of session/processed")
+    if lexical_processed.is_symlink():
+        raise ValueError("source cache processed directory must not be a symlink")
+    if lexical_processed.parent.is_symlink():
+        raise ValueError("source cache session directory must not be a symlink")
+
+    canonical_processed = canonical_session_root / "processed"
+    if canonical_processed.is_symlink() or not canonical_processed.is_dir():
+        raise ValueError("session processed directory must be a real directory")
+    try:
+        resolved_processed = lexical_processed.resolve(strict=True)
+        canonical_source = lexical_source.resolve(strict=True)
+    except OSError as error:
+        raise ValueError(
+            "source cache must be an existing nonsymlink directory"
+        ) from error
+    if resolved_processed != canonical_processed:
+        raise ValueError("source cache resolves outside the metadata session")
+    if not canonical_source.is_dir() or canonical_source.parent != canonical_processed:
+        raise ValueError("source cache must be a direct child of session/processed")
+    return canonical_source
+
+
 def _validate_adoption_paths(
     request: CacheAdoptionRequest,
 ) -> tuple[Path, Path, Path, Path, Path, Path]:
@@ -2018,19 +2106,13 @@ def _validate_adoption_paths(
         Metadata path, session root, source cache, preview cache, final cache,
         and fixed external receipt path.
     """
-    metadata_path = _require_nonsymlink(
-        request.session_metadata_path, "session metadata"
+    metadata_path, cluster_root = _resolve_adoption_metadata_path(
+        request.session_metadata_path
     )
-    if not metadata_path.is_file():
-        raise ValueError("session metadata must be an existing regular file")
-    cluster_root = _require_nonsymlink(metadata_path.parent, "cluster session root")
-    if not cluster_root.is_dir():
-        raise ValueError("cluster session root must exist")
-    source_cache = _require_direct_processed_child(
-        request.source_cache_directory, cluster_root, "source cache"
+    source_cache = _resolve_adoption_source_cache(
+        request.source_cache_directory,
+        cluster_root,
     )
-    if not source_cache.is_dir() or source_cache.is_symlink():
-        raise ValueError("source cache must be an existing nonsymlink directory")
     if source_cache.name in {
         "lfp_summary_cache",
         _ADOPTION_PREVIEW_NAME,
