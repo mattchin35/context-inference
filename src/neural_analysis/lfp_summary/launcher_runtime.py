@@ -138,6 +138,7 @@ class LauncherCommand:
     dry_run: bool = False
     final_run: bool = False
     run_directory: Path | None = None
+    run_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -208,6 +209,7 @@ def _prepare_new_run(
     dependencies: LauncherDependencies,
 ) -> tuple[LFPSummaryConfig, Path, dict[str, object]]:
     """Validate identity and atomically initialize one new run directory."""
+    command = _resolve_profile_command(command)
     assert command.session_path is not None or command.session_metadata is not None
     assert command.probe_label is not None
     assert command.shuffle_count is not None
@@ -261,6 +263,8 @@ def _prepare_new_run(
     )
     _validate_launcher_config(config, command)
     _validate_new_cache_preflight(config)
+    if command.run_profile is not None:
+        _require_prepared_phase_cache(config.output_directory.parent / "lfp_summary_work")
     source_fingerprints = dict(dependencies.source_fingerprints(config))
     trial_count = dependencies.load_trial_count(config)
     if isinstance(trial_count, bool) or not isinstance(trial_count, int) or trial_count < 1:
@@ -327,6 +331,75 @@ def _prepare_new_run(
     else:
         _terminal(dependencies, f"Dry-run evidence directory: {run_directory}")
     return config, run_directory, state
+
+
+def _resolve_profile_command(command: LauncherCommand) -> LauncherCommand:
+    """Resolve a preview/final profile entirely from version-3 metadata.
+
+    Parameters
+    ----------
+    command : LauncherCommand
+        Parsed command. Profile commands contain only a metadata path, profile
+        name, dry-run intent, and derived final-run flag.
+
+    Returns
+    -------
+    LauncherCommand
+        Equivalent explicit new-run identity with probe, cache, shuffle, worker,
+        and analysis-root paths filled from metadata. No numerical arrays load.
+    """
+    if command.run_profile is None:
+        return command
+    if command.run_profile not in {"preview", "final"}:
+        raise ValueError("run_profile must be preview or final")
+    if command.session_metadata is None:
+        raise ValueError("profile launcher requires --session-metadata")
+    from src.neural_analysis.session_metadata import (
+        load_session_metadata,
+        resolve_session_metadata,
+    )
+
+    metadata_path = _validated_session_metadata_path(command.session_metadata)
+    session = resolve_session_metadata(
+        load_session_metadata(metadata_path),
+        metadata_path,
+    )
+    if session.analysis is None:
+        raise ValueError("preview/final profiles require metadata schema version 3")
+    ppc = session.analysis.ppc
+    is_final = command.run_profile == "final"
+    return replace(
+        command,
+        session_metadata=metadata_path,
+        probe_label=session.analysis.probe_roles.ppc,
+        shuffle_count=ppc.final_shuffles if is_final else ppc.preview_shuffles,
+        worker_count=8,
+        analysis_root=session.session_root / "analysis_runs",
+        cache_directory=ppc.final_cache if is_final else ppc.preview_cache,
+        final_run=is_final,
+    )
+
+
+def _require_prepared_phase_cache(work_root: Path) -> None:
+    """Require at least one completed phase representation after preflight.
+
+    Parameters
+    ----------
+    work_root : pathlib.Path
+        Session-local ``processed/lfp_summary_work`` directory already checked
+        by :func:`_validate_retained_work_root` without opening phase arrays.
+
+    Returns
+    -------
+    None
+        A nonempty prepared-phase container proves that metadata-driven
+        preparation ran before the profile launcher.
+    """
+    prepared = work_root / "prepared_phase"
+    if not prepared.is_dir() or prepared.is_symlink():
+        raise ValueError("PPC profile requires the prepared-phase cache; run prepare first")
+    if not any(prepared.iterdir()):
+        raise ValueError("PPC profile requires the prepared-phase cache; run prepare first")
 
 
 def _prepare_resume(

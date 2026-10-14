@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
+SUPPORTED_SCHEMA_VERSIONS = ("2", "3")
 CANONICAL_FILENAME = "neural_session.json"
 SUPPORTED_ACTIONS = ("webapp", "power", "synchrony", "spike-phase")
 SUPPORTED_ACQUISITION_FAMILIES = ("open_ephys", "spikeglx")
@@ -80,8 +81,36 @@ class PopulationMetadata:
 
 
 @dataclass(frozen=True)
+class AnalysisProbeRoles:
+    """Stable probe dictionary keys used by single-session analyses."""
+
+    pfc: str
+    hpc: str
+    ppc: str
+
+
+@dataclass(frozen=True)
+class PPCWorkflowMetadata:
+    """Portable PPC cache paths and dimensionless shuffle counts."""
+
+    prerequisite_cache: str
+    preview_cache: str
+    final_cache: str
+    preview_shuffles: int
+    final_shuffles: int
+
+
+@dataclass(frozen=True)
+class AnalysisMetadata:
+    """Version-3 analysis intent that is stable across hosts."""
+
+    probe_roles: AnalysisProbeRoles
+    ppc: PPCWorkflowMetadata
+
+
+@dataclass(frozen=True)
 class SessionMetadata:
-    """Structurally validated version-2 metadata with relative paths."""
+    """Structurally validated version-2 or version-3 relative metadata."""
 
     schema_version: str
     session: str
@@ -90,6 +119,7 @@ class SessionMetadata:
     probes: tuple[ProbeSources, ...]
     site_pairs: tuple[tuple[str, str], ...]
     cache: str | None
+    analysis: AnalysisMetadata | None = None
 
     @property
     def sites(self) -> tuple[SiteMetadata, ...]:
@@ -170,8 +200,27 @@ class ResolvedProbeSources:
 
 
 @dataclass(frozen=True)
+class ResolvedPPCWorkflow:
+    """Absolute contained PPC cache paths and dimensionless shuffle counts."""
+
+    prerequisite_cache: Path
+    preview_cache: Path
+    final_cache: Path
+    preview_shuffles: int
+    final_shuffles: int
+
+
+@dataclass(frozen=True)
+class ResolvedAnalysisMetadata:
+    """Resolved version-3 roles and PPC workflow settings."""
+
+    probe_roles: AnalysisProbeRoles
+    ppc: ResolvedPPCWorkflow
+
+
+@dataclass(frozen=True)
 class ResolvedSession:
-    """Version-2 metadata with contained absolute paths."""
+    """Version-2 or version-3 metadata with contained absolute paths."""
 
     metadata_path: Path
     session_root: Path
@@ -182,6 +231,7 @@ class ResolvedSession:
     probes: tuple[ResolvedProbeSources, ...]
     site_pairs: tuple[tuple[str, str], ...]
     cache_directory: Path | None
+    analysis: ResolvedAnalysisMetadata | None = None
 
     @property
     def session_id(self) -> str:
@@ -253,6 +303,18 @@ _SESSION_REQUIRED = frozenset(
     {"schema_version", "session", "acquisition", "behavior", "probes", "site_pairs"}
 )
 _SESSION_OPTIONAL = frozenset({"cache"})
+_SESSION_V3_REQUIRED = _SESSION_REQUIRED | frozenset({"analysis"})
+_ANALYSIS_REQUIRED = frozenset({"probe_roles", "ppc"})
+_PROBE_ROLES_REQUIRED = frozenset({"pfc", "hpc", "ppc"})
+_PPC_REQUIRED = frozenset(
+    {
+        "prerequisite_cache",
+        "preview_cache",
+        "final_cache",
+        "preview_shuffles",
+        "final_shuffles",
+    }
+)
 _BEHAVIOR_REQUIRED = frozenset({"trials"})
 _BEHAVIOR_OPTIONAL = frozenset({"events"})
 _PROBE_REQUIRED = frozenset({"lfp", "alignment", "sorter", "quality", "sites"})
@@ -309,6 +371,58 @@ def _channel(value: object, field: str) -> int:
     return value
 
 
+def _positive_integer(value: object, field: str) -> int:
+    """Return one positive dimensionless integer."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field} must be a positive integer")
+    return value
+
+
+def _parse_analysis(value: object, probe_ids: frozenset[str]) -> AnalysisMetadata:
+    """Parse version-3 analysis roles, portable cache paths, and run settings."""
+    record = _mapping(value, "analysis")
+    _keys(record, _ANALYSIS_REQUIRED, frozenset(), "analysis")
+    role_record = _mapping(record["probe_roles"], "analysis.probe_roles")
+    _keys(role_record, _PROBE_ROLES_REQUIRED, frozenset(), "analysis.probe_roles")
+    roles = AnalysisProbeRoles(
+        pfc=_string(role_record["pfc"], "analysis.probe_roles.pfc", allow_empty=False),
+        hpc=_string(role_record["hpc"], "analysis.probe_roles.hpc", allow_empty=False),
+        ppc=_string(role_record["ppc"], "analysis.probe_roles.ppc", allow_empty=False),
+    )
+    unknown = sorted({roles.pfc, roles.hpc, roles.ppc} - probe_ids)
+    if unknown:
+        raise ValueError(f"analysis probe roles reference unknown probe IDs: {unknown}")
+    if roles.pfc == roles.hpc:
+        raise ValueError("analysis PFC and HPC probe roles must be distinct")
+
+    ppc_record = _mapping(record["ppc"], "analysis.ppc")
+    _keys(ppc_record, _PPC_REQUIRED, frozenset(), "analysis.ppc")
+    cache_values = {
+        field: _string(ppc_record[field], f"analysis.ppc.{field}", allow_empty=False)
+        for field in ("prerequisite_cache", "preview_cache", "final_cache")
+    }
+    if len(set(cache_values.values())) != len(cache_values):
+        raise ValueError("analysis PPC cache paths must be distinct")
+    if any(Path(value).name == "lfp_summary_cache" for value in cache_values.values()):
+        raise ValueError("analysis PPC cache paths must not use the legacy cache name")
+    preview_shuffles = _positive_integer(
+        ppc_record["preview_shuffles"], "analysis.ppc.preview_shuffles"
+    )
+    final_shuffles = _positive_integer(
+        ppc_record["final_shuffles"], "analysis.ppc.final_shuffles"
+    )
+    if preview_shuffles >= final_shuffles:
+        raise ValueError("preview shuffle count must be less than final shuffle count")
+    return AnalysisMetadata(
+        probe_roles=roles,
+        ppc=PPCWorkflowMetadata(
+            **cache_values,
+            preview_shuffles=preview_shuffles,
+            final_shuffles=final_shuffles,
+        ),
+    )
+
+
 def _parse_probe(probe_id: str, value: object, acquisition: str) -> ProbeSources:
     """Parse one probe-centered record."""
     field = f"probes[{probe_id}]"
@@ -346,7 +460,7 @@ def _parse_probe(probe_id: str, value: object, acquisition: str) -> ProbeSources
 
 
 def load_session_metadata(path: Path | str) -> SessionMetadata:
-    """Load version-2 JSON without resolving paths or opening arrays.
+    """Load version-2 or version-3 JSON without opening numerical arrays.
 
     Parameters
     ----------
@@ -365,11 +479,14 @@ def load_session_metadata(path: Path | str) -> SessionMetadata:
         raise ValueError(f"could not read session metadata {metadata_path}: {error}") from error
     record = _mapping(payload, "session metadata")
     schema_version = _string(record.get("schema_version"), "schema_version")
-    if schema_version != SCHEMA_VERSION:
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ValueError(
-            f"schema_version must be {SCHEMA_VERSION!r}; version 2 replaces older metadata"
+            f"schema_version must be one of {SUPPORTED_SCHEMA_VERSIONS!r}"
         )
-    _keys(record, _SESSION_REQUIRED, _SESSION_OPTIONAL, "session metadata")
+    if schema_version == "2":
+        _keys(record, _SESSION_REQUIRED, _SESSION_OPTIONAL, "session metadata")
+    else:
+        _keys(record, _SESSION_V3_REQUIRED, frozenset(), "session metadata")
     acquisition = _string(record["acquisition"], "acquisition", allow_empty=False)
     if acquisition not in SUPPORTED_ACQUISITION_FAMILIES:
         raise ValueError(f"acquisition must be one of {SUPPORTED_ACQUISITION_FAMILIES}")
@@ -393,6 +510,11 @@ def load_session_metadata(path: Path | str) -> SessionMetadata:
         if first == second or first not in site_ids or second not in site_ids:
             raise ValueError(f"site_pairs[{index}] must reference two declared sites")
         pairs.append((first, second))
+    analysis = (
+        None
+        if schema_version == "2"
+        else _parse_analysis(record["analysis"], frozenset(probe.probe_id for probe in probes))
+    )
     return SessionMetadata(
         schema_version=schema_version,
         session=_string(record["session"], "session"),
@@ -404,6 +526,7 @@ def load_session_metadata(path: Path | str) -> SessionMetadata:
         probes=probes,
         site_pairs=tuple(pairs),
         cache=_optional_string(record.get("cache"), "cache"),
+        analysis=analysis,
     )
 
 
@@ -435,7 +558,7 @@ def resolve_session_metadata(
     Parameters
     ----------
     metadata : SessionMetadata
-        Parsed version-2 metadata.
+        Parsed version-2 or version-3 metadata.
     metadata_path : pathlib.Path or str
         Canonical ``neural_session.json`` path.
 
@@ -481,6 +604,34 @@ def resolve_session_metadata(
                 unit_channels=probe.unit_channels,
             )
         )
+    resolved_analysis: ResolvedAnalysisMetadata | None = None
+    if metadata.analysis is not None:
+        ppc = metadata.analysis.ppc
+        resolved_caches: dict[str, Path] = {}
+        for field in ("prerequisite_cache", "preview_cache", "final_cache"):
+            resolved = _resolve_path(
+                session_root,
+                getattr(ppc, field),
+                f"analysis.ppc.{field}",
+                expected_kind="directory",
+            )
+            if resolved is None or resolved.parent != session_root / "processed":
+                raise ValueError(
+                    f"analysis.ppc.{field} must be a relative direct child of session/processed"
+                )
+            resolved_caches[field] = resolved
+        if len(set(resolved_caches.values())) != len(resolved_caches):
+            raise ValueError("resolved analysis PPC cache paths must be distinct")
+        resolved_analysis = ResolvedAnalysisMetadata(
+            probe_roles=metadata.analysis.probe_roles,
+            ppc=ResolvedPPCWorkflow(
+                prerequisite_cache=resolved_caches["prerequisite_cache"],
+                preview_cache=resolved_caches["preview_cache"],
+                final_cache=resolved_caches["final_cache"],
+                preview_shuffles=ppc.preview_shuffles,
+                final_shuffles=ppc.final_shuffles,
+            ),
+        )
     return ResolvedSession(
         metadata_path=canonical.resolve(strict=True),
         session_root=session_root,
@@ -500,6 +651,7 @@ def resolve_session_metadata(
         cache_directory=_resolve_path(
             session_root, metadata.cache, "cache", expected_kind="directory"
         ),
+        analysis=resolved_analysis,
     )
 
 

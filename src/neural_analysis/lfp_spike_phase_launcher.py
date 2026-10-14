@@ -64,6 +64,10 @@ def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand
     """
     parser = argparse.ArgumentParser(prog=f"python -m {_MODULE}")
     subparsers = parser.add_subparsers(dest="mode", required=True)
+    for profile in ("preview", "final"):
+        profile_parser = subparsers.add_parser(profile)
+        profile_parser.add_argument("--session-metadata", type=Path, required=True)
+        profile_parser.add_argument("--dry-run", action="store_true")
     new = subparsers.add_parser("new")
     session_source = new.add_mutually_exclusive_group(required=True)
     session_source.add_argument("--session-path", type=Path)
@@ -88,6 +92,14 @@ def parse_launcher_command(argv: Sequence[str] | None = None) -> LauncherCommand
     rerender_report = subparsers.add_parser("rerender-report")
     rerender_report.add_argument("--run-directory", type=Path, required=True)
     values = parser.parse_args(list(argv) if argv is not None else None)
+    if values.mode in {"preview", "final"}:
+        return LauncherCommand(
+            mode="new",
+            run_profile=values.mode,
+            session_metadata=values.session_metadata,
+            dry_run=bool(values.dry_run),
+            final_run=values.mode == "final",
+        )
     if values.mode in {"resume", "recover-report", "rerender-report"}:
         return LauncherCommand(mode=values.mode, run_directory=values.run_directory)
     if values.worker_count < 1:

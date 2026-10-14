@@ -1,8 +1,7 @@
-"""Prepare, inspect, and describe one session's neural-analysis commands.
+"""Initialize, inspect, and prepare one metadata-owned neural session.
 
-This module is intentionally non-computational. It writes editable JSON only
-for ``init`` and otherwise reads small control files plus filesystem metadata.
-It never loads scientific arrays, creates run directories, or submits jobs.
+``prepare`` delegates Power, Synchrony, and prepared-phase work to their
+existing implementations. No command in this module submits a scheduler job.
 """
 
 from __future__ import annotations
@@ -612,26 +611,120 @@ def build_analysis_commands(
     return MappingProxyType(commands)
 
 
+def _resolved_version_three_session(
+    metadata_path: Path,
+) -> session_metadata.ResolvedSession:
+    """Load one version-3 metadata document with complete analysis intent.
+
+    Parameters
+    ----------
+    metadata_path : pathlib.Path
+        Existing canonical session metadata JSON path.
+
+    Returns
+    -------
+    session_metadata.ResolvedSession
+        Resolved paths and stable roles. No numerical arrays are loaded.
+    """
+    resolved = session_metadata.resolve_session_metadata(
+        session_metadata.load_session_metadata(metadata_path),
+        metadata_path,
+    )
+    if resolved.analysis is None:
+        raise ValueError("single-session workflow requires metadata schema version 3")
+    return resolved
+
+
+def build_metadata_analysis_commands(
+    metadata_path: Path | str,
+) -> Mapping[str, AnalysisCommands]:
+    """Build simple copyable commands from one version-3 metadata path.
+
+    Parameters
+    ----------
+    metadata_path : pathlib.Path or str
+        Canonical control file that owns session, role, cache, and shuffle
+        settings.
+
+    Returns
+    -------
+    mapping[str, AnalysisCommands]
+        Commands are shell-escaped text only; nothing is executed or submitted.
+    """
+    path = Path(metadata_path)
+    resolved = _resolved_version_three_session(path)
+    assert resolved.analysis is not None
+    existing = dict(
+        build_analysis_commands(
+            resolved.session_root,
+            ppc_probe_id=resolved.analysis.probe_roles.ppc,
+            ppc_cache_directory=resolved.analysis.ppc.prerequisite_cache,
+        )
+    )
+    launcher = "src.neural_analysis.lfp_spike_phase_launcher"
+    setup = "src.neural_analysis.single_session_setup"
+    canonical_metadata = resolved.metadata_path
+    existing["spike_phase_ppc"] = AnalysisCommands(
+        local_preflight=_module_command(
+            launcher,
+            "preview",
+            "--session-metadata",
+            canonical_metadata,
+            "--dry-run",
+        ),
+        local_preview=_module_command(
+            launcher,
+            "preview",
+            "--session-metadata",
+            canonical_metadata,
+        ),
+        local_final=_module_command(
+            launcher,
+            "final",
+            "--session-metadata",
+            canonical_metadata,
+        ),
+        cluster_preview=shlex.join(
+            (
+                "sbatch",
+                "src/shell_scripts/hpc_ppc.sh",
+                "preview",
+                "--session-metadata",
+                str(canonical_metadata),
+            )
+        ),
+        cluster_final=shlex.join(
+            (
+                "sbatch",
+                "src/shell_scripts/hpc_ppc.sh",
+                "final",
+                "--session-metadata",
+                str(canonical_metadata),
+            )
+        ),
+        preparation=_module_command(
+            setup,
+            "prepare",
+            "--session-metadata",
+            canonical_metadata,
+        ),
+    )
+    return MappingProxyType(existing)
+
+
 def _parser() -> argparse.ArgumentParser:
-    """Build the preparation-only command parser."""
+    """Build the metadata-only single-session workflow parser."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="create missing editable control files")
-    init.add_argument("--session-root", type=Path, required=True)
-    init.add_argument("--pfc-probe", required=True)
-    init.add_argument("--hpc-probe", required=True)
-    init.add_argument(
-        "--training-windows",
-        nargs="+",
-        choices=TRAINING_WINDOW_NAMES,
-        default=list(TRAINING_WINDOW_NAMES),
-    )
+    init.add_argument("--session-metadata", type=Path, required=True)
     check = commands.add_parser("check", help="inspect readiness and print later commands")
-    check.add_argument("--session-root", type=Path, required=True)
-    check.add_argument("--pfc-probe", required=True)
-    check.add_argument("--hpc-probe", required=True)
-    check.add_argument("--ppc-probe", required=True)
-    check.add_argument("--ppc-cache-directory", type=Path)
+    check.add_argument("--session-metadata", type=Path, required=True)
+    prepare = commands.add_parser(
+        "prepare",
+        help="compute or reuse Power, Synchrony, and prepared-phase prerequisites",
+    )
+    prepare.add_argument("--session-metadata", type=Path, required=True)
     return parser
 
 
@@ -659,12 +752,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     arguments = _parser().parse_args(argv)
     try:
+        resolved = _resolved_version_three_session(arguments.session_metadata)
+        assert resolved.analysis is not None
+        roles = resolved.analysis.probe_roles
         if arguments.command == "init":
             result = scaffold_session_analysis(
-                arguments.session_root,
-                pfc_probe_id=arguments.pfc_probe,
-                hpc_probe_id=arguments.hpc_probe,
-                training_window_names=arguments.training_windows,
+                resolved.session_root,
+                pfc_probe_id=roles.pfc,
+                hpc_probe_id=roles.hpc,
             )
             for path in result.created:
                 print(f"created: {path}")
@@ -672,26 +767,35 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"preserved: {path}")
             return 0
 
+        if arguments.command == "prepare":
+            from src.neural_analysis.lfp_summary.preparation_runner import (
+                PreparationRequest,
+                make_production_preparation_dependencies,
+                prepare_session_lfp,
+            )
+
+            result = prepare_session_lfp(
+                PreparationRequest(
+                    resolved.metadata_path,
+                    tuple(sys.argv if argv is None else ("single_session_setup", *argv)),
+                ),
+                make_production_preparation_dependencies(),
+            )
+            print(f"preparation complete: {result.receipt_path}")
+            return 0
+
         report = inspect_session_readiness(
-            arguments.session_root,
-            pfc_probe_id=arguments.pfc_probe,
-            hpc_probe_id=arguments.hpc_probe,
-            ppc_probe_id=arguments.ppc_probe,
-            ppc_cache_directory=arguments.ppc_cache_directory,
+            resolved.session_root,
+            pfc_probe_id=roles.pfc,
+            hpc_probe_id=roles.hpc,
+            ppc_probe_id=roles.ppc,
+            ppc_cache_directory=resolved.analysis.ppc.preview_cache,
         )
         _print_report(report)
         if report.ready:
-            resolved, _ = _load_resolved_metadata(
-                report.session_root / session_metadata.CANONICAL_FILENAME
-            )
-            assert resolved is not None
-            cache = arguments.ppc_cache_directory or resolved.cache_directory
-            assert cache is not None
             print("\nCommands for later explicit execution:")
-            for name, command_set in build_analysis_commands(
-                report.session_root,
-                ppc_probe_id=arguments.ppc_probe,
-                ppc_cache_directory=cache,
+            for name, command_set in build_metadata_analysis_commands(
+                resolved.metadata_path
             ).items():
                 print(f"\n{name}:")
                 for command in (

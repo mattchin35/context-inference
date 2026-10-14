@@ -145,6 +145,10 @@ class CacheAdoptionRequest:
     probe_label: str
     source_cache_directory: Path
     command: tuple[str, ...]
+    preview_cache_directory: Path | None = None
+    final_cache_directory: Path | None = None
+    preview_shuffle_count: int = _ADOPTION_PREVIEW_SHUFFLES
+    final_shuffle_count: int = _ADOPTION_FINAL_SHUFFLES
 
 
 @dataclass(frozen=True)
@@ -2113,19 +2117,24 @@ def _validate_adoption_paths(
         request.source_cache_directory,
         cluster_root,
     )
-    if source_cache.name in {
-        "lfp_summary_cache",
-        _ADOPTION_PREVIEW_NAME,
-        _ADOPTION_FINAL_NAME,
+    requested_preview = request.preview_cache_directory or (
+        cluster_root / "processed" / _ADOPTION_PREVIEW_NAME
+    )
+    requested_final = request.final_cache_directory or (
+        cluster_root / "processed" / _ADOPTION_FINAL_NAME
+    )
+    if source_cache.name == "lfp_summary_cache" or source_cache in {
+        requested_preview.resolve(strict=False),
+        requested_final.resolve(strict=False),
     }:
         raise ValueError("source cache must be a distinct non-legacy prerequisite cache")
     preview = _require_direct_processed_child(
-        cluster_root / "processed" / _ADOPTION_PREVIEW_NAME,
+        requested_preview,
         cluster_root,
         "preview cache",
     )
     final = _require_direct_processed_child(
-        cluster_root / "processed" / _ADOPTION_FINAL_NAME,
+        requested_final,
         cluster_root,
         "final cache",
     )
@@ -2217,14 +2226,14 @@ def adopt_power_synchrony_cache_pair(
             metadata_path,
             request.probe_label,
             preview,
-            _ADOPTION_PREVIEW_SHUFFLES,
+            request.preview_shuffle_count,
             _ADOPTION_WORKER_COUNT,
         )
         final_config = active_dependencies.load_metadata_config(
             metadata_path,
             request.probe_label,
             final,
-            _ADOPTION_FINAL_SHUFFLES,
+            request.final_shuffle_count,
             _ADOPTION_WORKER_COUNT,
         )
         for label, config, cache in (
@@ -2323,8 +2332,14 @@ def adopt_power_synchrony_cache_pair(
                 "preview": preview_states,
                 "final": final_states,
             },
-            "preview": {"shuffle_count": 100, "worker_count": 8},
-            "final": {"shuffle_count": 1000, "worker_count": 8},
+            "preview": {
+                "shuffle_count": request.preview_shuffle_count,
+                "worker_count": _ADOPTION_WORKER_COUNT,
+            },
+            "final": {
+                "shuffle_count": request.final_shuffle_count,
+                "worker_count": _ADOPTION_WORKER_COUNT,
+            },
             "repository": _repository_provenance(),
             "hostname": active_runtime.hostname(),
             "started_at_utc": started_at,
@@ -2395,6 +2410,49 @@ def _adoption_followup_commands(
         Ordered human label and shell command pairs. Commands are text only and
         are never executed or submitted by adoption.
     """
+    if request.preview_cache_directory is not None:
+        metadata = str(request.session_metadata_path)
+        return (
+            (
+                "Preview dry run",
+                shlex.join(
+                    (
+                        "uv", "run", "--frozen", "python", "-m",
+                        "src.neural_analysis.lfp_spike_phase_launcher",
+                        "preview", "--session-metadata", metadata, "--dry-run",
+                    )
+                ),
+            ),
+            (
+                "Preview submission",
+                shlex.join(
+                    (
+                        "sbatch", "src/shell_scripts/hpc_ppc.sh", "preview",
+                        "--session-metadata", metadata,
+                    )
+                ),
+            ),
+            (
+                "Final dry run",
+                shlex.join(
+                    (
+                        "uv", "run", "--frozen", "python", "-m",
+                        "src.neural_analysis.lfp_spike_phase_launcher",
+                        "final", "--session-metadata", metadata, "--dry-run",
+                    )
+                ),
+            ),
+            (
+                "Final submission",
+                shlex.join(
+                    (
+                        "sbatch", "src/shell_scripts/hpc_ppc.sh", "final",
+                        "--session-metadata", metadata,
+                    )
+                ),
+            ),
+        )
+
     common = (
         "new",
         "--session-metadata",
@@ -2452,7 +2510,7 @@ def _adoption_followup_commands(
 
 
 def _parse_adoption_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse the three required cluster cache-adoption inputs.
+    """Parse metadata-only or explicit legacy cache-adoption inputs.
 
     Parameters
     ----------
@@ -2462,15 +2520,15 @@ def _parse_adoption_args(arguments: Sequence[str] | None = None) -> argparse.Nam
     Returns
     -------
     argparse.Namespace
-        String-valued session metadata, probe, and source-cache fields. No
+        Session metadata plus optional legacy probe/source-cache fields. No
         computational or scheduler setting is exposed.
     """
     parser = argparse.ArgumentParser(
         description="Adopt one rsynced PPC prerequisite cache on the cluster."
     )
     parser.add_argument("--session-metadata", required=True)
-    parser.add_argument("--probe", required=True)
-    parser.add_argument("--source-cache", required=True)
+    parser.add_argument("--probe")
+    parser.add_argument("--source-cache")
     return parser.parse_args(arguments)
 
 
@@ -2489,17 +2547,45 @@ def adoption_main(arguments: Sequence[str] | None = None) -> int:
     """
     parsed = _parse_adoption_args(arguments)
     command_arguments = list(os.sys.argv[1:] if arguments is None else arguments)
-    request = CacheAdoptionRequest(
-        session_metadata_path=Path(parsed.session_metadata),
-        probe_label=parsed.probe,
-        source_cache_directory=Path(parsed.source_cache),
-        command=(
-            os.sys.executable,
-            "-m",
-            "src.neural_analysis.lfp_summary_cache_adoption",
-            *command_arguments,
-        ),
+    metadata_path = Path(parsed.session_metadata)
+    command = (
+        os.sys.executable,
+        "-m",
+        "src.neural_analysis.lfp_summary_cache_adoption",
+        *command_arguments,
     )
+    if (parsed.probe is None) != (parsed.source_cache is None):
+        raise ValueError("--probe and --source-cache must be supplied together")
+    if parsed.probe is not None:
+        request = CacheAdoptionRequest(
+            session_metadata_path=metadata_path,
+            probe_label=parsed.probe,
+            source_cache_directory=Path(parsed.source_cache),
+            command=command,
+        )
+    else:
+        from src.neural_analysis.session_metadata import (
+            load_session_metadata,
+            resolve_session_metadata,
+        )
+
+        session = resolve_session_metadata(
+            load_session_metadata(metadata_path),
+            metadata_path,
+        )
+        if session.analysis is None:
+            raise ValueError("metadata-only adoption requires schema version 3")
+        ppc = session.analysis.ppc
+        request = CacheAdoptionRequest(
+            session_metadata_path=metadata_path,
+            probe_label=session.analysis.probe_roles.ppc,
+            source_cache_directory=ppc.prerequisite_cache,
+            command=command,
+            preview_cache_directory=ppc.preview_cache,
+            final_cache_directory=ppc.final_cache,
+            preview_shuffle_count=ppc.preview_shuffles,
+            final_shuffle_count=ppc.final_shuffles,
+        )
     result = adopt_power_synchrony_cache_pair(request)
     print(f"created preview cache: {result.preview_cache_directory}")
     print(f"created final cache: {result.final_cache_directory}")
