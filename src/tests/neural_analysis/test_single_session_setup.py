@@ -8,6 +8,7 @@ import shlex
 
 from src.neural_analysis.lfp_spike_phase_launcher import parse_launcher_command
 from src.neural_analysis.single_session_setup import (
+    _parser as setup_parser,
     build_analysis_commands,
     inspect_session_readiness,
     scaffold_session_analysis,
@@ -234,6 +235,31 @@ def test_commands_are_copyable_and_owned_by_existing_parsers(tmp_path: Path) -> 
     assert cluster_final_tokens[cluster_final_tokens.index("--cache-directory") + 1] == str(
         final.cache_directory
     )
+
+
+def test_setup_commands_accept_only_session_metadata_for_stable_identity() -> None:
+    """Normal setup derives the session root, probe roles, and caches from v3.
+
+    Returns
+    -------
+    None
+        Parsed paths are scalar control-file identities; no numerical arrays,
+        axes, or physical units are involved.
+    """
+    metadata_path = Path("/data/session/neural_session.json")
+    parser = setup_parser()
+
+    for command in ("init", "check", "prepare"):
+        arguments = parser.parse_args(
+            [command, "--session-metadata", str(metadata_path)]
+        )
+        assert arguments.command == command
+        assert arguments.session_metadata == metadata_path
+        assert not hasattr(arguments, "session_root")
+        assert not hasattr(arguments, "pfc_probe")
+        assert not hasattr(arguments, "hpc_probe")
+        assert not hasattr(arguments, "ppc_probe")
+        assert not hasattr(arguments, "ppc_cache_directory")
 
 
 def test_readiness_only_reads_control_files_and_never_creates_outputs(tmp_path: Path) -> None:

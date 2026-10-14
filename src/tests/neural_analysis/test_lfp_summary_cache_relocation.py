@@ -2504,8 +2504,40 @@ def test_cluster_adoption_preserves_concurrently_changed_first_cache(
     assert not (source_cache.parent / "ppc_prerequisites_adoption.json").exists()
 
 
-def test_cluster_adoption_parser_has_only_three_required_workflow_inputs() -> None:
-    """The public command exposes no computational or scheduler overrides."""
+def test_cluster_adoption_parser_accepts_metadata_only_workflow() -> None:
+    """Version-3 metadata is the sole required normal adoption argument.
+
+    Returns
+    -------
+    None
+        Parsed values are scalar path/compatibility fields without numerical
+        arrays, axis conventions, physical units, or scheduler overrides.
+    """
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_adoption")
+    parsed = module._parse_adoption_args(
+        (
+            "--session-metadata",
+            "/cluster/session/neural_session.json",
+        )
+    )
+
+    assert parsed.session_metadata == "/cluster/session/neural_session.json"
+    assert parsed.probe is None
+    assert parsed.source_cache is None
+    assert not hasattr(parsed, "workers")
+    assert not hasattr(parsed, "shuffles")
+    assert not hasattr(parsed, "partition")
+
+
+def test_cluster_adoption_parser_retains_explicit_legacy_inputs() -> None:
+    """Existing version-2 adoption calls remain parse-compatible.
+
+    Returns
+    -------
+    None
+        Explicit probe and source-cache strings are preserved without opening
+        files or loading numerical arrays.
+    """
     module = importlib.import_module("src.neural_analysis.lfp_summary_cache_adoption")
     parsed = module._parse_adoption_args(
         (
@@ -2518,9 +2550,5 @@ def test_cluster_adoption_parser_has_only_three_required_workflow_inputs() -> No
         )
     )
 
-    assert parsed.session_metadata == "/cluster/session/neural_session.json"
     assert parsed.probe == "ProbeB"
     assert parsed.source_cache == "/cluster/session/processed/source-cache"
-    assert not hasattr(parsed, "workers")
-    assert not hasattr(parsed, "shuffles")
-    assert not hasattr(parsed, "partition")

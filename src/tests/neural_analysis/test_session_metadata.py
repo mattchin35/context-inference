@@ -57,6 +57,31 @@ def _metadata_payload(
     }
 
 
+def _version_three_payload() -> dict[str, Any]:
+    """Return one complete version-3 document with portable analysis intent.
+
+    Returns
+    -------
+    dict[str, Any]
+        JSON-compatible metadata. Paths are session-relative and contain no
+        arrays, axis conventions, or physical-unit-bearing numerical values.
+    """
+    payload = _metadata_payload()
+    payload["schema_version"] = "3"
+    del payload["cache"]
+    payload["analysis"] = {
+        "probe_roles": {"pfc": "ProbeA", "hpc": "ProbeB", "ppc": "ProbeB"},
+        "ppc": {
+            "prerequisite_cache": "processed/ppc_source",
+            "preview_cache": "processed/ppc_preview",
+            "final_cache": "processed/ppc_final",
+            "preview_shuffles": 100,
+            "final_shuffles": 1000,
+        },
+    }
+    return payload
+
+
 def _write_metadata(session_root: Path, payload: dict[str, Any]) -> Path:
     """Write one canonical metadata file and return its path."""
     session_root.mkdir(parents=True, exist_ok=True)
@@ -115,6 +140,103 @@ def test_compact_metadata_resolves_each_probe_as_one_complete_unit(tmp_path: Pat
     assert probe_a.unit_channels is None
     assert probe_b.unit_channels == (10, 11, 12)
     assert resolved.cache_directory == (session_root / payload["cache"]).resolve()
+
+
+def test_version_three_resolves_probe_roles_and_ppc_workflow(tmp_path: Path) -> None:
+    """Version 3 centralizes stable probe roles and portable PPC cache intent.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty pytest directory used only for small control-file fixtures.
+
+    Returns
+    -------
+    None
+        Resolved cache paths must remain direct children of session/processed;
+        shuffle counts remain dimensionless positive integers.
+    """
+    payload = _version_three_payload()
+    session_root = tmp_path / "session"
+    _make_sources(session_root, payload)
+    metadata_path = _write_metadata(session_root, payload)
+
+    metadata = load_session_metadata(metadata_path)
+    resolved = resolve_session_metadata(metadata, metadata_path)
+
+    assert metadata.schema_version == "3"
+    assert metadata.analysis is not None
+    assert metadata.analysis.probe_roles.ppc == "ProbeB"
+    assert resolved.analysis is not None
+    assert resolved.analysis.probe_roles.pfc == "ProbeA"
+    assert resolved.analysis.ppc.prerequisite_cache == (
+        session_root / "processed" / "ppc_source"
+    ).resolve()
+    assert resolved.analysis.ppc.preview_cache == (
+        session_root / "processed" / "ppc_preview"
+    ).resolve()
+    assert resolved.analysis.ppc.final_cache == (
+        session_root / "processed" / "ppc_final"
+    ).resolve()
+    assert resolved.analysis.ppc.preview_shuffles == 100
+    assert resolved.analysis.ppc.final_shuffles == 1000
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (
+            lambda value: value["analysis"]["probe_roles"].update(ppc="missing"),
+            "probe",
+        ),
+        (
+            lambda value: value["analysis"]["probe_roles"].update(hpc="ProbeA"),
+            "distinct",
+        ),
+        (
+            lambda value: value["analysis"]["ppc"].update(
+                preview_cache="processed/ppc_source"
+            ),
+            "distinct",
+        ),
+        (
+            lambda value: value["analysis"]["ppc"].update(
+                final_cache="../outside"
+            ),
+            "processed|relative|contained",
+        ),
+        (
+            lambda value: value["analysis"]["ppc"].update(
+                prerequisite_cache="processed/lfp_summary_cache"
+            ),
+            "legacy",
+        ),
+        (
+            lambda value: value["analysis"]["ppc"].update(
+                preview_shuffles=1000,
+                final_shuffles=100,
+            ),
+            "shuffle",
+        ),
+    ),
+)
+def test_version_three_rejects_ambiguous_analysis_intent(
+    tmp_path: Path,
+    mutation: Callable[[dict[str, Any]], None],
+    message: str,
+) -> None:
+    """Reject unsafe or contradictory role/cache/run metadata before analysis.
+
+    Parameters are an empty fixture directory, a JSON mutation callback, and
+    an error pattern. No numerical arrays, axes, or physical units are used.
+    """
+    payload = _version_three_payload()
+    mutation(payload)
+    metadata_path = _write_metadata(tmp_path / "session", payload)
+
+    with pytest.raises(ValueError, match=message):
+        metadata = load_session_metadata(metadata_path)
+        resolve_session_metadata(metadata, metadata_path)
 
 
 @pytest.mark.parametrize(

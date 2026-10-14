@@ -757,6 +757,42 @@ def test_parser_accepts_metadata_as_new_run_session_source() -> None:
     assert command.analysis_root is None
 
 
+@pytest.mark.parametrize(
+    ("profile", "dry_run"),
+    (("preview", True), ("final", False)),
+)
+def test_parser_accepts_metadata_only_ppc_profiles(
+    profile: str,
+    dry_run: bool,
+) -> None:
+    """Preview/final profiles need only metadata plus optional dry-run intent.
+
+    Parameters are categorical CLI values without arrays, axes, or physical
+    units. Scientific shuffle/cache/probe settings are intentionally unresolved
+    until version-3 metadata is loaded by the runtime.
+    """
+    launcher = _launcher()
+    arguments = [
+        profile,
+        "--session-metadata",
+        "/data/mouse-z/neural_session.json",
+    ]
+    if dry_run:
+        arguments.append("--dry-run")
+
+    command = launcher.parse_launcher_command(arguments)
+
+    assert command.mode == "new"
+    assert command.run_profile == profile
+    assert command.session_metadata == Path("/data/mouse-z/neural_session.json")
+    assert command.probe_label is None
+    assert command.cache_directory is None
+    assert command.shuffle_count is None
+    assert command.worker_count is None
+    assert command.dry_run is dry_run
+    assert command.final_run is (profile == "final")
+
+
 def test_parser_requires_exactly_one_new_run_session_source() -> None:
     """Metadata and the legacy session directory are mutually exclusive."""
     launcher = _launcher()
