@@ -1,18 +1,21 @@
 # Neural analysis quickstart
 
-For a preparation-only single-session workflow covering task-variable
+For a single-session workflow covering task-variable
 decoding, pooled condition generalization, interregional regression, and
 spike-phase/PPC, see [`SINGLE_SESSION_SETUP.md`](SINGLE_SESSION_SETUP.md). The
-setup command scaffolds control files, reports blockers, and prints existing
-commands; it never preprocesses data, runs an analysis, or submits a job.
+setup command scaffolds control files, reports blockers, and prepares existing
+Power/Synchrony/phase prerequisites when explicitly asked. It never submits a
+job or changes the underlying computations.
 
 Neural-session metadata is a small JSON file that tells the existing analysis
 code where one session's behavior, LFP, synchronization, and spike sources are.
-It contains paths and labels only; scientific settings remain in the analysis
-code and explicit run commands.
+Version 2 contains source paths and labels. Version 3 adds stable analysis
+roles, PPC cache locations, and preview/final shuffle intent so routine commands
+need only the metadata path. All other scientific settings remain in code.
 
 Start from the closest editable example:
 
+- `docs/examples/neural_analysis/workflow_session.json` (version 3, full workflow)
 - `docs/examples/neural_analysis/open_ephys_session.json`
 - `docs/examples/neural_analysis/spikeglx_session.json`
 - `docs/examples/neural_analysis/differently_named_session.json`
@@ -44,7 +47,9 @@ The file has these user-edited sections:
 | `behavior` | Required trial table and optional event table |
 | `probes` | One complete record per probe: paths, sites, and optional unit channels |
 | `site_pairs` | Site-name pairs available to synchrony views |
-| optional `cache` | The session-wide reusable LFP-summary cache |
+| optional version-2 `cache` | The session-wide reusable LFP-summary cache |
+| version-3 `analysis.probe_roles` | Stable PFC, HPC, and PPC probe keys |
+| version-3 `analysis.ppc` | Three relative PPC caches and preview/final shuffle counts |
 
 For each probe, `lfp`, `alignment`, `sorter`, `quality`, and `sites` are
 required. `alignment` is the one aligned file used for synchronization and
@@ -69,7 +74,9 @@ To require one action to be ready, add `--action webapp`, `--action power`,
 returns a nonzero exit code and lists the missing inputs. General validation
 lists all four categories and permits an intentionally incomplete skeleton.
 
-Schema version 2 accepts the existing Open Ephys and SpikeGLX source layouts.
+Schema versions 2 and 3 accept the existing Open Ephys and SpikeGLX source layouts.
+Version 2 remains supported for existing webapp and explicit launcher usage;
+the simplified single-session workflow requires version 3.
 It never loads LFP, synchronization, or spike arrays during metadata validation.
 Python callers use `load_session_metadata`, `resolve_session_metadata`,
 `resolve_probe_sources`, and `validate_session_for_action` from
@@ -95,32 +102,35 @@ disables the affected view and explains which source is unavailable.
 
 ## Run Spike-phase/PPC computation
 
-### Adopt an rsynced prerequisite cache on the cluster
+### Prepare Power, Synchrony, and phase
 
-Copy the session with `rsync -a` so source sizes and nanosecond modification
-times used by the established large-file fingerprint policy are preserved. On
-the cluster, run one preparation command against the copied Power/Synchrony
-cache:
+Schema-version-3 metadata makes preparation one command on either the
+workstation or cluster:
 
 ```bash
 SESSION="$HOME/contextProjectData/CT026/CT026_20260803_latent_inference"
 
-uv run --frozen python -m src.neural_analysis.lfp_summary_cache_adoption \
-  --session-metadata "$SESSION/neural_session.json" \
-  --probe ProbeB \
-  --source-cache "$SESSION/processed/ppc_prerequisites_open_ephys_v1"
+uv run --frozen python -m src.neural_analysis.single_session_setup prepare \
+  --session-metadata "$SESSION/neural_session.json"
 ```
 
-The command performs no numerical analysis and submits no job. It validates
-the copied provenance and NPZ headers, then creates two independent caches:
+On a workstation, this computes only missing Power, reusable phase, and
+Synchrony products through the existing implementations. Synchrony receives
+the exact phase object prepared once by the command. On a cluster with an
+`rsync -a` copied prerequisite cache, it adopts the compatible Power/Synchrony
+bytes first and creates or reuses cluster-local phase. It never computes PPC or
+submits a job.
+
+The metadata names two independent run caches:
 
 - `processed/ppc_prerequisites_preview` for the 100-shuffle preview;
 - `processed/ppc_prerequisites_final` for the 1,000-shuffle final run.
 
-It also writes `processed/ppc_prerequisites_adoption.json` and prints the exact
-dry-run and Slurm commands to use next. It refuses to overwrite any of those
-paths. Preview and final cannot share one cache because the preview adds
-`spike_phase.npz` to its cache.
+Preparation refuses partial or incompatible state and never overwrites it.
+Preview and final cannot share one cache because the preview adds
+`spike_phase.npz` to its cache. The lower-level metadata-only
+`lfp_summary_cache_adoption` command remains available when only cache adoption
+is wanted.
 
 Normal cluster aliases above the session directory, including a symlinked
 `$HOME`, are accepted by both cache adoption and new launcher runs. Each
@@ -136,35 +146,24 @@ Check a new request locally without loading numerical arrays or starting the
 computation:
 
 ```bash
-uv run python -m src.neural_analysis.lfp_spike_phase_launcher new \
+uv run python -m src.neural_analysis.lfp_spike_phase_launcher preview \
   --session-metadata /path/to/session/neural_session.json \
-  --probe rear-probe \
-  --cache-directory /path/to/session/processed/ppc_prerequisites_preview \
-  --shuffles 100 \
-  --workers 8 \
   --dry-run
 ```
 
-Remove `--dry-run` for the existing 100-shuffle preview. The command keeps the
-probe, shuffle count, worker count, cache directory, and optional analysis root
-explicit. Metadata supplies only session identity and input paths. The legacy
-`--session-path` route remains available for the reviewed CT026 workflow.
+Remove `--dry-run` for the preview. Probe, shuffle count, and cache directory
+come from version-3 metadata; execution retains the existing eight-worker
+policy. The legacy explicit `new` and `--session-path` routes remain available.
 
 Run the local preview only after its dry run succeeds:
 
 ```bash
-uv run python -m src.neural_analysis.lfp_spike_phase_launcher new \
-  --session-metadata /path/to/session/neural_session.json \
-  --probe rear-probe \
-  --cache-directory /path/to/session/processed/ppc_prerequisites_preview \
-  --shuffles 100 \
-  --workers 8
+uv run python -m src.neural_analysis.lfp_spike_phase_launcher preview \
+  --session-metadata /path/to/session/neural_session.json
 ```
 
-The existing final intent remains explicit: use the separate
-`processed/ppc_prerequisites_final` cache with `--shuffles 1000 --final-run`.
-This is the same computation with the reviewed final shuffle count, not a new
-analysis mode.
+Use the `final` profile for the metadata-declared final cache and shuffle count.
+This remains the same PPC computation, not a different scientific method.
 
 The same path rule applies to both `--session-metadata` and the legacy
 `--session-path`: an alias above the session is allowed, but a symlink at the
@@ -176,18 +175,16 @@ session loader or numerical computation starts.
 For Slurm, submit the same arguments through the existing wrapper:
 
 ```bash
-sbatch src/shell_scripts/hpc_ppc.sh new \
-  --session-metadata /path/to/session/neural_session.json \
-  --probe rear-probe \
-  --cache-directory /path/to/session/processed/ppc_prerequisites_preview \
-  --shuffles 100 \
-  --workers 8
+sbatch src/shell_scripts/hpc_ppc.sh preview \
+  --session-metadata /path/to/session/neural_session.json
+
+sbatch src/shell_scripts/hpc_ppc.sh final \
+  --session-metadata /path/to/session/neural_session.json
 ```
 
-Submit from a tracked-clean repository root. The wrapper fixes the Slurm task
-to eight CPUs and requires `--workers 8`; it forwards the scientific arguments
-to the same Python launcher. Adoption does not modify this wrapper or any Slurm
-resource request.
+Submit from a tracked-clean repository root. The wrapper forwards the profile
+and metadata path to the same Python launcher. Its existing Slurm partition,
+CPU, memory, time, signal, log, and mail directives are unchanged.
 
 ### Resume and recover
 
@@ -273,15 +270,17 @@ trial window.
 
 The small public surface for new-session use is:
 
-- `load_session_metadata(path)` parses the version-2 JSON file;
+- `load_session_metadata(path)` parses version-2 or version-3 JSON;
 - `resolve_session_metadata(metadata, path)` resolves relative paths beneath
   the metadata file's session directory;
 - `validate_session_for_action(session, action)` reports missing ordinary
   inputs without loading arrays;
 - `build_lfp_summary_config(session, request)` builds the existing Power and
   Synchrony configuration from metadata; and
-- `build_metadata_spike_phase_config(...)` adds one selected probe population and
-  explicit cache/shuffle/worker choices for the existing Spike-phase pipeline.
+- `build_metadata_spike_phase_config(...)` adapts resolved choices to the
+  existing Spike-phase pipeline; and
+- `prepare_session_lfp(...)` orchestrates the existing Power, shared phase,
+  Synchrony, and cache-adoption boundaries without changing their calculations.
 
 The dataclass and function docstrings specify path types, zero-based channel
 axes, seconds, Hz, and uV. Scientific calculations, plot definitions, cache

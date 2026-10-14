@@ -1,139 +1,134 @@
 # Prepare one neural-analysis session
 
-`single_session_setup` is a preparation-only command for one session. It can
-create missing editable JSON control files, inspect ordinary input paths, and
-print commands for later use. It does not preprocess data, load neural arrays,
-run an analysis, create an analysis run, or submit a Slurm job.
+The normal workflow has one input: `neural_session.json`. Schema version 3
+stores the stable PFC, HPC, and PPC probe roles, the three PPC cache paths, and
+the preview/final shuffle counts. Cache paths are relative direct children of
+`processed`; machine-specific session roots do not belong in metadata.
 
-The supported analysis families are:
+The workflow covers task-variable decoding, pooled condition generalization,
+interregional regression, and spike-phase/PPC. LFP Power and Synchrony are PPC
+prerequisites and are prepared by the same command; they are not separate
+user-facing runs here.
 
-- task-variable decoding, including all configured task conditions;
-- pooled-window condition generalization;
-- fast-first interregional regression (`ols_cv` and `linear_granger`);
-- spike-phase/PPC.
+## 1. Add the version-3 analysis block
 
-LFP power and LFP synchrony are not part of this workflow.
+Keep the existing behavior, probe, site, and site-pair fields. Change
+`schema_version` to `"3"`, remove the old top-level `cache` field, and add:
 
-## 1. Scaffold editable control files
-
-Start with an existing session directory and its exact PFC and HPC metadata
-probe IDs:
-
-```bash
-uv run python -m src.neural_analysis.single_session_setup init \
-  --session-root '/path/to/CT026/2025-08-04' \
-  --pfc-probe ProbeA \
-  --hpc-probe ProbeB
+```json
+"analysis": {
+  "probe_roles": {
+    "pfc": "ProbeA",
+    "hpc": "ProbeB",
+    "ppc": "ProbeB"
+  },
+  "ppc": {
+    "prerequisite_cache": "processed/ppc_prerequisites_open_ephys_v1",
+    "preview_cache": "processed/ppc_prerequisites_preview",
+    "final_cache": "processed/ppc_prerequisites_final",
+    "preview_shuffles": 100,
+    "final_shuffles": 1000
+  }
+}
 ```
 
-The command creates only files that are missing:
+PFC and HPC must be different declared probes. PPC may be the HPC probe. The
+three cache paths must be distinct. Schema version 2 remains readable by the
+webapp and legacy explicit commands, but the simplified workflow requires
+version 3 because it does not guess probe roles or cache intent.
 
-- `neural_session.json`;
-- `task_decoding_config.json`;
-- `pooled_task_decoding_config.json`;
-- `interregional_regression_config.json`.
+## 2. Initialize and check control files
 
-Existing files are reported as `preserved` and are never overwritten. The
-three canonical pooled training windows are included by default. Select a
-smaller canonical subset with `--training-windows` if that is the intended
-scientific analysis.
-
-The generated files are editable templates, not inferred scientific truth.
-Review probe roles, paths, regions, channel filters, target/condition lists,
-and output locations before continuing. The generated interregional metadata
-and output paths are relative to its configuration file, so synchronizing the
-complete session tree does not require a cluster-specific rewrite. Existing
-absolute-path configurations remain accepted for backward compatibility.
-
-## 2. Supply preprocessing products
-
-This command does not create missing preprocessing products. The session must
-already contain the products named by its metadata and configurations:
-
-- augmented chronological trial CSV;
-- trial-feature parameter JSON;
-- aligned probe synchronization files;
-- sorter directories with spike times, spike clusters, and cluster metadata;
-- channel-quality tables;
-- LFP file and preprocessing sidecar for the PPC probe;
-- an existing Power/Synchrony-only PPC source cache directly below
-  `session/processed`;
-- declared LFP sites and at least one site pair, as required by the existing
-  spike-phase launcher.
-
-If these are absent, the readiness report remains blocked and names them. It
-does not attempt to repair, align, infer, or generate them.
-
-## 3. Check readiness and print commands
-
-```bash
-uv run python -m src.neural_analysis.single_session_setup check \
-  --session-root '/path/to/CT026/2025-08-04' \
-  --pfc-probe ProbeA \
-  --hpc-probe ProbeB \
-  --ppc-probe ProbeB \
-  --ppc-cache-directory '/path/to/CT026/2025-08-04/processed/ppc-cache'
-```
-
-Omit `--ppc-cache-directory` only when `neural_session.json` already names the
-intended nonlegacy cache. The report prints `READY` or `BLOCKED` independently
-for each analysis. A missing PPC-only LFP input does not block task decoding or
-interregional regression.
-
-When all four families are ready, the command prints shell-quoted commands for
-later explicit use:
-
-- each existing local preflight/dry-run;
-- each existing local analysis command;
-- each existing cluster wrapper command;
-- the one-time cluster cache-adoption command;
-- both the 100-shuffle PPC preview and explicit 1,000-shuffle final PPC run.
-
-The preview commands always use `processed/ppc_prerequisites_preview`; final
-commands always use `processed/ppc_prerequisites_final`. The provided
-`--ppc-cache-directory` is the rsynced source cache, not either run cache.
-
-Printing these commands does not execute them. Existing launchers and Slurm
-wrappers retain their own reviewed computation, lifecycle, and resource
-requirements unchanged.
-
-## 4. Cluster path preparation
-
-Synchronize the session non-destructively with `rsync -a`, excluding existing
-analysis runs, and use a tracked-clean cluster checkout. Then run `check`
-against the cluster-visible session path. Every launcher validates paths in the
-environment where it will run.
-
-For the CT026 2026-08-03 example, the complete PPC preparation step on the
-cluster is:
+For the CT026 2026-08-03 session:
 
 ```bash
 SESSION="$HOME/contextProjectData/CT026/CT026_20260803_latent_inference"
+METADATA="$SESSION/neural_session.json"
 
-uv run --frozen python -m src.neural_analysis.lfp_summary_cache_adoption \
-  --session-metadata "$SESSION/neural_session.json" \
-  --probe ProbeB \
-  --source-cache "$SESSION/processed/ppc_prerequisites_open_ephys_v1"
+uv run --frozen python -m src.neural_analysis.single_session_setup init \
+  --session-metadata "$METADATA"
+
+uv run --frozen python -m src.neural_analysis.single_session_setup check \
+  --session-metadata "$METADATA"
 ```
 
-This command only validates, byte-copies, and rebinds the prerequisite cache.
-It does not compute Power, Synchrony, phase, or PPC and does not submit Slurm.
-It prints the next preview and final dry-run/submission commands, each using its
-own cache. The existing `hpc_ppc.sh` resource requirements remain unchanged.
+`init` creates only missing task-decoding, pooled-decoding, and interregional
+configuration files. It never replaces an existing control file. Review those
+scientific configurations before running their analyses. Their session and
+output paths are relative, so the complete session tree can be synchronized to
+another host without editing paths.
 
-A symlinked cluster `$HOME` or another alias above the session directory is
-accepted by both adoption and the generated PPC launcher commands. Each
-resolves that alias once and uses canonical paths thereafter. The session
-directory itself and its metadata, `processed`, cache directories, and cache
-members must remain nonsymlink objects; those boundaries are checked before a
-session loader or PPC computation starts. No `readlink -f` step is required
-with the current commands; it remains a valid workaround for an older
-checkout.
+`check` reads small control files and named filesystem paths. It does not load
+neural arrays, run an analysis, or submit a job. When ready, it prints the
+existing commands for all four analysis families.
 
-Do not add deletion to the synchronization command. Prefer the generated
-relative interregional paths; older absolute-path configurations must be made
-valid for the destination before submission. The detailed sync, submission,
-status, resume, and result-return procedures remain in the main
-[`README.md`](README.md), the task-decoding
-[`README.md`](task_decoding/README.md), and the interregional
-[`README.md`](interregional/README.md).
+## 3. Prepare PPC prerequisites
+
+Run one command in the environment where the PPC job will run:
+
+```bash
+uv run --frozen python -m src.neural_analysis.single_session_setup prepare \
+  --session-metadata "$METADATA"
+```
+
+On a workstation with no prerequisite cache, `prepare` calls the existing
+Power implementation, prepares phase once, passes that exact phase object to
+the existing Synchrony implementation, and publishes independent preview and
+final prerequisite caches. It does not compute PPC.
+
+On the cluster, if the metadata-declared prerequisite cache was copied with
+`rsync -a`, `prepare` first uses the existing provenance/header adoption path
+for Power and Synchrony, then creates or reuses the cluster-local prepared-phase
+cache. It does not recompute compatible transferred Power or Synchrony.
+
+The command is conservative and idempotent. Complete compatible targets and a
+warm phase cache are reused. A partial preview/final pair, unexpected source
+members, or stale/running/failed component state is rejected without
+overwriting it. A successful invocation writes a timestamped preparation
+receipt under `analysis_runs`.
+
+## 4. Preview and final PPC runs
+
+Dry-run the preview first:
+
+```bash
+uv run --frozen python -m src.neural_analysis.lfp_spike_phase_launcher preview \
+  --session-metadata "$METADATA" \
+  --dry-run
+```
+
+The actual cluster jobs are:
+
+```bash
+sbatch src/shell_scripts/hpc_ppc.sh preview \
+  --session-metadata "$METADATA"
+
+sbatch src/shell_scripts/hpc_ppc.sh final \
+  --session-metadata "$METADATA"
+```
+
+`preview` and `final` read the probe, cache, and shuffle settings from metadata.
+They require the preparation products and refuse unsafe retained work. The
+legacy explicit `new --probe --cache-directory --shuffles --workers` launcher
+route remains available for schema-version-2 and historical workflows.
+
+The Slurm wrapper resource directives are unchanged: the existing partition,
+CPU, memory, wall-time, signal, logging, and mail requirements still apply.
+Neither `init`, `check`, nor `prepare` submits a Slurm job.
+
+## 5. Synchronizing to the cluster
+
+Use `rsync -a` so the source fingerprint policy retains sizes and nanosecond
+modification times. Copy the complete session metadata and declared input
+tree, especially the LFP sidecars, alignment files, sorter/curation products,
+channel-quality files, and the metadata-declared prerequisite cache when it was
+prepared on the workstation. Do not use deletion flags.
+
+Normal aliases above the session directory, including a symlinked cluster
+`$HOME`, are accepted and canonicalized. The session directory itself,
+`neural_session.json`, `processed`, cache directories, and cache members must
+be real nonsymlink objects.
+
+Resume, report-recovery, and rerender commands remain documented in the main
+[`README.md`](README.md). Task-decoding and interregional details remain in
+their package-specific README files.
