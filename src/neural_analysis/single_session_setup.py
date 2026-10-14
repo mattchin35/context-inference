@@ -105,6 +105,9 @@ class AnalysisCommands:
         Existing local execution commands. ``local_final`` is PPC-only.
     cluster_preview, cluster_final : str or None
         Existing Slurm submission commands. ``cluster_final`` is PPC-only.
+    preparation : str or None
+        One non-computational prerequisite command. PPC uses this to adopt the
+        rsynced source into independent preview and final caches.
 
     Notes
     -----
@@ -117,6 +120,7 @@ class AnalysisCommands:
     local_final: str | None
     cluster_preview: str | None
     cluster_final: str | None
+    preparation: str | None = None
 
 
 def _write_json_exclusive(path: Path, payload: Mapping[str, object]) -> bool:
@@ -488,21 +492,28 @@ def build_analysis_commands(
     task_config = root / TASK_CONFIG_FILENAME
     pooled_config = root / POOLED_CONFIG_FILENAME
     interregional_config = root / INTERREGIONAL_CONFIG_FILENAME
-    cache = Path(ppc_cache_directory).resolve(strict=False)
+    source_cache = Path(ppc_cache_directory).resolve(strict=False)
+    preview_cache = root / "processed" / "ppc_prerequisites_preview"
+    final_cache = root / "processed" / "ppc_prerequisites_final"
 
     task_module = "src.neural_analysis.task_decoding.run_session"
     pooled_module = "src.neural_analysis.task_decoding.pooled.run_session"
     interregional_module = "src.neural_analysis.interregional.run_session"
     ppc_module = "src.neural_analysis.lfp_spike_phase_launcher"
-    ppc_base = (
-        "new",
-        "--session-metadata",
-        metadata_path,
-        "--probe",
-        ppc_probe_id,
-        "--cache-directory",
-        cache,
-    )
+    def ppc_base(cache_directory: Path) -> tuple[str | Path, ...]:
+        """Return launcher arguments for one independent prerequisite cache."""
+        return (
+            "new",
+            "--session-metadata",
+            metadata_path,
+            "--probe",
+            ppc_probe_id,
+            "--cache-directory",
+            cache_directory,
+        )
+
+    preview_base = ppc_base(preview_cache)
+    final_base = ppc_base(final_cache)
 
     commands = {
         "task_decoding": AnalysisCommands(
@@ -553,11 +564,11 @@ def build_analysis_commands(
             None,
         ),
         "spike_phase_ppc": AnalysisCommands(
-            _module_command(ppc_module, *ppc_base, "--shuffles", "100", "--workers", "8", "--dry-run"),
-            _module_command(ppc_module, *ppc_base, "--shuffles", "100", "--workers", "8"),
+            _module_command(ppc_module, *preview_base, "--shuffles", "100", "--workers", "8", "--dry-run"),
+            _module_command(ppc_module, *preview_base, "--shuffles", "100", "--workers", "8"),
             _module_command(
                 ppc_module,
-                *ppc_base,
+                *final_base,
                 "--shuffles",
                 "1000",
                 "--workers",
@@ -568,7 +579,7 @@ def build_analysis_commands(
                 [
                     "sbatch",
                     "src/shell_scripts/hpc_ppc.sh",
-                    *(str(item) for item in ppc_base),
+                    *(str(item) for item in preview_base),
                     "--shuffles",
                     "100",
                     "--workers",
@@ -579,13 +590,22 @@ def build_analysis_commands(
                 [
                     "sbatch",
                     "src/shell_scripts/hpc_ppc.sh",
-                    *(str(item) for item in ppc_base),
+                    *(str(item) for item in final_base),
                     "--shuffles",
                     "1000",
                     "--workers",
                     "8",
                     "--final-run",
                 ]
+            ),
+            _module_command(
+                "src.neural_analysis.lfp_summary_cache_adoption",
+                "--session-metadata",
+                metadata_path,
+                "--probe",
+                ppc_probe_id,
+                "--source-cache",
+                source_cache,
             ),
         ),
     }
@@ -675,6 +695,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ).items():
                 print(f"\n{name}:")
                 for command in (
+                    command_set.preparation,
                     command_set.local_preflight,
                     command_set.local_preview,
                     command_set.local_final,

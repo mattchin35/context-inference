@@ -95,6 +95,33 @@ disables the affected view and explains which source is unavailable.
 
 ## Run Spike-phase/PPC computation
 
+### Adopt an rsynced prerequisite cache on the cluster
+
+Copy the session with `rsync -a` so source sizes and nanosecond modification
+times used by the established large-file fingerprint policy are preserved. On
+the cluster, run one preparation command against the copied Power/Synchrony
+cache:
+
+```bash
+SESSION="$HOME/contextProjectData/CT026/CT026_20260803_latent_inference"
+
+uv run --frozen python -m src.neural_analysis.lfp_summary_cache_adoption \
+  --session-metadata "$SESSION/neural_session.json" \
+  --probe ProbeB \
+  --source-cache "$SESSION/processed/ppc_prerequisites_open_ephys_v1"
+```
+
+The command performs no numerical analysis and submits no job. It validates
+the copied provenance and NPZ headers, then creates two independent caches:
+
+- `processed/ppc_prerequisites_preview` for the 100-shuffle preview;
+- `processed/ppc_prerequisites_final` for the 1,000-shuffle final run.
+
+It also writes `processed/ppc_prerequisites_adoption.json` and prints the exact
+dry-run and Slurm commands to use next. It refuses to overwrite any of those
+paths. Preview and final cannot share one cache because the preview adds
+`spike_phase.npz` to its cache.
+
 ### Local preview
 
 Check a new request locally without loading numerical arrays or starting the
@@ -104,7 +131,7 @@ computation:
 uv run python -m src.neural_analysis.lfp_spike_phase_launcher new \
   --session-metadata /path/to/session/neural_session.json \
   --probe rear-probe \
-  --cache-directory /path/to/session/processed/lfp-summary-cache \
+  --cache-directory /path/to/session/processed/ppc_prerequisites_preview \
   --shuffles 100 \
   --workers 8 \
   --dry-run
@@ -121,12 +148,13 @@ Run the local preview only after its dry run succeeds:
 uv run python -m src.neural_analysis.lfp_spike_phase_launcher new \
   --session-metadata /path/to/session/neural_session.json \
   --probe rear-probe \
-  --cache-directory /path/to/session/processed/lfp-summary-cache \
+  --cache-directory /path/to/session/processed/ppc_prerequisites_preview \
   --shuffles 100 \
   --workers 8
 ```
 
-The existing final intent remains explicit: use `--shuffles 1000 --final-run`.
+The existing final intent remains explicit: use the separate
+`processed/ppc_prerequisites_final` cache with `--shuffles 1000 --final-run`.
 This is the same computation with the reviewed final shuffle count, not a new
 analysis mode.
 
@@ -138,14 +166,15 @@ For Slurm, submit the same arguments through the existing wrapper:
 sbatch src/shell_scripts/hpc_ppc.sh new \
   --session-metadata /path/to/session/neural_session.json \
   --probe rear-probe \
-  --cache-directory /path/to/session/processed/lfp-summary-cache \
+  --cache-directory /path/to/session/processed/ppc_prerequisites_preview \
   --shuffles 100 \
   --workers 8
 ```
 
 Submit from a tracked-clean repository root. The wrapper fixes the Slurm task
 to eight CPUs and requires `--workers 8`; it forwards the scientific arguments
-to the same Python launcher.
+to the same Python launcher. Adoption does not modify this wrapper or any Slurm
+resource request.
 
 ### Resume and recover
 

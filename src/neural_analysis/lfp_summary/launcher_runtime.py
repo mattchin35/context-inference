@@ -3146,6 +3146,68 @@ def _proc_memory_bytes(pid: int) -> tuple[int, int | None] | None:
     return values["Rss"], values.get("Pss")
 
 
+def load_metadata_spike_phase_config(
+    metadata_path: Path,
+    probe_label: str,
+    cache_directory: Path,
+    shuffle_count: int,
+    worker_count: int,
+) -> LFPSummaryConfig:
+    """Build one production Spike-phase configuration from session metadata.
+
+    Parameters
+    ----------
+    metadata_path : pathlib.Path
+        Existing ``neural_session.json`` path. Relative paths inside it resolve
+        against its containing session directory.
+    probe_label : str
+        Exact metadata probe identity used for the selected unit population.
+    cache_directory : pathlib.Path
+        Power/Synchrony prerequisite cache and future Spike-phase output path.
+    shuffle_count, worker_count : int
+        Positive permutation and execution counts. They affect only PPC science
+        and execution identity; Power/Synchrony configuration is unchanged.
+
+    Returns
+    -------
+    LFPSummaryConfig
+        Validated configuration with time in seconds, frequency in Hz, voltage
+        in uV, and zero-based saved-channel indices.
+    """
+    import pandas as pd
+
+    from src.neural_analysis.lfp_summary.session import (
+        build_metadata_spike_phase_config,
+    )
+    from src.neural_analysis.session_metadata import (
+        load_session_metadata,
+        resolve_session_metadata,
+        validate_session_for_action,
+    )
+    from src.neural_analysis.spike_behavior.loading import load_channel_quality
+
+    metadata = load_session_metadata(metadata_path)
+    session = resolve_session_metadata(metadata, metadata_path)
+    availability = validate_session_for_action(session, "spike-phase")
+    if not availability.available:
+        raise ValueError(
+            "session metadata is missing Spike-phase inputs: "
+            + ", ".join(availability.missing_inputs)
+        )
+    return build_metadata_spike_phase_config(
+        session,
+        probe_id=probe_label,
+        cache_directory=cache_directory,
+        shuffle_count=shuffle_count,
+        worker_count=worker_count,
+        cluster_metadata_loader=lambda sorter: pd.read_csv(
+            sorter / "cluster_info.tsv",
+            sep="\t",
+        ),
+        channel_metadata_loader=load_channel_quality,
+    )
+
+
 def make_production_launcher_dependencies() -> LauncherDependencies:
     """Bind direct-path and session-metadata runtime, report, and cleanup seams.
 
@@ -3156,8 +3218,6 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         selected probe, while numerical LFP/PPC work remains inside the
         existing Spike-phase pipeline.
     """
-    import pandas as pd
-
     from src.neural_analysis.lfp_summary.spike_phase_validation import (
         build_ct026_active_population,
         build_ct026_spike_phase_preview_config,
@@ -3173,14 +3233,6 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         make_spike_phase_pipeline_dependencies,
     )
     from src.neural_analysis.lfp_summary.work_cache import cleanup_ppc_run
-    from src.neural_analysis.lfp_summary.session import (
-        build_metadata_spike_phase_config,
-    )
-    from src.neural_analysis.session_metadata import (
-        load_session_metadata,
-        resolve_session_metadata,
-        validate_session_for_action,
-    )
     from src.neural_analysis.spike_behavior.loading import load_channel_quality, load_sorter_metadata
 
     pipeline = make_spike_phase_pipeline_dependencies(
@@ -3227,25 +3279,12 @@ def make_production_launcher_dependencies() -> LauncherDependencies:
         worker_count: int,
     ) -> LFPSummaryConfig:
         """Build one existing Spike-phase request from explicit session metadata."""
-        metadata = load_session_metadata(metadata_path)
-        session = resolve_session_metadata(metadata, metadata_path)
-        availability = validate_session_for_action(session, "spike-phase")
-        if not availability.available:
-            raise ValueError(
-                "session metadata is missing Spike-phase inputs: "
-                + ", ".join(availability.missing_inputs)
-            )
-        return build_metadata_spike_phase_config(
-            session,
-            probe_id=probe_label,
-            cache_directory=cache_directory,
-            shuffle_count=shuffle_count,
-            worker_count=worker_count,
-            cluster_metadata_loader=lambda sorter: pd.read_csv(
-                sorter / "cluster_info.tsv",
-                sep="\t",
-            ),
-            channel_metadata_loader=load_channel_quality,
+        return load_metadata_spike_phase_config(
+            metadata_path,
+            probe_label,
+            cache_directory,
+            shuffle_count,
+            worker_count,
         )
 
     def repository_state() -> RepositoryState:

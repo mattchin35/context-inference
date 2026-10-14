@@ -56,7 +56,8 @@ already contain the products named by its metadata and configurations:
 - sorter directories with spike times, spike clusters, and cluster metadata;
 - channel-quality tables;
 - LFP file and preprocessing sidecar for the PPC probe;
-- an existing PPC cache directory directly below `session/processed`;
+- an existing Power/Synchrony-only PPC source cache directly below
+  `session/processed`;
 - declared LFP sites and at least one site pair, as required by the existing
   spike-phase launcher.
 
@@ -85,7 +86,12 @@ later explicit use:
 - each existing local preflight/dry-run;
 - each existing local analysis command;
 - each existing cluster wrapper command;
+- the one-time cluster cache-adoption command;
 - both the 100-shuffle PPC preview and explicit 1,000-shuffle final PPC run.
+
+The preview commands always use `processed/ppc_prerequisites_preview`; final
+commands always use `processed/ppc_prerequisites_final`. The provided
+`--ppc-cache-directory` is the rsynced source cache, not either run cache.
 
 Printing these commands does not execute them. Existing launchers and Slurm
 wrappers retain their own reviewed computation, lifecycle, and resource
@@ -93,10 +99,27 @@ requirements unchanged.
 
 ## 4. Cluster path preparation
 
-Synchronize the session non-destructively, excluding existing analysis runs,
-and use a tracked-clean cluster checkout. Then run `check` against the
-cluster-visible session path. Every launcher validates paths in the environment
-where it will run.
+Synchronize the session non-destructively with `rsync -a`, excluding existing
+analysis runs, and use a tracked-clean cluster checkout. Then run `check`
+against the cluster-visible session path. Every launcher validates paths in the
+environment where it will run.
+
+For the CT026 2026-08-03 example, the complete PPC preparation step on the
+cluster is:
+
+```bash
+SESSION="$HOME/contextProjectData/CT026/CT026_20260803_latent_inference"
+
+uv run --frozen python -m src.neural_analysis.lfp_summary_cache_adoption \
+  --session-metadata "$SESSION/neural_session.json" \
+  --probe ProbeB \
+  --source-cache "$SESSION/processed/ppc_prerequisites_open_ephys_v1"
+```
+
+This command only validates, byte-copies, and rebinds the prerequisite cache.
+It does not compute Power, Synchrony, phase, or PPC and does not submit Slurm.
+It prints the next preview and final dry-run/submission commands, each using its
+own cache. The existing `hpc_ppc.sh` resource requirements remain unchanged.
 
 Do not add deletion to the synchronization command. Prefer the generated
 relative interregional paths; older absolute-path configurations must be made

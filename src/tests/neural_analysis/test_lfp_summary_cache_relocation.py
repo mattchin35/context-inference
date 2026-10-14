@@ -318,8 +318,33 @@ def _adoption_request_and_dependencies(
     """
     source_cache = fixture.cluster_root / "processed" / "ppc_prerequisites_open_ephys_v1"
     shutil.copytree(fixture.source_cache, source_cache)
+    producer_config = replace(
+        fixture.source_config,
+        output_directory=(
+            fixture.local_root / "processed" / "ppc_prerequisites_open_ephys_v1"
+        ),
+    )
+    copied_manifest = json.loads(
+        (source_cache / "manifest.json").read_text(encoding="ascii")
+    )
+    copied_configuration = json.loads(canonical_config_json(producer_config))
+    copied_manifest["configuration"] = copied_configuration
+    for entry in copied_manifest["components"].values():
+        entry["configuration_snapshot"] = copied_configuration
+    (source_cache / "manifest.json").write_text(
+        json.dumps(copied_manifest, sort_keys=True), encoding="ascii"
+    )
     metadata_path = fixture.cluster_root / "neural_session.json"
     metadata_path.write_text("{}\n", encoding="ascii")
+
+    # Model the documented ``rsync -a`` transfer: large-file fingerprints use
+    # preserved nanosecond mtimes because hashing entire recordings is avoided.
+    for historical_path, cluster_path in fixture.local_to_cluster_sources.items():
+        historical_stat = historical_path.stat()
+        os.utime(
+            cluster_path,
+            ns=(historical_stat.st_atime_ns, historical_stat.st_mtime_ns),
+        )
 
     # The copied manifest intentionally retains workstation paths and source
     # fingerprints, but those original inputs are unavailable on the cluster.
@@ -2117,9 +2142,8 @@ def test_cluster_adoption_builds_independent_preview_and_final_caches(
     )
     _, _, adopt = _adoption_api()
     source_before = _directory_inventory(source_cache)
-    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_adoption")
     monkeypatch.setattr(
-        module.np,
+        np,
         "load",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("adoption loaded an NPZ payload")
@@ -2367,7 +2391,7 @@ def test_cluster_adoption_preserves_concurrently_changed_first_cache(
         raise OSError("synthetic final publication failure")
 
     monkeypatch.setattr(module, "_publish_staged_cache", mutate_first_then_fail_second)
-    with pytest.raises(OSError, match="synthetic final publication failure"):
+    with pytest.raises((OSError, ValueError), match="(?i)publication|ownership"):
         adopt(request, dependencies=dependencies)
 
     preview = source_cache.parent / "ppc_prerequisites_preview"

@@ -16,7 +16,9 @@ import json
 import os
 from pathlib import Path
 import resource
+import shlex
 import socket
+import subprocess
 import tempfile
 import time
 from typing import Any, Callable, Mapping, Sequence
@@ -43,6 +45,12 @@ _NON_COMPONENT_CONFIGURATION_FIELDS = frozenset(
 )
 _COPY_CHUNK_BYTES = 1024 * 1024
 _MANIFEST_JSON_MAX_BYTES = 1024 * 1024
+_ADOPTION_PREVIEW_NAME = "ppc_prerequisites_preview"
+_ADOPTION_FINAL_NAME = "ppc_prerequisites_final"
+_ADOPTION_RECEIPT_NAME = "ppc_prerequisites_adoption.json"
+_ADOPTION_WORKER_COUNT = 8
+_ADOPTION_PREVIEW_SHUFFLES = 100
+_ADOPTION_FINAL_SHUFFLES = 1000
 
 
 @dataclass(frozen=True)
@@ -114,6 +122,56 @@ class RelocationResult:
     """
 
     destination_cache_directory: Path
+    receipt_path: Path
+
+
+@dataclass(frozen=True)
+class CacheAdoptionRequest:
+    """Minimal cluster-side request for adopting one rsynced prerequisite cache.
+
+    Parameters
+    ----------
+    session_metadata_path : pathlib.Path
+        Cluster ``neural_session.json`` path. Its parent is the session root.
+    probe_label : str
+        Exact metadata probe identity used for PPC unit selection.
+    source_cache_directory : pathlib.Path
+        Already-rsynced Power/Synchrony-only cache below ``session/processed``.
+    command : tuple[str, ...]
+        Exact non-computational command retained in the external receipt.
+    """
+
+    session_metadata_path: Path
+    probe_label: str
+    source_cache_directory: Path
+    command: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CacheAdoptionDependencies:
+    """Injected metadata-to-configuration boundary for cache adoption.
+
+    Parameters
+    ----------
+    load_metadata_config : Callable
+        Accepts metadata path, probe label, cache directory, shuffle count, and
+        worker count and returns one validated :class:`LFPSummaryConfig`.
+        It reads only metadata and small curation tables, never LFP arrays.
+    """
+
+    load_metadata_config: Callable[[Path, str, Path, int, int], LFPSummaryConfig]
+
+
+@dataclass(frozen=True)
+class CacheAdoptionResult:
+    """Published prerequisite pair and success receipt.
+
+    All paths are cluster filesystem paths. Component NPZ bytes are unchanged;
+    the result contains no numerical arrays, shapes, axes, or physical values.
+    """
+
+    preview_cache_directory: Path
+    final_cache_directory: Path
     receipt_path: Path
 
 
@@ -1538,6 +1596,836 @@ def relocate_power_synchrony_cache(
         if destination_published:
             _rollback_published_destination(destination_cache, published_destination_identity)
         raise
+
+
+def _default_adoption_dependencies() -> CacheAdoptionDependencies:
+    """Return the production metadata configuration loader for adoption.
+
+    Returns
+    -------
+    CacheAdoptionDependencies
+        Loader shared with the production Spike-phase launcher. No numerical
+        component is computed or loaded while constructing the dependency.
+    """
+    from src.neural_analysis.lfp_summary.launcher_runtime import (
+        load_metadata_spike_phase_config,
+    )
+
+    return CacheAdoptionDependencies(
+        load_metadata_config=load_metadata_spike_phase_config,
+    )
+
+
+def _historical_mapped_path(
+    historical_path: Path,
+    historical_root: Path,
+    cluster_root: Path,
+    label: str,
+) -> Path:
+    """Map one absolute historical path without touching its old filesystem.
+
+    Parameters
+    ----------
+    historical_path, historical_root : pathlib.Path
+        Absolute producer path and session root recorded in the copied manifest.
+        Neither path needs to exist on the cluster.
+    cluster_root : pathlib.Path
+        Existing canonical cluster session root.
+    label : str
+        Human-readable path role used in validation errors.
+
+    Returns
+    -------
+    pathlib.Path
+        Cluster path with the identical relative suffix below ``cluster_root``.
+    """
+    if not historical_path.is_absolute() or not historical_root.is_absolute():
+        raise ValueError(f"historical {label} and session root must be absolute")
+    if ".." in historical_path.parts or ".." in historical_root.parts:
+        raise ValueError(f"historical {label} must not contain parent traversal")
+    try:
+        relative = historical_path.relative_to(historical_root)
+    except ValueError as error:
+        raise ValueError(
+            f"historical {label} must remain inside its declared session root"
+        ) from error
+    return cluster_root / relative
+
+
+def _normalize_historical_configuration_paths(
+    source_payload: dict[str, Any],
+    historical_root: Path,
+    cluster_root: Path,
+) -> dict[str, Any]:
+    """Rebind documented component paths in copied configuration JSON.
+
+    Parameters
+    ----------
+    source_payload : dict[str, object]
+        Canonical producer configuration with non-component fields removed.
+    historical_root, cluster_root : pathlib.Path
+        Old manifest session root and current cluster session root.
+
+    Returns
+    -------
+    dict[str, object]
+        Deep JSON copy with only session, LFP, sync, and trial-table paths
+        rebound. Scientific values, units, labels, and axes remain unchanged.
+    """
+    normalized = json.loads(json.dumps(source_payload, allow_nan=False))
+
+    def mapped(value: Any, label: str) -> str | None:
+        """Map one serialized path or preserve an optional null."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"historical {label} must be a string path or null")
+        return str(
+            _historical_mapped_path(
+                Path(value), historical_root, cluster_root, label
+            )
+        )
+
+    normalized["session_path"] = mapped(
+        normalized.get("session_path"), "session path"
+    )
+    sites = normalized.get("sites")
+    if not isinstance(sites, list):
+        raise ValueError("historical configuration sites must be a list")
+    for index, site in enumerate(sites):
+        if not isinstance(site, dict):
+            raise ValueError("historical configuration site must be a mapping")
+        site["lfp_path"] = mapped(site.get("lfp_path"), f"LFP site {index}")
+        site["aligned_sync_path"] = mapped(
+            site.get("aligned_sync_path"), f"sync site {index}"
+        )
+    normalized["trial_table_path"] = mapped(
+        normalized.get("trial_table_path"), "trial table"
+    )
+    return normalized
+
+
+def _validate_adoption_scientific_equivalence(
+    source_config: LFPSummaryConfig,
+    destination_config: LFPSummaryConfig,
+    historical_root: Path,
+    cluster_root: Path,
+) -> None:
+    """Require identical Power/Synchrony science after historical path rebinding.
+
+    Parameters
+    ----------
+    source_config, destination_config : LFPSummaryConfig
+        Producer-manifest and current cluster configurations.
+    historical_root, cluster_root : pathlib.Path
+        Sole permitted source-path root substitution.
+
+    Returns
+    -------
+    None
+        PPC, execution, population, output, and top-level seed differences are
+        ignored because they do not affect copied Power/Synchrony components.
+    """
+    source_payload = json.loads(canonical_config_json(source_config))
+    destination_payload = json.loads(canonical_config_json(destination_config))
+    for field in _NON_COMPONENT_CONFIGURATION_FIELDS:
+        source_payload.pop(field, None)
+        destination_payload.pop(field, None)
+    mapped_source = _normalize_historical_configuration_paths(
+        source_payload,
+        historical_root,
+        cluster_root,
+    )
+    if mapped_source != destination_payload:
+        raise ValueError("source and destination scientific configurations differ")
+
+
+def _validate_current_cluster_sources(
+    config: LFPSummaryConfig,
+    cluster_root: Path,
+) -> None:
+    """Require all current Power/Synchrony inputs to be safe regular files.
+
+    Parameters
+    ----------
+    config : LFPSummaryConfig
+        Metadata-derived cluster configuration.
+    cluster_root : pathlib.Path
+        Canonical session root containing every selected input.
+
+    Returns
+    -------
+    None
+        Validates containment and file type without loading numerical values.
+    """
+    for index, site in enumerate(config.sites):
+        _require_regular_source_file(
+            site.lfp_path, cluster_root, f"cluster LFP site {index}"
+        )
+        if site.aligned_sync_path is not None:
+            _require_regular_source_file(
+                site.aligned_sync_path,
+                cluster_root,
+                f"cluster sync site {index}",
+            )
+        if site.acquisition_format == "open_ephys":
+            _require_regular_source_file(
+                site.lfp_path.parent / "lfp_preprocessing.json",
+                cluster_root,
+                f"cluster Open Ephys sidecar site {index}",
+            )
+    if config.trial_table_path is not None:
+        _require_regular_source_file(
+            config.trial_table_path, cluster_root, "cluster trial table"
+        )
+
+
+def _validate_stored_source_fingerprints(
+    stored_fingerprints: Mapping[str, Any],
+    current_fingerprints: Mapping[str, Any],
+    historical_root: Path,
+    cluster_root: Path,
+) -> None:
+    """Compare copied source identities with current cluster source identities.
+
+    Parameters
+    ----------
+    stored_fingerprints, current_fingerprints : Mapping[str, object]
+        Producer-manifest and freshly measured cluster records. Byte sizes and
+        nanosecond mtimes are preserved by ``rsync -a``; small Open Ephys
+        sidecars additionally retain SHA-256 digests and value semantics.
+    historical_root, cluster_root : pathlib.Path
+        Old and current session roots defining the sole path substitution.
+
+    Returns
+    -------
+    None
+        Every mapped record must compare exactly after replacing its path field.
+    """
+    mapped_records: dict[str, dict[str, Any]] = {}
+    for historical_key, raw_record in stored_fingerprints.items():
+        if not isinstance(historical_key, str) or not isinstance(raw_record, Mapping):
+            raise ValueError("stored source fingerprint record is invalid")
+        mapped_path = _historical_mapped_path(
+            Path(historical_key), historical_root, cluster_root, "source fingerprint"
+        )
+        mapped_record = dict(raw_record)
+        mapped_record["path"] = str(mapped_path)
+        mapped_records[str(mapped_path)] = mapped_record
+    if mapped_records != dict(current_fingerprints):
+        raise ValueError(
+            "cluster source fingerprints differ from the rsynced producer records; "
+            "use rsync -a and verify the session inputs"
+        )
+
+
+def _load_adoption_source_manifest(
+    source_cache: Path,
+) -> tuple[dict[str, Any], LFPSummaryConfig, dict[str, Mapping[str, Any]], str]:
+    """Validate a copied producer manifest without opening historical inputs.
+
+    Parameters
+    ----------
+    source_cache : pathlib.Path
+        Cluster-side cache containing only manifest, Power, and Synchrony files.
+
+    Returns
+    -------
+    tuple[dict, LFPSummaryConfig, dict, str]
+        Manifest, restored producer configuration, component-scoped stored
+        source fingerprints, and source manifest SHA-256.
+    """
+    manifest, manifest_bytes = _read_bounded_ascii_json_snapshot(
+        source_cache / "manifest.json", "source manifest"
+    )
+    configuration = manifest.get("configuration")
+    if not isinstance(configuration, dict):
+        raise ValueError("source manifest configuration must be a mapping")
+    source_config = lfp_summary_config_from_json(
+        json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+    )
+    if manifest.get("schema_version") != source_config.schema_version:
+        raise ValueError("source manifest schema version differs from its configuration")
+    if manifest.get("session_id") != source_config.session_id:
+        raise ValueError("source manifest session differs from its configuration")
+    expected_configuration = json.loads(canonical_config_json(source_config))
+    if configuration != expected_configuration:
+        raise ValueError("source manifest configuration is not canonical")
+    components = manifest.get("components")
+    if not isinstance(components, Mapping) or set(components) != set(_COPIED_COMPONENTS):
+        raise ValueError("source manifest must contain only complete Power and Synchrony components")
+
+    stored_by_component: dict[str, Mapping[str, Any]] = {}
+    expected_semantics = source_value_semantics(source_config)
+    for component in _COPIED_COMPONENTS:
+        entry = components.get(component)
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"source manifest component {component} is invalid")
+        stored = entry.get("source_fingerprints")
+        if not isinstance(stored, Mapping):
+            raise ValueError(f"source manifest component fingerprints are invalid: {component}")
+        if entry.get("file_name") != f"{component}.npz":
+            raise ValueError(f"source manifest component filename is invalid: {component}")
+        if entry.get("configuration_snapshot") != expected_configuration:
+            raise ValueError(f"source manifest component snapshot is stale: {component}")
+        if entry.get("configuration_fingerprint") != component_fingerprint(
+            component, source_config
+        ):
+            raise ValueError(f"source manifest component fingerprint is stale: {component}")
+        if entry.get("source_value_semantics") != expected_semantics:
+            raise ValueError(f"source manifest component value semantics are stale: {component}")
+        status = assess_component_status(
+            source_cache,
+            component,
+            source_config,
+            manifest,
+            current_source_fingerprints=stored,
+            validate_headers_only=True,
+        )
+        if status.status != "compatible":
+            raise ValueError(
+                f"source component {component} is not compatible: {status.differences}"
+            )
+        stored_by_component[component] = stored
+    return manifest, source_config, stored_by_component, sha256(manifest_bytes).hexdigest()
+
+
+def _copy_component_to_pair(
+    source_path: Path,
+    preview_path: Path,
+    final_path: Path,
+) -> dict[str, object]:
+    """Stream one component once while writing two independent cache copies.
+
+    Parameters
+    ----------
+    source_path, preview_path, final_path : pathlib.Path
+        Existing source NPZ and two absent staging NPZ paths. Bytes are copied
+        unchanged in fixed-size chunks; no array payload is decoded.
+
+    Returns
+    -------
+    dict[str, object]
+        Source byte count and SHA-256 computed during the single copy pass. Both
+        independent destination files are closed before validation.
+    """
+    digest = sha256()
+    size_bytes = 0
+    with (
+        source_path.open("rb") as source_handle,
+        preview_path.open("xb") as preview_handle,
+        final_path.open("xb") as final_handle,
+    ):
+        while chunk := source_handle.read(_COPY_CHUNK_BYTES):
+            digest.update(chunk)
+            size_bytes += len(chunk)
+            preview_handle.write(chunk)
+            final_handle.write(chunk)
+    return {"size_bytes": size_bytes, "sha256": digest.hexdigest()}
+
+
+def _validate_adoption_stage(
+    cache_directory: Path,
+    config: LFPSummaryConfig,
+    manifest: Mapping[str, Any],
+    source_fingerprints: Mapping[str, Any],
+) -> dict[str, str]:
+    """Header-validate one Power/Synchrony-only prerequisite cache.
+
+    Parameters
+    ----------
+    cache_directory : pathlib.Path
+        Complete staging or published cache directory.
+    config : LFPSummaryConfig
+        Destination configuration whose output path is ``cache_directory``.
+    manifest, source_fingerprints : Mapping[str, object]
+        Rebound manifest and already measured current source identities.
+
+    Returns
+    -------
+    dict[str, str]
+        Compatibility states for Power, Synchrony, and absent Spike-phase.
+    """
+    states: dict[str, str] = {}
+    for component in _COPIED_COMPONENTS:
+        status = assess_component_status(
+            cache_directory,
+            component,
+            config,
+            manifest,
+            current_source_fingerprints=source_fingerprints,
+            validate_headers_only=True,
+        )
+        states[component] = status.status
+        if status.status != "compatible":
+            raise ValueError(
+                f"adopted component {component} is not compatible: {status.differences}"
+            )
+    spike_status = assess_component_status(
+        cache_directory,
+        "spike_phase",
+        config,
+        manifest,
+        current_source_fingerprints=source_fingerprints,
+        validate_headers_only=True,
+    )
+    states["spike_phase"] = spike_status.status
+    if spike_status.status != "missing":
+        raise ValueError("adopted prerequisite cache must have no Spike-phase component")
+    return states
+
+
+def _repository_provenance() -> dict[str, object]:
+    """Return the current commit and tracked cleanliness for the receipt.
+
+    Returns
+    -------
+    dict[str, object]
+        Full Git commit and Boolean tracked-clean state. Untracked data files are
+        intentionally ignored, matching the production launcher policy.
+    """
+    repository_root = Path(__file__).resolve().parents[3]
+    commit = subprocess.run(
+        ("git", "-C", str(repository_root), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        (
+            "git",
+            "-C",
+            str(repository_root),
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+        ),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return {"commit": commit, "tracked_clean": not bool(status.strip())}
+
+
+def _validate_adoption_paths(
+    request: CacheAdoptionRequest,
+) -> tuple[Path, Path, Path, Path, Path, Path]:
+    """Resolve the fixed cluster source, output pair, and receipt paths.
+
+    Returns
+    -------
+    tuple[pathlib.Path, ...]
+        Metadata path, session root, source cache, preview cache, final cache,
+        and fixed external receipt path.
+    """
+    metadata_path = _require_nonsymlink(
+        request.session_metadata_path, "session metadata"
+    )
+    if not metadata_path.is_file():
+        raise ValueError("session metadata must be an existing regular file")
+    cluster_root = _require_nonsymlink(metadata_path.parent, "cluster session root")
+    if not cluster_root.is_dir():
+        raise ValueError("cluster session root must exist")
+    source_cache = _require_direct_processed_child(
+        request.source_cache_directory, cluster_root, "source cache"
+    )
+    if not source_cache.is_dir() or source_cache.is_symlink():
+        raise ValueError("source cache must be an existing nonsymlink directory")
+    if source_cache.name in {
+        "lfp_summary_cache",
+        _ADOPTION_PREVIEW_NAME,
+        _ADOPTION_FINAL_NAME,
+    }:
+        raise ValueError("source cache must be a distinct non-legacy prerequisite cache")
+    preview = _require_direct_processed_child(
+        cluster_root / "processed" / _ADOPTION_PREVIEW_NAME,
+        cluster_root,
+        "preview cache",
+    )
+    final = _require_direct_processed_child(
+        cluster_root / "processed" / _ADOPTION_FINAL_NAME,
+        cluster_root,
+        "final cache",
+    )
+    receipt = _require_nonsymlink(
+        cluster_root / "processed" / _ADOPTION_RECEIPT_NAME,
+        "adoption receipt",
+    )
+    for path, label in (
+        (preview, "preview cache"),
+        (final, "final cache"),
+        (receipt, "adoption receipt"),
+    ):
+        if path.exists() or path.is_symlink():
+            raise FileExistsError(f"{label} already exists")
+    return metadata_path, cluster_root, source_cache, preview, final, receipt
+
+
+def adopt_power_synchrony_cache_pair(
+    request: CacheAdoptionRequest,
+    dependencies: CacheAdoptionDependencies | None = None,
+    runtime: RelocationRuntime | None = None,
+) -> CacheAdoptionResult:
+    """Adopt one rsynced cache into independent preview and final prerequisites.
+
+    Parameters
+    ----------
+    request : CacheAdoptionRequest
+        Cluster metadata, selected probe, copied source cache, and command text.
+    dependencies : CacheAdoptionDependencies or None
+        Injectable metadata configuration loader. ``None`` uses the production
+        launcher loader.
+    runtime : RelocationRuntime or None
+        Optional scalar clock/host/resource providers for deterministic tests.
+
+    Returns
+    -------
+    CacheAdoptionResult
+        Two atomically published Power/Synchrony-only caches and their receipt.
+
+    Notes
+    -----
+    Component files are copied byte-for-byte and validated through NPZ headers.
+    No Power, Synchrony, phase, or PPC numerical computation is performed.
+    """
+    active_dependencies = (
+        _default_adoption_dependencies() if dependencies is None else dependencies
+    )
+    active_runtime = _default_runtime() if runtime is None else runtime
+    started_at = _utc_timestamp(active_runtime.utc_now())
+    started_monotonic = active_runtime.monotonic_seconds()
+    preview_stage: Path | None = None
+    final_stage: Path | None = None
+    temporary_receipt: Path | None = None
+    preview: Path | None = None
+    final: Path | None = None
+    preview_published = False
+    final_published = False
+    preview_identity: _PublishedDestinationIdentity | None = None
+    final_identity: _PublishedDestinationIdentity | None = None
+    try:
+        (
+            metadata_path,
+            cluster_root,
+            source_cache,
+            preview,
+            final,
+            receipt,
+        ) = _validate_adoption_paths(request)
+        _validate_source_cache_members(source_cache)
+        (
+            source_manifest,
+            source_config,
+            stored_fingerprints,
+            source_manifest_hash,
+        ) = _load_adoption_source_manifest(source_cache)
+        historical_root = source_config.session_path
+        expected_source_cache = _historical_mapped_path(
+            source_config.output_directory,
+            historical_root,
+            cluster_root,
+            "source output directory",
+        )
+        if expected_source_cache != source_cache:
+            raise ValueError(
+                "source cache path differs from the producer output-directory mapping"
+            )
+
+        preview_config = active_dependencies.load_metadata_config(
+            metadata_path,
+            request.probe_label,
+            preview,
+            _ADOPTION_PREVIEW_SHUFFLES,
+            _ADOPTION_WORKER_COUNT,
+        )
+        final_config = active_dependencies.load_metadata_config(
+            metadata_path,
+            request.probe_label,
+            final,
+            _ADOPTION_FINAL_SHUFFLES,
+            _ADOPTION_WORKER_COUNT,
+        )
+        for label, config, cache in (
+            ("preview", preview_config, preview),
+            ("final", final_config, final),
+        ):
+            checked_root = _require_session_root(config, cluster_root, label)
+            configured_cache = _require_nonsymlink(
+                config.output_directory, f"{label} output directory"
+            )
+            if checked_root != cluster_root or configured_cache != cache:
+                raise ValueError(f"{label} configuration targets the wrong cache")
+            _validate_adoption_scientific_equivalence(
+                source_config,
+                config,
+                historical_root,
+                cluster_root,
+            )
+        _validate_current_cluster_sources(preview_config, cluster_root)
+
+        current_fingerprints = fingerprint_source_files(
+            preview_config, component="power"
+        )
+        for component in _COPIED_COMPONENTS:
+            _validate_stored_source_fingerprints(
+                stored_fingerprints[component],
+                current_fingerprints,
+                historical_root,
+                cluster_root,
+            )
+
+        preview_manifest = rebind_power_synchrony_manifest(
+            source_manifest,
+            preview_config,
+            destination_source_fingerprints={
+                component: current_fingerprints for component in _COPIED_COMPONENTS
+            },
+        )
+        final_manifest = rebind_power_synchrony_manifest(
+            source_manifest,
+            final_config,
+            destination_source_fingerprints={
+                component: current_fingerprints for component in _COPIED_COMPONENTS
+            },
+        )
+        preview_stage = _create_staging_directory(preview)
+        final_stage = _create_staging_directory(final)
+        copied_hashes: dict[str, dict[str, object]] = {}
+        for component in _COPIED_COMPONENTS:
+            source_hash = _copy_component_to_pair(
+                source_cache / f"{component}.npz",
+                preview_stage / f"{component}.npz",
+                final_stage / f"{component}.npz",
+            )
+            preview_hash = _hash_file_record(preview_stage / f"{component}.npz")
+            final_hash = _hash_file_record(final_stage / f"{component}.npz")
+            if preview_hash != source_hash or final_hash != source_hash:
+                raise ValueError(f"component byte hash differs after adoption: {component}")
+            copied_hashes[component] = {
+                "source": source_hash,
+                "preview": preview_hash,
+                "final": final_hash,
+            }
+        _write_ascii_json(preview_stage / "manifest.json", preview_manifest)
+        _write_ascii_json(final_stage / "manifest.json", final_manifest)
+        preview_states = _validate_adoption_stage(
+            preview_stage, preview_config, preview_manifest, current_fingerprints
+        )
+        final_states = _validate_adoption_stage(
+            final_stage, final_config, final_manifest, current_fingerprints
+        )
+
+        completed_at = _utc_timestamp(active_runtime.utc_now())
+        receipt_payload: dict[str, object] = {
+            "schema_version": "lfp_summary_cache_adoption.v1",
+            "generator": {
+                "module": "src.neural_analysis.lfp_summary_cache_adoption",
+                "version": "1",
+            },
+            "command": list(request.command),
+            "probe_label": request.probe_label,
+            "session_id": preview_config.session_id,
+            "session_metadata_path": str(metadata_path),
+            "source_cache_directory": str(source_cache),
+            "preview_cache_directory": str(preview),
+            "final_cache_directory": str(final),
+            "source_manifest_sha256": source_manifest_hash,
+            "preview_manifest_sha256": lfp_summary_models.sha256_file_content(
+                preview_stage / "manifest.json"
+            ),
+            "final_manifest_sha256": lfp_summary_models.sha256_file_content(
+                final_stage / "manifest.json"
+            ),
+            "component_hashes": copied_hashes,
+            "component_states": {
+                "preview": preview_states,
+                "final": final_states,
+            },
+            "preview": {"shuffle_count": 100, "worker_count": 8},
+            "final": {"shuffle_count": 1000, "worker_count": 8},
+            "repository": _repository_provenance(),
+            "hostname": active_runtime.hostname(),
+            "started_at_utc": started_at,
+            "completed_at_utc": completed_at,
+            "wall_seconds": active_runtime.monotonic_seconds() - started_monotonic,
+            "peak_rss_bytes": int(active_runtime.peak_rss_bytes()),
+        }
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{receipt.name}-",
+            suffix=".tmp",
+            dir=receipt.parent,
+            delete=False,
+        ) as handle:
+            temporary_receipt = Path(handle.name)
+        temporary_receipt.unlink()
+        _write_ascii_json(temporary_receipt, receipt_payload)
+        if _read_ascii_json(temporary_receipt, "temporary adoption receipt") != receipt_payload:
+            raise ValueError("temporary adoption receipt did not preserve provenance")
+
+        preview_identity = _capture_cache_ownership(preview_stage)
+        final_identity = _capture_cache_ownership(final_stage)
+        _publish_staged_cache(preview_stage, preview)
+        preview_stage = None
+        preview_published = True
+        _require_cache_ownership(preview, preview_identity, "after preview publication")
+        _publish_staged_cache(final_stage, final)
+        final_stage = None
+        final_published = True
+        _require_cache_ownership(final, final_identity, "after final publication")
+        _validate_adoption_stage(
+            preview, preview_config, preview_manifest, current_fingerprints
+        )
+        _validate_adoption_stage(
+            final, final_config, final_manifest, current_fingerprints
+        )
+        _require_cache_ownership(preview, preview_identity, "before receipt commit")
+        _require_cache_ownership(final, final_identity, "before receipt commit")
+        os.replace(temporary_receipt, receipt)
+        temporary_receipt = None
+        return CacheAdoptionResult(preview, final, receipt)
+    except Exception:
+        _cleanup_created_path(preview_stage)
+        _cleanup_created_path(final_stage)
+        _cleanup_created_path(temporary_receipt)
+        if final_published:
+            _rollback_published_destination(final, final_identity)
+        if preview_published:
+            _rollback_published_destination(preview, preview_identity)
+        raise
+
+
+def _adoption_followup_commands(
+    request: CacheAdoptionRequest,
+    result: CacheAdoptionResult,
+) -> tuple[tuple[str, str], ...]:
+    """Return shell-safe preview/final validation and submission commands.
+
+    Parameters
+    ----------
+    request : CacheAdoptionRequest
+        Metadata and probe identity used during adoption.
+    result : CacheAdoptionResult
+        Independent published preview and final cache paths.
+
+    Returns
+    -------
+    tuple[tuple[str, str], ...]
+        Ordered human label and shell command pairs. Commands are text only and
+        are never executed or submitted by adoption.
+    """
+    common = (
+        "new",
+        "--session-metadata",
+        str(request.session_metadata_path),
+        "--probe",
+        request.probe_label,
+    )
+
+    def launcher(cache: Path, shuffles: int, *, dry_run: bool, final_run: bool) -> str:
+        """Render one existing launcher invocation without executing it."""
+        tokens = [
+            "uv",
+            "run",
+            "--frozen",
+            "python",
+            "-m",
+            "src.neural_analysis.lfp_spike_phase_launcher",
+            *common,
+            "--cache-directory",
+            str(cache),
+            "--shuffles",
+            str(shuffles),
+            "--workers",
+            "8",
+        ]
+        if dry_run:
+            tokens.append("--dry-run")
+        if final_run:
+            tokens.append("--final-run")
+        return shlex.join(tokens)
+
+    def submission(cache: Path, shuffles: int, *, final_run: bool) -> str:
+        """Render one unchanged PPC Slurm-wrapper invocation."""
+        tokens = [
+            "sbatch",
+            "src/shell_scripts/hpc_ppc.sh",
+            *common,
+            "--cache-directory",
+            str(cache),
+            "--shuffles",
+            str(shuffles),
+            "--workers",
+            "8",
+        ]
+        if final_run:
+            tokens.append("--final-run")
+        return shlex.join(tokens)
+
+    return (
+        ("Preview dry run", launcher(result.preview_cache_directory, 100, dry_run=True, final_run=False)),
+        ("Preview submission", submission(result.preview_cache_directory, 100, final_run=False)),
+        ("Final dry run", launcher(result.final_cache_directory, 1000, dry_run=True, final_run=True)),
+        ("Final submission", submission(result.final_cache_directory, 1000, final_run=True)),
+    )
+
+
+def _parse_adoption_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse the three required cluster cache-adoption inputs.
+
+    Parameters
+    ----------
+    arguments : Sequence[str] or None
+        Arguments excluding the module name, or ``None`` for process arguments.
+
+    Returns
+    -------
+    argparse.Namespace
+        String-valued session metadata, probe, and source-cache fields. No
+        computational or scheduler setting is exposed.
+    """
+    parser = argparse.ArgumentParser(
+        description="Adopt one rsynced PPC prerequisite cache on the cluster."
+    )
+    parser.add_argument("--session-metadata", required=True)
+    parser.add_argument("--probe", required=True)
+    parser.add_argument("--source-cache", required=True)
+    return parser.parse_args(arguments)
+
+
+def adoption_main(arguments: Sequence[str] | None = None) -> int:
+    """Run cluster-side adoption and print later commands without executing them.
+
+    Parameters
+    ----------
+    arguments : Sequence[str] or None
+        Three-option CLI argument sequence or ``None`` for process arguments.
+
+    Returns
+    -------
+    int
+        Zero after both caches and the receipt are durably published.
+    """
+    parsed = _parse_adoption_args(arguments)
+    command_arguments = list(os.sys.argv[1:] if arguments is None else arguments)
+    request = CacheAdoptionRequest(
+        session_metadata_path=Path(parsed.session_metadata),
+        probe_label=parsed.probe,
+        source_cache_directory=Path(parsed.source_cache),
+        command=(
+            os.sys.executable,
+            "-m",
+            "src.neural_analysis.lfp_summary_cache_adoption",
+            *command_arguments,
+        ),
+    )
+    result = adopt_power_synchrony_cache_pair(request)
+    print(f"created preview cache: {result.preview_cache_directory}")
+    print(f"created final cache: {result.final_cache_directory}")
+    print(f"created adoption receipt: {result.receipt_path}")
+    print("\nNext commands (not executed):")
+    for label, command in _adoption_followup_commands(request, result):
+        print(f"{label}:\n  {command}")
+    return 0
 
 
 def _parse_args(arguments: Sequence[str] | None = None) -> argparse.Namespace:
