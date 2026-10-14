@@ -122,11 +122,13 @@ It prints the next preview and final dry-run/submission commands, each using its
 own cache. The existing `hpc_ppc.sh` resource requirements remain unchanged.
 
 A symlinked cluster `$HOME` or another alias above the session directory is
-accepted. Adoption resolves that alias once and uses canonical paths for every
-read and write. The session directory itself and its metadata, `processed`,
-cache directories, and cache members must remain nonsymlink objects. No
-`readlink -f` step is required with the current command; it remains a valid
-workaround for an older checkout.
+accepted by both adoption and the generated PPC launcher commands. Each
+resolves that alias once and uses canonical paths thereafter. The session
+directory itself and its metadata, `processed`, cache directories, and cache
+members must remain nonsymlink objects; those boundaries are checked before a
+session loader or PPC computation starts. No `readlink -f` step is required
+with the current commands; it remains a valid workaround for an older
+checkout.
 
 Do not add deletion to the synchronization command. Prefer the generated
 relative interregional paths; older absolute-path configurations must be made

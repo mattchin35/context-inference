@@ -219,32 +219,46 @@ def _prepare_new_run(
     if command.session_metadata is not None:
         if dependencies.load_metadata_config is None:
             raise ValueError("metadata-driven launcher configuration is unavailable")
+        metadata_path = _validated_session_metadata_path(command.session_metadata)
+        session_path = metadata_path.parent
+        cache_directory = _validated_new_cache_directory(
+            command.cache_directory,
+            session_path,
+        )
         config = dependencies.load_metadata_config(
-            Path(command.session_metadata),
+            metadata_path,
             command.probe_label,
-            Path(command.cache_directory),
+            cache_directory,
             command.shuffle_count,
             command.worker_count,
         )
     else:
         assert command.session_path is not None
+        session_path = _validated_session_path(command.session_path)
+        cache_directory = _validated_new_cache_directory(
+            command.cache_directory,
+            session_path,
+        )
         population = dependencies.load_active_population(
-            Path(command.session_path),
+            session_path,
             command.probe_label,
         )
         config = dependencies.build_config(
-            Path(command.session_path),
+            session_path,
             population,
             command.shuffle_count,
             command.worker_count,
         )
-    cache_directory = _validated_new_cache_directory(
-        Path(command.cache_directory),
-        Path(config.session_path),
-    )
+    configured_session_path = _validated_session_path(config.session_path)
+    if configured_session_path != session_path:
+        raise ValueError("launcher configuration does not match the selected session")
     # The creator supplies scientific settings; the explicit CLI target alone
     # replaces its protected default cache location.
-    config = replace(config, output_directory=cache_directory)
+    config = replace(
+        config,
+        session_path=configured_session_path,
+        output_directory=cache_directory,
+    )
     _validate_launcher_config(config, command)
     _validate_new_cache_preflight(config)
     source_fingerprints = dict(dependencies.source_fingerprints(config))
@@ -805,20 +819,47 @@ def _validated_new_cache_directory(cache_directory: Path, session_path: Path) ->
         User-supplied corrected-cache directory. It must exist, be a real
         directory, and be a direct child of ``session_path / 'processed'``.
     session_path : pathlib.Path
-        Selected session directory. Its path and the target path may not cross
-        symbolic links or lexical parent-directory aliases.
+        Selected session directory. A symbolic-link alias above this directory
+        is permitted, but the session, ``processed``, and cache entries must be
+        real directories.
 
     Returns
     -------
     pathlib.Path
         Absolute, normalized cache directory used in every saved artifact.
     """
-    resolved_session = _resolved_nonsymlink_path(session_path, "session_path")
-    resolved_cache = _resolved_nonsymlink_path(cache_directory, "cache_directory")
-    processed_directory = resolved_session / "processed"
-    if processed_directory.is_symlink():
+    resolved_session = _validated_session_path(session_path)
+    requested_cache = _absolute_path_without_parent_alias(
+        cache_directory,
+        "cache_directory",
+    )
+    requested_processed = requested_cache.parent
+    requested_cache_session = requested_processed.parent
+    if requested_cache.is_symlink():
+        raise ValueError("cache_directory must not be a symbolic link")
+    if requested_processed.is_symlink():
         raise ValueError("session processed directory must not be a symbolic link")
-    resolved_processed = processed_directory.resolve(strict=False)
+    if requested_cache_session.is_symlink():
+        raise ValueError("session_path must not be a symbolic link")
+    if requested_processed.name != "processed":
+        raise ValueError(
+            "cache_directory must be a direct child of the selected session processed directory"
+        )
+    try:
+        resolved_cache_session = requested_cache_session.resolve(strict=True)
+        resolved_processed = requested_processed.resolve(strict=True)
+        resolved_cache = requested_cache.resolve(strict=True)
+    except FileNotFoundError as error:
+        raise ValueError("cache_directory must be an existing directory") from error
+    if resolved_cache_session != resolved_session:
+        raise ValueError(
+            "cache_directory must be a direct child of the selected session processed directory"
+        )
+    expected_processed = resolved_session / "processed"
+    if resolved_processed != expected_processed:
+        raise ValueError(
+            "cache_directory must be a direct child of the selected session processed directory"
+        )
     if resolved_cache.name == _LEGACY_CACHE_DIRECTORY_NAME:
         raise ValueError("the legacy lfp_summary_cache directory is protected")
     if resolved_cache.parent != resolved_processed:
@@ -830,32 +871,90 @@ def _validated_new_cache_directory(cache_directory: Path, session_path: Path) ->
     return resolved_cache
 
 
-def _resolved_nonsymlink_path(path: Path, label: str) -> Path:
-    """Return a normalized path after rejecting aliases and symlink components.
+def _validated_session_path(session_path: Path) -> Path:
+    """Return one canonical real session directory.
 
     Parameters
     ----------
-    path : pathlib.Path
-        Absolute or current-directory-relative filesystem identity.
-    label : str
-        Human-readable argument name included in validation errors.
+    session_path : pathlib.Path
+        Absolute or current-directory-relative session path. Symbolic-link
+        ancestors above this directory are allowed; the directory entry itself
+        must not be a symbolic link. The path carries no physical units.
 
     Returns
     -------
     pathlib.Path
-        Absolute normalized path. This helper does not create filesystem
-        entries and accepts a final path that does not yet exist.
+        Absolute canonical session directory. No arrays are read or returned.
+    """
+    requested_session = _absolute_path_without_parent_alias(
+        session_path,
+        "session_path",
+    )
+    if requested_session.is_symlink():
+        raise ValueError("session_path must not be a symbolic link")
+    try:
+        resolved_session = requested_session.resolve(strict=True)
+    except FileNotFoundError as error:
+        raise ValueError("session_path must be an existing directory") from error
+    if not resolved_session.is_dir():
+        raise ValueError("session_path must be an existing directory")
+    return resolved_session
+
+
+def _validated_session_metadata_path(metadata_path: Path) -> Path:
+    """Return one canonical real metadata file inside a real session directory.
+
+    Parameters
+    ----------
+    metadata_path : pathlib.Path
+        Absolute or current-directory-relative metadata path. Symbolic-link
+        ancestors above its parent session directory are allowed; neither the
+        session directory nor metadata file may be a symbolic link. The path
+        carries no physical units.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute canonical regular-file path. No metadata contents or numerical
+        arrays are read by this function.
+    """
+    requested_metadata = _absolute_path_without_parent_alias(
+        metadata_path,
+        "session_metadata",
+    )
+    if requested_metadata.is_symlink():
+        raise ValueError("session_metadata must not be a symbolic link")
+    resolved_session = _validated_session_path(requested_metadata.parent)
+    try:
+        resolved_metadata = requested_metadata.resolve(strict=True)
+    except FileNotFoundError as error:
+        raise ValueError("session_metadata must be an existing file") from error
+    if not resolved_metadata.is_file() or resolved_metadata.parent != resolved_session:
+        raise ValueError("session_metadata must be a file in the selected session")
+    return resolved_metadata
+
+
+def _absolute_path_without_parent_alias(path: Path, label: str) -> Path:
+    """Return an absolute lexical path after rejecting ``..`` components.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Absolute or current-directory-relative filesystem path. The value has
+        no array axes or physical units.
+    label : str
+        Human-readable scalar argument name used in validation errors.
+
+    Returns
+    -------
+    pathlib.Path
+        Absolute lexical path. Symlinks are intentionally left unresolved so
+        callers can enforce security boundaries before canonicalization.
     """
     requested = Path(path)
     if ".." in requested.parts:
         raise ValueError(f"{label} must not contain a parent-directory alias")
-    absolute_path = requested if requested.is_absolute() else Path.cwd() / requested
-    current = Path(absolute_path.anchor)
-    for part in absolute_path.parts[1:]:
-        current /= part
-        if current.is_symlink():
-            raise ValueError(f"{label} must not traverse a symbolic link")
-    return absolute_path.resolve(strict=False)
+    return requested if requested.is_absolute() else Path.cwd() / requested
 
 
 def _validate_new_cache_preflight(config: LFPSummaryConfig) -> None:

@@ -123,10 +123,12 @@ paths. Preview and final cannot share one cache because the preview adds
 `spike_phase.npz` to its cache.
 
 Normal cluster aliases above the session directory, including a symlinked
-`$HOME`, are accepted and resolved once before validation. The session
-directory itself, `neural_session.json`, `processed`, cache directories, and
-cache members must be real nonsymlink objects. Older checkouts that reject the
-home alias can use `SESSION="$(readlink -f "$SESSION")"` as a workaround.
+`$HOME`, are accepted by both cache adoption and new launcher runs. Each
+command resolves the alias once and uses canonical session, metadata, and
+cache paths thereafter. The session directory itself, `neural_session.json`,
+`processed`, cache directories, and cache members must be real nonsymlink
+objects. Older checkouts that reject the home alias can use
+`SESSION="$(readlink -f "$SESSION")"` as a workaround.
 
 ### Local preview
 
@@ -163,6 +165,11 @@ The existing final intent remains explicit: use the separate
 `processed/ppc_prerequisites_final` cache with `--shuffles 1000 --final-run`.
 This is the same computation with the reviewed final shuffle count, not a new
 analysis mode.
+
+The same path rule applies to both `--session-metadata` and the legacy
+`--session-path`: an alias above the session is allowed, but a symlink at the
+session, metadata file, `processed`, or selected cache is rejected before any
+session loader or numerical computation starts.
 
 ### Slurm
 
