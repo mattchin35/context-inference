@@ -338,3 +338,84 @@ def test_prepare_refuses_partial_target_pair_without_overwrite(tmp_path: Path) -
         )
 
     assert marker.read_text(encoding="ascii") == "preserve\n"
+
+
+def test_prepare_adopts_complete_rsynced_source_before_cluster_phase(
+    tmp_path: Path,
+) -> None:
+    """A transferred source uses relocation validation, not active-path status.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Empty pytest directory used for scalar cache-member and receipt fixtures.
+
+    Returns
+    -------
+    None
+        Adoption precedes one cluster-local phase preparation; Power/Synchrony
+        computation and source status classification are never dispatched.
+    """
+    from src.neural_analysis.lfp_summary.preparation_runner import (
+        PreparationDependencies,
+        PreparationRequest,
+        prepare_session_lfp,
+    )
+
+    metadata_path = _metadata_path(tmp_path)
+    session = metadata_path.parent.resolve()
+    source = session / "processed" / "ppc_source"
+    source.mkdir(parents=True)
+    for name in ("manifest.json", "power.npz", "synchrony.npz"):
+        (source / name).write_bytes(b"transferred")
+    calls: list[str] = []
+
+    def load_config(
+        _metadata_path: Path,
+        _probe: str,
+        cache: Path,
+        shuffles: int,
+        _workers: int,
+    ) -> object:
+        """Return one scalar target configuration after adoption."""
+        return _config(session, cache, shuffles)
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        """Fail if transferred source bytes enter a numerical/status path."""
+        raise AssertionError("rsynced source must be handled by adoption")
+
+    def adopt(*, preview: Path, final: Path, **_: object) -> None:
+        """Model successful metadata/header relocation to the target pair."""
+        calls.append("adopt")
+        preview.mkdir()
+        final.mkdir()
+
+    def prepare_phase(config: object) -> object:
+        """Record one cluster-local phase preparation against preview config."""
+        calls.append(f"phase:{config.output_directory.name}")
+        return SimpleNamespace(prepared_phase_cache_state="cold")
+
+    dependencies = PreparationDependencies(
+        load_config=load_config,
+        component_status=forbidden,
+        compute_power=forbidden,
+        prepare_phase=prepare_phase,
+        compute_synchrony=forbidden,
+        adopt_cache_pair=adopt,
+        repository_state=lambda: ("d" * 40, True),
+        now_utc=lambda: "2030-01-02T03-04-08Z",
+    )
+
+    result = prepare_session_lfp(
+        PreparationRequest(metadata_path, ("prepare", str(metadata_path))),
+        dependencies,
+    )
+
+    assert calls == ["adopt", "phase:ppc_preview"]
+    receipt = json.loads(result.receipt_path.read_text(encoding="ascii"))
+    assert receipt["stages"] == {
+        "power": "reused",
+        "prepared_phase": "computed",
+        "synchrony": "reused",
+        "cache_pair": "adopted",
+    }
