@@ -33,7 +33,7 @@ not a duplicate specification.
 | `run_batch.py` | Standard-library CLI `main` plus `read_config_list`; bounded multi-session `dry-run` and foreground `new`, with evidence-gated cross-session workers. |
 | `slurm.py` | Standard-library one-shot `submit-new`, exact-directory `submit-resume`, and read-only `status` operations; it owns reviewed `standard` and `condition_validation` resource receipts and `sacct` parsing but no scientific computation. |
 | `pooled/` | Separate fixed-regularization pooled-window analysis with overlay configuration, window-target checkpoints, compact native/transfer/gap reporting, and a single-session CLI. |
-| `../psth_webapp.py` and `../webapp/task_decoding_views.py` | Existing Streamlit entrypoint and early-routed **Task-variable decoding results** view. Discovery and rendering use completed saved runs only. |
+| `../psth_webapp.py`, `../webapp/task_decoding_views.py`, and `../webapp/condition_generalization_views.py` | Existing Streamlit entrypoint and separate early-routed **Task-variable decoding results** and **Condition generalization results** views. Discovery and rendering use completed saved runs only. |
 | `../../../docs/examples/neural_analysis/task_decoding_config.json` | Portable, explicit configuration template. Its repository path is `docs/examples/neural_analysis/task_decoding_config.json`. |
 | `../../../docs/examples/neural_analysis/pooled_task_decoding_config.json` | Portable pooled overlay selecting the sibling all-condition/all-target base example. |
 | `../../shell_scripts/task_variable_decoding_slurm.sh` | Thin single-session Slurm wrapper with one-CPU defaults, tracked-clean checkout checks, offline locked execution, and direct TERM propagation. Python submission applies either the standard 3-GiB/48-hour request or the 8-GiB/72-hour condition-validation override. Its repository path is `src/shell_scripts/task_variable_decoding_slurm.sh`. |
@@ -280,6 +280,15 @@ immutable run directory. Existing per-time-bin runs retain their original
 loader and command surface; they are not discovered or interpreted as pooled
 runs.
 
+To inspect a completed run interactively, launch the metadata-driven webapp and
+select **Condition generalization results**. The view automatically scans the
+selected session's `analysis_runs` directory, then offers saved run, training
+window, target, and native/transfer/gap selectors. It validates and plots the
+selected `results.npz`; it does not recompute models or open raw neural data.
+The execution-time session path is displayed only as provenance, allowing a
+cluster run copied into the corresponding workstation session to remain
+portable.
+
 ## Focused test ownership
 
 | Implementation | Focused tests |
@@ -295,7 +304,7 @@ runs.
 | `run_batch.py` | `task_decoding/test_run_batch.py` |
 | `slurm.py`, `task_variable_decoding_slurm.sh` | `task_decoding/test_slurm.py` |
 | `plotting.py` | `task_decoding/test_plotting.py` |
-| saved-result webapp | `test_webapp_task_decoding.py`, `test_webapp_task_decoding_rendering.py`, and routing tests |
+| saved-result webapp | `test_webapp_task_decoding.py`, `test_webapp_task_decoding_rendering.py`, `test_condition_generalization_webapp.py`, and routing tests |
 | READMEs, example, and command surface | `test_task_decoding_documentation.py` |
 
 `test_synthetic_integration.py` exercises both the legacy pooled path and a
