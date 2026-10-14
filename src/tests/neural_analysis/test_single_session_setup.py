@@ -185,7 +185,7 @@ def test_configured_probe_roles_must_match_requested_roles(tmp_path: Path) -> No
 
 
 def test_commands_are_copyable_and_owned_by_existing_parsers(tmp_path: Path) -> None:
-    """Generated local commands retain exact existing command interfaces."""
+    """Generated commands adopt once and keep preview/final caches independent."""
     cache = tmp_path / "processed" / "ppc cache"
     scaffold_session_analysis(
         tmp_path, pfc_probe_id="ProbePFC", hpc_probe_id="ProbeHPC"
@@ -200,17 +200,39 @@ def test_commands_are_copyable_and_owned_by_existing_parsers(tmp_path: Path) -> 
 
     task_tokens = shlex.split(commands["task_decoding"].local_preflight)
     pooled_tokens = shlex.split(commands["condition_generalization"].local_preflight)
+    adoption_tokens = shlex.split(commands["spike_phase_ppc"].preparation)
+    ppc_preflight_tokens = shlex.split(commands["spike_phase_ppc"].local_preflight)
     ppc_preview_tokens = shlex.split(commands["spike_phase_ppc"].local_preview)
     ppc_final_tokens = shlex.split(commands["spike_phase_ppc"].local_final)
     assert task_parser().parse_args(task_tokens[5:]).command == "dry-run"
     assert pooled_parser().parse_args(pooled_tokens[5:]).command == "dry-run"
-    assert parse_launcher_command(ppc_preview_tokens[5:]).shuffle_count == 100
+    assert adoption_tokens[3:5] == [
+        "-m",
+        "src.neural_analysis.lfp_summary_cache_adoption",
+    ]
+    assert adoption_tokens[-2:] == ["--source-cache", str(cache.resolve())]
+    preflight = parse_launcher_command(ppc_preflight_tokens[5:])
+    preview = parse_launcher_command(ppc_preview_tokens[5:])
+    assert preflight.dry_run is True
+    assert preflight.shuffle_count == 100
+    assert preview.shuffle_count == 100
     final = parse_launcher_command(ppc_final_tokens[5:])
     assert final.shuffle_count == 1000
     assert final.final_run is True
-    assert "--dry-run" in commands["spike_phase_ppc"].local_preflight
+    assert preflight.cache_directory == tmp_path / "processed" / "ppc_prerequisites_preview"
+    assert preview.cache_directory == preflight.cache_directory
+    assert final.cache_directory == tmp_path / "processed" / "ppc_prerequisites_final"
+    assert preview.cache_directory != final.cache_directory
     assert commands["spike_phase_ppc"].cluster_preview.startswith(
         "sbatch src/shell_scripts/hpc_ppc.sh new"
+    )
+    cluster_preview_tokens = shlex.split(commands["spike_phase_ppc"].cluster_preview)
+    cluster_final_tokens = shlex.split(commands["spike_phase_ppc"].cluster_final)
+    assert cluster_preview_tokens[cluster_preview_tokens.index("--cache-directory") + 1] == str(
+        preview.cache_directory
+    )
+    assert cluster_final_tokens[cluster_final_tokens.index("--cache-directory") + 1] == str(
+        final.cache_directory
     )
 
 

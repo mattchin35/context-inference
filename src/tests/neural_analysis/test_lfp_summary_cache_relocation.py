@@ -10,6 +10,7 @@ import importlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from typing import Any
@@ -277,6 +278,97 @@ def _relocation_api() -> tuple[type[object], Any]:
         getattr(module, "CacheRelocationRequest"),
         getattr(module, "relocate_power_synchrony_cache"),
     )
+
+
+def _adoption_api() -> tuple[type[object], type[object], Any]:
+    """Return the public cluster-side cache-adoption interfaces.
+
+    Returns
+    -------
+    tuple[type, type, callable]
+        ``CacheAdoptionRequest``, ``CacheAdoptionDependencies``, and
+        ``adopt_power_synchrony_cache_pair`` from the dedicated command module.
+        The operation may inspect metadata and NPZ headers but must never load
+        numerical payload arrays or access the old workstation filesystem.
+    """
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_adoption")
+    return (
+        getattr(module, "CacheAdoptionRequest"),
+        getattr(module, "CacheAdoptionDependencies"),
+        getattr(module, "adopt_power_synchrony_cache_pair"),
+    )
+
+
+def _adoption_request_and_dependencies(
+    fixture: _RelocationFixture,
+) -> tuple[object, object, Path]:
+    """Create one already-rsynced source cache and injected config loader.
+
+    Parameters
+    ----------
+    fixture : _RelocationFixture
+        Synthetic workstation and cluster roots with byte-equivalent inputs.
+
+    Returns
+    -------
+    tuple[CacheAdoptionRequest, CacheAdoptionDependencies, pathlib.Path]
+        A three-argument request, deterministic metadata-config dependency, and
+        the cluster-side source cache. The workstation input files are removed
+        after their manifest is copied so adoption cannot read them.
+    """
+    source_cache = fixture.cluster_root / "processed" / "ppc_prerequisites_open_ephys_v1"
+    shutil.copytree(fixture.source_cache, source_cache)
+    metadata_path = fixture.cluster_root / "neural_session.json"
+    metadata_path.write_text("{}\n", encoding="ascii")
+
+    # The copied manifest intentionally retains workstation paths and source
+    # fingerprints, but those original inputs are unavailable on the cluster.
+    shutil.rmtree(fixture.local_root / "processed" / "inputs")
+    (fixture.local_root / "processed" / "trials.csv").unlink()
+
+    request_type, dependencies_type, _ = _adoption_api()
+
+    def load_metadata_config(
+        received_metadata_path: Path,
+        probe_label: str,
+        cache_directory: Path,
+        shuffle_count: int,
+        worker_count: int,
+    ) -> LFPSummaryConfig:
+        """Return the cluster config for one fixed preview or final identity."""
+        assert received_metadata_path == metadata_path
+        assert probe_label == "ProbeHPC"
+        return replace(
+            fixture.destination_config,
+            output_directory=cache_directory,
+            ppc=replace(
+                fixture.destination_config.ppc,
+                shuffle_count=shuffle_count,
+            ),
+            ppc_execution=replace(
+                fixture.destination_config.ppc_execution,
+                worker_count=worker_count,
+            ),
+        )
+
+    request = request_type(
+        session_metadata_path=metadata_path,
+        probe_label="ProbeHPC",
+        source_cache_directory=source_cache,
+        command=(
+            "python",
+            "-m",
+            "src.neural_analysis.lfp_summary_cache_adoption",
+            "--session-metadata",
+            str(metadata_path),
+            "--probe",
+            "ProbeHPC",
+            "--source-cache",
+            str(source_cache),
+        ),
+    )
+    dependencies = dependencies_type(load_metadata_config=load_metadata_config)
+    return request, dependencies, source_cache
 
 
 def _request(
@@ -2008,3 +2100,300 @@ def test_relocation_publication_window_valid_component_race_fails_closed(
     assert all(not path.exists() for path in receipt_temporary_paths)
     assert not relocation_fixture.receipt_path.exists()
     assert _directory_inventory(receipt_parent) == receipt_parent_before
+
+
+def test_cluster_adoption_builds_independent_preview_and_final_caches(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One cluster request rebinds two byte-identical prerequisite caches.
+
+    The old workstation inputs have been removed by the fixture helper. Success
+    therefore proves adoption relies on the copied manifest records and current
+    cluster inputs rather than trying to revisit the workstation filesystem.
+    """
+    request, dependencies, source_cache = _adoption_request_and_dependencies(
+        relocation_fixture
+    )
+    _, _, adopt = _adoption_api()
+    source_before = _directory_inventory(source_cache)
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_adoption")
+    monkeypatch.setattr(
+        module.np,
+        "load",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("adoption loaded an NPZ payload")
+        ),
+    )
+
+    result = adopt(request, dependencies=dependencies, runtime=_runtime())
+
+    preview = relocation_fixture.cluster_root / "processed" / "ppc_prerequisites_preview"
+    final = relocation_fixture.cluster_root / "processed" / "ppc_prerequisites_final"
+    receipt = (
+        relocation_fixture.cluster_root
+        / "processed"
+        / "ppc_prerequisites_adoption.json"
+    )
+    assert result.preview_cache_directory == preview
+    assert result.final_cache_directory == final
+    assert result.receipt_path == receipt
+    assert _directory_inventory(source_cache) == source_before
+    assert {path.name for path in preview.iterdir()} == {
+        "manifest.json",
+        "power.npz",
+        "synchrony.npz",
+    }
+    assert {path.name for path in final.iterdir()} == {
+        "manifest.json",
+        "power.npz",
+        "synchrony.npz",
+    }
+    for component in ("power", "synchrony"):
+        source_bytes = (source_cache / f"{component}.npz").read_bytes()
+        assert (preview / f"{component}.npz").read_bytes() == source_bytes
+        assert (final / f"{component}.npz").read_bytes() == source_bytes
+
+    preview_config = dependencies.load_metadata_config(
+        request.session_metadata_path, request.probe_label, preview, 100, 8
+    )
+    final_config = dependencies.load_metadata_config(
+        request.session_metadata_path, request.probe_label, final, 1000, 8
+    )
+    for cache, config in ((preview, preview_config), (final, final_config)):
+        manifest = json.loads((cache / "manifest.json").read_text(encoding="ascii"))
+        assert manifest["configuration"] == json.loads(canonical_config_json(config))
+        fingerprints = fingerprint_source_files(config, component="power")
+        for component in ("power", "synchrony"):
+            status = assess_component_status(
+                cache,
+                component,
+                config,
+                manifest,
+                current_source_fingerprints=fingerprints,
+                validate_headers_only=True,
+            )
+            assert status.status == "compatible"
+        assert assess_component_status(
+            cache,
+            "spike_phase",
+            config,
+            manifest,
+            current_source_fingerprints=fingerprints,
+            validate_headers_only=True,
+        ).status == "missing"
+
+    receipt_payload = json.loads(receipt.read_text(encoding="ascii"))
+    assert receipt_payload["schema_version"] == "lfp_summary_cache_adoption.v1"
+    assert receipt_payload["source_cache_directory"] == str(source_cache)
+    assert receipt_payload["preview_cache_directory"] == str(preview)
+    assert receipt_payload["final_cache_directory"] == str(final)
+    assert receipt_payload["command"] == list(request.command)
+
+
+@pytest.mark.parametrize(
+    "existing_name",
+    (
+        "ppc_prerequisites_preview",
+        "ppc_prerequisites_final",
+        "ppc_prerequisites_adoption.json",
+    ),
+)
+def test_cluster_adoption_refuses_every_existing_public_target_without_changes(
+    relocation_fixture: _RelocationFixture,
+    existing_name: str,
+) -> None:
+    """Adoption never merges with or overwrites a cache or success receipt."""
+    request, dependencies, source_cache = _adoption_request_and_dependencies(
+        relocation_fixture
+    )
+    _, _, adopt = _adoption_api()
+    existing = relocation_fixture.cluster_root / "processed" / existing_name
+    if existing.suffix == ".json":
+        existing.write_bytes(b"existing receipt")
+    else:
+        existing.mkdir()
+        (existing / "sentinel").write_bytes(b"existing cache")
+    source_before = _directory_inventory(source_cache)
+    existing_before = _path_snapshot(existing)
+
+    with pytest.raises((FileExistsError, ValueError), match="(?i)exist|destination|receipt"):
+        adopt(request, dependencies=dependencies)
+
+    assert _directory_inventory(source_cache) == source_before
+    assert _path_snapshot(existing) == existing_before
+    other_names = {
+        "ppc_prerequisites_preview",
+        "ppc_prerequisites_final",
+        "ppc_prerequisites_adoption.json",
+    } - {existing_name}
+    assert all(
+        not (relocation_fixture.cluster_root / "processed" / name).exists()
+        for name in other_names
+    )
+
+
+def test_cluster_adoption_rejects_unexpected_source_member(
+    relocation_fixture: _RelocationFixture,
+) -> None:
+    """A source containing Spike-phase or work artifacts is not adoptable."""
+    request, dependencies, source_cache = _adoption_request_and_dependencies(
+        relocation_fixture
+    )
+    _, _, adopt = _adoption_api()
+    (source_cache / "spike_phase.npz").write_bytes(b"unexpected")
+
+    with pytest.raises(ValueError, match="(?i)unexpected|member|spike"):
+        adopt(request, dependencies=dependencies)
+
+    assert not (source_cache.parent / "ppc_prerequisites_preview").exists()
+    assert not (source_cache.parent / "ppc_prerequisites_final").exists()
+
+
+def test_cluster_adoption_rejects_changed_cluster_source_fingerprint(
+    relocation_fixture: _RelocationFixture,
+) -> None:
+    """Copied cache provenance cannot be rebound onto different cluster inputs."""
+    request, dependencies, source_cache = _adoption_request_and_dependencies(
+        relocation_fixture
+    )
+    _, _, adopt = _adoption_api()
+    assert relocation_fixture.destination_config.trial_table_path is not None
+    relocation_fixture.destination_config.trial_table_path.write_text(
+        "choice_time\n99.0\n", encoding="ascii"
+    )
+
+    with pytest.raises(ValueError, match="(?i)fingerprint|source|differ"):
+        adopt(request, dependencies=dependencies)
+
+    assert _directory_inventory(source_cache)
+    assert not (source_cache.parent / "ppc_prerequisites_preview").exists()
+    assert not (source_cache.parent / "ppc_prerequisites_final").exists()
+
+
+def test_cluster_adoption_rejects_changed_scientific_configuration(
+    relocation_fixture: _RelocationFixture,
+) -> None:
+    """Path and PPC count changes cannot hide a Power/Synchrony change."""
+    request, dependencies, source_cache = _adoption_request_and_dependencies(
+        relocation_fixture
+    )
+    _, dependencies_type, adopt = _adoption_api()
+    original_loader = dependencies.load_metadata_config
+
+    def changed_loader(
+        metadata_path: Path,
+        probe_label: str,
+        cache_directory: Path,
+        shuffle_count: int,
+        worker_count: int,
+    ) -> LFPSummaryConfig:
+        """Return one valid but scientifically different trial selection."""
+        config = original_loader(
+            metadata_path,
+            probe_label,
+            cache_directory,
+            shuffle_count,
+            worker_count,
+        )
+        return replace(
+            config,
+            trial_filter=replace(config.trial_filter, excluded_trial_indices=(0,)),
+        )
+
+    changed_dependencies = dependencies_type(load_metadata_config=changed_loader)
+    with pytest.raises(ValueError, match="(?i)scientific|configuration|equivalent"):
+        adopt(request, dependencies=changed_dependencies)
+
+    assert _directory_inventory(source_cache)
+    assert not (source_cache.parent / "ppc_prerequisites_preview").exists()
+    assert not (source_cache.parent / "ppc_prerequisites_final").exists()
+
+
+def test_cluster_adoption_rolls_back_first_cache_when_second_publish_fails(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary second-publication failure leaves no visible partial pair."""
+    request, dependencies, source_cache = _adoption_request_and_dependencies(
+        relocation_fixture
+    )
+    _, _, adopt = _adoption_api()
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_adoption")
+    real_publish = module._publish_staged_cache
+    publish_count = 0
+
+    def fail_second_publish(staging: Path, destination: Path) -> None:
+        """Publish preview normally and fail before final becomes public."""
+        nonlocal publish_count
+        publish_count += 1
+        if publish_count == 2:
+            raise OSError("synthetic final publication failure")
+        real_publish(staging, destination)
+
+    monkeypatch.setattr(module, "_publish_staged_cache", fail_second_publish)
+    with pytest.raises(OSError, match="synthetic final publication failure"):
+        adopt(request, dependencies=dependencies)
+
+    assert _directory_inventory(source_cache)
+    assert not (source_cache.parent / "ppc_prerequisites_preview").exists()
+    assert not (source_cache.parent / "ppc_prerequisites_final").exists()
+    assert not (source_cache.parent / "ppc_prerequisites_adoption.json").exists()
+    assert not any("-stage-" in path.name for path in source_cache.parent.iterdir())
+
+
+def test_cluster_adoption_preserves_concurrently_changed_first_cache(
+    relocation_fixture: _RelocationFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rollback never deletes a preview cache whose published bytes changed."""
+    request, dependencies, source_cache = _adoption_request_and_dependencies(
+        relocation_fixture
+    )
+    _, _, adopt = _adoption_api()
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_adoption")
+    real_publish = module._publish_staged_cache
+    publish_count = 0
+    replacement = b"concurrent owner"
+
+    def mutate_first_then_fail_second(staging: Path, destination: Path) -> None:
+        """Simulate another process taking ownership after preview publication."""
+        nonlocal publish_count
+        publish_count += 1
+        if publish_count == 1:
+            real_publish(staging, destination)
+            (destination / "power.npz").write_bytes(replacement)
+            return
+        raise OSError("synthetic final publication failure")
+
+    monkeypatch.setattr(module, "_publish_staged_cache", mutate_first_then_fail_second)
+    with pytest.raises(OSError, match="synthetic final publication failure"):
+        adopt(request, dependencies=dependencies)
+
+    preview = source_cache.parent / "ppc_prerequisites_preview"
+    assert preview.is_dir()
+    assert (preview / "power.npz").read_bytes() == replacement
+    assert not (source_cache.parent / "ppc_prerequisites_final").exists()
+    assert not (source_cache.parent / "ppc_prerequisites_adoption.json").exists()
+
+
+def test_cluster_adoption_parser_has_only_three_required_workflow_inputs() -> None:
+    """The public command exposes no computational or scheduler overrides."""
+    module = importlib.import_module("src.neural_analysis.lfp_summary_cache_adoption")
+    parsed = module._parse_adoption_args(
+        (
+            "--session-metadata",
+            "/cluster/session/neural_session.json",
+            "--probe",
+            "ProbeB",
+            "--source-cache",
+            "/cluster/session/processed/source-cache",
+        )
+    )
+
+    assert parsed.session_metadata == "/cluster/session/neural_session.json"
+    assert parsed.probe == "ProbeB"
+    assert parsed.source_cache == "/cluster/session/processed/source-cache"
+    assert not hasattr(parsed, "workers")
+    assert not hasattr(parsed, "shuffles")
+    assert not hasattr(parsed, "partition")
