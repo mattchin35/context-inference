@@ -2215,6 +2215,109 @@ def test_cluster_adoption_builds_independent_preview_and_final_caches(
     assert receipt_payload["command"] == list(request.command)
 
 
+def test_cluster_adoption_accepts_symlinked_ancestor_above_real_session(
+    relocation_fixture: _RelocationFixture,
+) -> None:
+    """A cluster home alias is allowed while all published paths are canonical.
+
+    The symlink is an ancestor of the real session directory, matching an HPC
+    ``$HOME`` alias. The session, ``processed`` directory, source cache, and
+    cache members themselves remain ordinary directories and files.
+    """
+    request, dependencies, source_cache = _adoption_request_and_dependencies(
+        relocation_fixture
+    )
+    request_type, _, adopt = _adoption_api()
+    alias_parent = relocation_fixture.cluster_root.parent / "cluster-home-alias"
+    alias_parent.symlink_to(
+        relocation_fixture.cluster_root.parent,
+        target_is_directory=True,
+    )
+    alias_session = alias_parent / relocation_fixture.cluster_root.name
+    alias_metadata = alias_session / "neural_session.json"
+    alias_source = alias_session / "processed" / source_cache.name
+    alias_request = request_type(
+        session_metadata_path=alias_metadata,
+        probe_label=request.probe_label,
+        source_cache_directory=alias_source,
+        command=("adopt", str(alias_metadata), str(alias_source)),
+    )
+
+    result = adopt(alias_request, dependencies=dependencies, runtime=_runtime())
+
+    canonical_processed = relocation_fixture.cluster_root.resolve() / "processed"
+    assert result.preview_cache_directory == (
+        canonical_processed / "ppc_prerequisites_preview"
+    )
+    assert result.final_cache_directory == (
+        canonical_processed / "ppc_prerequisites_final"
+    )
+    assert result.receipt_path == (
+        canonical_processed / "ppc_prerequisites_adoption.json"
+    )
+    receipt = json.loads(result.receipt_path.read_text(encoding="ascii"))
+    assert receipt["command"] == list(alias_request.command)
+    assert receipt["session_metadata_path"] == str(
+        (relocation_fixture.cluster_root / "neural_session.json").resolve()
+    )
+    assert receipt["source_cache_directory"] == str(source_cache.resolve())
+
+
+@pytest.mark.parametrize(
+    "unsafe_path_kind",
+    ("metadata_file", "session_directory", "processed_directory", "source_cache"),
+)
+def test_cluster_adoption_rejects_symlink_at_or_below_session_boundary(
+    relocation_fixture: _RelocationFixture,
+    unsafe_path_kind: str,
+) -> None:
+    """Home aliases do not weaken metadata, session, processed, or cache safety."""
+    request, dependencies, source_cache = _adoption_request_and_dependencies(
+        relocation_fixture
+    )
+    request_type, _, adopt = _adoption_api()
+    metadata_path = request.session_metadata_path
+    requested_source = source_cache
+
+    if unsafe_path_kind == "metadata_file":
+        real_metadata = metadata_path.with_name("real-neural-session.json")
+        metadata_path.rename(real_metadata)
+        metadata_path.symlink_to(real_metadata.name)
+    elif unsafe_path_kind == "session_directory":
+        session_alias = relocation_fixture.cluster_root.parent / "session-alias"
+        session_alias.symlink_to(
+            relocation_fixture.cluster_root,
+            target_is_directory=True,
+        )
+        metadata_path = session_alias / "neural_session.json"
+        requested_source = session_alias / "processed" / source_cache.name
+    elif unsafe_path_kind == "processed_directory":
+        processed = relocation_fixture.cluster_root / "processed"
+        real_processed = relocation_fixture.cluster_root / "processed-real"
+        processed.rename(real_processed)
+        processed.symlink_to(real_processed.name, target_is_directory=True)
+    else:
+        real_source = source_cache.with_name(f"{source_cache.name}-real")
+        source_cache.rename(real_source)
+        source_cache.symlink_to(real_source.name, target_is_directory=True)
+
+    unsafe_request = request_type(
+        session_metadata_path=metadata_path,
+        probe_label=request.probe_label,
+        source_cache_directory=requested_source,
+        command=("unsafe-adoption-test", unsafe_path_kind),
+    )
+    with pytest.raises(ValueError, match="(?i)symlink|session|processed|source cache"):
+        adopt(unsafe_request, dependencies=dependencies)
+
+    canonical_processed = relocation_fixture.cluster_root.resolve() / "processed"
+    assert not (canonical_processed / "ppc_prerequisites_preview").exists()
+    assert not (canonical_processed / "ppc_prerequisites_final").exists()
+    assert not (canonical_processed / "ppc_prerequisites_adoption.json").exists()
+    if canonical_processed.is_dir():
+        assert not any("-stage-" in path.name for path in canonical_processed.iterdir())
+
+
 @pytest.mark.parametrize(
     "existing_name",
     (
