@@ -104,8 +104,7 @@ disables the affected view and explains which source is unavailable.
 
 ### Prepare Power, Synchrony, and phase
 
-Schema-version-3 metadata makes preparation one command on either the
-workstation or cluster:
+Schema-version-3 metadata makes workstation preparation one command:
 
 ```bash
 SESSION="$HOME/contextProjectData/CT026/CT026_20260803_latent_inference"
@@ -114,12 +113,23 @@ uv run --frozen python -m src.neural_analysis.single_session_setup prepare \
   --session-metadata "$SESSION/neural_session.json"
 ```
 
-On a workstation, this computes only missing Power, reusable phase, and
-Synchrony products through the existing implementations. Synchrony receives
-the exact phase object prepared once by the command. On a cluster with an
-`rsync -a` copied prerequisite cache, it adopts the compatible Power/Synchrony
-bytes first and creates or reuses cluster-local phase. It never computes PPC or
-submits a job.
+This computes only missing Power, reusable phase, and Synchrony products
+through the existing implementations. Synchrony receives the exact phase
+object prepared once by the command.
+
+Do not run computational preparation on a cluster login node. From the
+tracked-clean repository root, submit the reusable preparation wrapper:
+
+```bash
+sbatch src/shell_scripts/hpc_lfp_prepare.sh \
+  --session-metadata "$SESSION/neural_session.json"
+```
+
+The wrapper owns its `normal` partition, eight-CPU, 32-GiB, 24-hour request and
+writes `$HOME/logs/lfp_prepare_<job-id>.log`. With an `rsync -a` copied
+prerequisite cache, it adopts compatible Power/Synchrony bytes first and
+creates or reuses cluster-local phase. It never computes PPC. The PPC wrapper
+remains independently configured on `unlimited`.
 
 The metadata names two independent run caches:
 

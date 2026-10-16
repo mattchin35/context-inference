@@ -105,8 +105,10 @@ class AnalysisCommands:
     cluster_preview, cluster_final : str or None
         Existing Slurm submission commands. ``cluster_final`` is PPC-only.
     preparation : str or None
-        One non-computational prerequisite command. PPC uses this to adopt the
-        rsynced source into independent preview and final caches.
+        Local preparation command. PPC uses the existing preparation runner to
+        publish prerequisites and create or reuse prepared phase.
+    cluster_preparation : str or None
+        Slurm preparation command with resources owned by its tracked wrapper.
 
     Notes
     -----
@@ -120,6 +122,7 @@ class AnalysisCommands:
     cluster_preview: str | None
     cluster_final: str | None
     preparation: str | None = None
+    cluster_preparation: str | None = None
 
 
 def _write_json_exclusive(path: Path, payload: Mapping[str, object]) -> bool:
@@ -708,6 +711,14 @@ def build_metadata_analysis_commands(
             "--session-metadata",
             canonical_metadata,
         ),
+        cluster_preparation=shlex.join(
+            (
+                "sbatch",
+                "src/shell_scripts/hpc_lfp_prepare.sh",
+                "--session-metadata",
+                str(canonical_metadata),
+            )
+        ),
     )
     return MappingProxyType(existing)
 
@@ -800,6 +811,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"\n{name}:")
                 for command in (
                     command_set.preparation,
+                    command_set.cluster_preparation,
                     command_set.local_preflight,
                     command_set.local_preview,
                     command_set.local_final,

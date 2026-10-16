@@ -363,7 +363,6 @@ def test_metadata_commands_include_simple_slurm_preparation(tmp_path: Path) -> N
         (
             "uv",
             "run",
-            "--frozen",
             "python",
             "-m",
             "src.neural_analysis.single_session_setup",

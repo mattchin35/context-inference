@@ -64,7 +64,7 @@ existing commands for all four analysis families.
 
 ## 3. Prepare PPC prerequisites
 
-Run one command in the environment where the PPC job will run:
+On a workstation, run the preparation command directly:
 
 ```bash
 uv run --frozen python -m src.neural_analysis.single_session_setup prepare \
@@ -76,8 +76,21 @@ Power implementation, prepares phase once, passes that exact phase object to
 the existing Synchrony implementation, and publishes independent preview and
 final prerequisite caches. It does not compute PPC.
 
-On the cluster, if the metadata-declared prerequisite cache was copied with
-`rsync -a`, `prepare` first uses the existing provenance/header adoption path
+Do not run that computational command on a cluster login node. Submit the
+tracked preparation wrapper from the repository root instead:
+
+```bash
+sbatch src/shell_scripts/hpc_lfp_prepare.sh \
+  --session-metadata "$METADATA"
+```
+
+The wrapper owns the reviewed `normal` partition, eight-CPU, 32-GiB, and
+24-hour request. Its log is
+`$HOME/logs/lfp_prepare_<job-id>.log`. PPC preview and final resources remain
+owned separately by `hpc_ppc.sh` on `unlimited`.
+
+If the metadata-declared prerequisite cache was copied with `rsync -a`, the
+cluster preparation first uses the existing provenance/header adoption path
 for Power and Synchrony, then creates or reuses the cluster-local prepared-phase
 cache. It does not recompute compatible transferred Power or Synchrony.
 
@@ -112,9 +125,11 @@ They require the preparation products and refuse unsafe retained work. The
 legacy explicit `new --probe --cache-directory --shuffles --workers` launcher
 route remains available for schema-version-2 and historical workflows.
 
-The Slurm wrapper resource directives are unchanged: the existing partition,
-CPU, memory, wall-time, signal, logging, and mail requirements still apply.
-Neither `init`, `check`, nor `prepare` submits a Slurm job.
+The PPC Slurm wrapper resource directives are unchanged: the existing
+partition, CPU, memory, wall-time, signal, logging, and mail requirements still
+apply. `init`, `check`, and the Python `prepare` command do not themselves
+submit a Slurm job; cluster preparation is explicit through
+`hpc_lfp_prepare.sh`.
 
 ## 5. Synchronizing to the cluster
 
