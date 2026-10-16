@@ -10,6 +10,7 @@ from src.neural_analysis.lfp_spike_phase_launcher import parse_launcher_command
 from src.neural_analysis.single_session_setup import (
     _parser as setup_parser,
     build_analysis_commands,
+    build_metadata_analysis_commands,
     inspect_session_readiness,
     scaffold_session_analysis,
 )
@@ -58,6 +59,57 @@ def _write_complete_metadata(session_root: Path, cache: Path) -> None:
     (session_root / "neural_session.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="ascii"
     )
+
+
+def _write_version_three_metadata(session_root: Path) -> Path:
+    """Write portable metadata and return its canonical control-file path.
+
+    Parameters
+    ----------
+    session_root : pathlib.Path
+        Existing synthetic session directory.
+
+    Returns
+    -------
+    pathlib.Path
+        Version-3 metadata path containing scalar relative path identities only.
+    """
+    payload = {
+        "schema_version": "3",
+        "session": "synthetic-session",
+        "acquisition": "open_ephys",
+        "behavior": {"trials": "processed/trials.csv", "events": None},
+        "probes": {
+            "ProbeA": {
+                "lfp": "ephys/A/lfp.dat",
+                "alignment": "ephys/A/alignment.npz",
+                "sorter": "ephys/A/sorter",
+                "quality": "ephys/A/channel_quality.csv",
+                "sites": {"PFC1": 0},
+            },
+            "ProbeB": {
+                "lfp": "ephys/B/lfp.dat",
+                "alignment": "ephys/B/alignment.npz",
+                "sorter": "ephys/B/sorter",
+                "quality": "ephys/B/channel_quality.csv",
+                "sites": {"HPC1": 0},
+            },
+        },
+        "site_pairs": [["PFC1", "HPC1"]],
+        "analysis": {
+            "probe_roles": {"pfc": "ProbeA", "hpc": "ProbeB", "ppc": "ProbeB"},
+            "ppc": {
+                "prerequisite_cache": "processed/ppc_source",
+                "preview_cache": "processed/ppc_preview",
+                "final_cache": "processed/ppc_final",
+                "preview_shuffles": 100,
+                "final_shuffles": 1000,
+            },
+        },
+    }
+    metadata_path = session_root / "neural_session.json"
+    metadata_path.write_text(json.dumps(payload) + "\n", encoding="ascii")
+    return metadata_path
 
 
 def test_scaffold_creates_editable_files_without_overwriting_metadata(tmp_path: Path) -> None:
@@ -280,3 +332,43 @@ def test_readiness_only_reads_control_files_and_never_creates_outputs(tmp_path: 
     assert not report.ready
     assert before == after
     assert not (tmp_path / "analysis_runs").exists()
+
+
+def test_metadata_commands_include_simple_slurm_preparation(tmp_path: Path) -> None:
+    """The metadata workflow exposes one wrapper-owned cluster preparation call.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Pytest-managed session root containing scalar metadata only.
+
+    Returns
+    -------
+    None
+        The assertion covers command text; no scheduler job or analysis runs.
+    """
+    metadata_path = _write_version_three_metadata(tmp_path)
+
+    commands = build_metadata_analysis_commands(metadata_path)["spike_phase_ppc"]
+
+    assert commands.cluster_preparation == shlex.join(
+        (
+            "sbatch",
+            "src/shell_scripts/hpc_lfp_prepare.sh",
+            "--session-metadata",
+            str(metadata_path.resolve()),
+        )
+    )
+    assert commands.preparation == shlex.join(
+        (
+            "uv",
+            "run",
+            "--frozen",
+            "python",
+            "-m",
+            "src.neural_analysis.single_session_setup",
+            "prepare",
+            "--session-metadata",
+            str(metadata_path.resolve()),
+        )
+    )
