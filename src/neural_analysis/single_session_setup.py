@@ -747,8 +747,90 @@ def _print_report(report: SessionReadinessReport) -> None:
             print(f"  - {blocker}")
 
 
+def _labeled_analysis_commands(
+    analysis_name: str,
+    commands: AnalysisCommands,
+) -> tuple[tuple[str, str], ...]:
+    """Return stable user-facing labels for one analysis command bundle.
+
+    Parameters
+    ----------
+    analysis_name : str
+        One key from :data:`ANALYSIS_NAMES`.
+    commands : AnalysisCommands
+        Shell-safe command strings. They contain scalar filesystem identities
+        and categorical execution arguments, not loaded scientific arrays.
+
+    Returns
+    -------
+    tuple[tuple[str, str], ...]
+        Ordered ``(label, command)`` pairs with absent routes omitted. Labels
+        distinguish validation, local execution, and scheduler submission.
+
+    Raises
+    ------
+    ValueError
+        If ``analysis_name`` is not a supported single-session family.
+    """
+    if analysis_name not in ANALYSIS_NAMES:
+        raise ValueError(f"unknown analysis command family: {analysis_name}")
+    if analysis_name == "spike_phase_ppc":
+        candidates = (
+            ("workstation preparation", commands.preparation),
+            ("cluster preparation", commands.cluster_preparation),
+            ("preview dry-run", commands.local_preflight),
+            ("local preview", commands.local_preview),
+            ("local final", commands.local_final),
+            ("cluster preview", commands.cluster_preview),
+            ("cluster final", commands.cluster_final),
+        )
+    else:
+        candidates = (
+            ("local dry-run", commands.local_preflight),
+            ("local run", commands.local_preview),
+            ("cluster submission", commands.cluster_preview),
+        )
+    return tuple((label, command) for label, command in candidates if command is not None)
+
+
+def _print_command_instructions(
+    report: SessionReadinessReport,
+    commands_by_analysis: Mapping[str, AnalysisCommands],
+) -> None:
+    """Print labeled commands for every family regardless of readiness.
+
+    Parameters
+    ----------
+    report : SessionReadinessReport
+        Read-only readiness and blocker records for the current session.
+    commands_by_analysis : mapping[str, AnalysisCommands]
+        Shell-safe command text keyed by the same fixed analysis names.
+
+    Returns
+    -------
+    None
+        Text is written to stdout. No command is executed, no scheduler is
+        contacted, and no output directory is created.
+
+    Raises
+    ------
+    ValueError
+        If command and readiness mappings do not cover the same analysis keys.
+    """
+    if tuple(commands_by_analysis) != tuple(report.analyses):
+        raise ValueError("analysis command families disagree with readiness report")
+    print("\nCommand instructions:")
+    for analysis_name, commands in commands_by_analysis.items():
+        readiness = report.analyses[analysis_name]
+        print(f"\n{analysis_name}:")
+        status = "READY" if readiness.ready else "BLOCKED; resolve blockers above"
+        print(f"  status: {status}")
+        for label, command in _labeled_analysis_commands(analysis_name, commands):
+            print(f"  {label}: {command}")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run preparation-only setup and return zero for a fully ready session.
+    """Run single-session setup and return zero for a fully ready session.
 
     Parameters
     ----------
@@ -803,23 +885,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             ppc_cache_directory=resolved.analysis.ppc.preview_cache,
         )
         _print_report(report)
-        if report.ready:
-            print("\nCommands for later explicit execution:")
-            for name, command_set in build_metadata_analysis_commands(
-                resolved.metadata_path
-            ).items():
-                print(f"\n{name}:")
-                for command in (
-                    command_set.preparation,
-                    command_set.cluster_preparation,
-                    command_set.local_preflight,
-                    command_set.local_preview,
-                    command_set.local_final,
-                    command_set.cluster_preview,
-                    command_set.cluster_final,
-                ):
-                    if command is not None:
-                        print(f"  {command}")
+        _print_command_instructions(
+            report,
+            build_metadata_analysis_commands(resolved.metadata_path),
+        )
         return 0 if report.ready else 2
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)

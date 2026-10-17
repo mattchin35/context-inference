@@ -59,10 +59,77 @@ output paths are relative, so the complete session tree can be synchronized to
 another host without editing paths.
 
 `check` reads small control files and named filesystem paths. It does not load
-neural arrays, run an analysis, or submit a job. When ready, it prints the
-existing commands for all four analysis families.
+neural arrays, run an analysis, or submit a job. It always prints labeled local
+and cluster instructions for all four analysis families. A blocked analysis
+keeps its instructions visible beneath its blockers, while the command returns
+status 2 until every analysis is ready.
 
-## 3. Prepare PPC prerequisites
+## 3. Task-variable decoding
+
+Validate the single-session task-variable configuration without running the
+analysis:
+
+```bash
+uv run --frozen python -m src.neural_analysis.task_decoding.run_session dry-run \
+  --config "$SESSION/task_decoding_config.json"
+```
+
+Submit the existing condition-validation resource profile:
+
+```bash
+bash src/shell_scripts/task_variable_decoding_slurm.sh submit-new \
+  --config "$SESSION/task_decoding_config.json" \
+  --resource-profile condition_validation
+```
+
+The wrapper owns resource selection, immutable preparation, submission, and
+the submission receipt. It does not depend on any PPC job.
+
+## 4. Condition generalization
+
+Validate the pooled multi-window configuration:
+
+```bash
+uv run --frozen python -m src.neural_analysis.task_decoding.pooled.run_session dry-run \
+  --config "$SESSION/pooled_task_decoding_config.json"
+```
+
+Submit the existing pooled runner:
+
+```bash
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh submit-new \
+  --config "$SESSION/pooled_task_decoding_config.json"
+```
+
+Condition generalization uses the task-decoding configuration as its declared
+base configuration, but it is a separate run and does not require the ordinary
+task-variable job to finish first.
+
+## 5. Interregional regression
+
+Validate the regression configuration:
+
+```bash
+uv run --frozen python -m src.neural_analysis.interregional.run_session dry-run \
+  --config "$SESSION/interregional_regression_config.json"
+```
+
+Submit the existing Slurm runner:
+
+```bash
+sbatch src/shell_scripts/interregional_regression_slurm.sh new \
+  --config "$SESSION/interregional_regression_config.json"
+```
+
+This job is independent of task decoding, condition generalization, and PPC.
+
+## 6. PPC preparation, preview, and final
+
+PPC is the only family with a separate prerequisite job. The `prepare` command
+does not run task-variable decoding, condition generalization, interregional
+regression, or PPC itself. It prepares Power, Synchrony, and reusable phase.
+
+### Prepare prerequisites
 
 On a workstation, run the preparation command directly:
 
@@ -100,7 +167,7 @@ members, or stale/running/failed component state is rejected without
 overwriting it. A successful invocation writes a timestamped preparation
 receipt under `analysis_runs`.
 
-## 4. Preview and final PPC runs
+### Preview and final runs
 
 Dry-run the preview first:
 
@@ -131,7 +198,7 @@ apply. `init`, `check`, and the Python `prepare` command do not themselves
 submit a Slurm job; cluster preparation is explicit through
 `hpc_lfp_prepare.sh`.
 
-## 5. Synchronizing to the cluster
+## 7. Synchronizing to the cluster
 
 Use `rsync -a` so the source fingerprint policy retains sizes and nanosecond
 modification times. Copy the complete session metadata and declared input
