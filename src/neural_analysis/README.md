@@ -6,6 +6,8 @@ spike-phase/PPC, see [`SINGLE_SESSION_SETUP.md`](SINGLE_SESSION_SETUP.md). The
 setup command scaffolds control files, reports blockers, and prepares existing
 Power/Synchrony/phase prerequisites when explicitly asked. It never submits a
 job or changes the underlying computations.
+The non-destructive whole-session return command is documented under
+[`Copy cluster outputs back to the workstation`](SINGLE_SESSION_SETUP.md#8-copy-cluster-outputs-back-to-the-workstation).
 
 Neural-session metadata is a small JSON file that tells the existing analysis
 code where one session's behavior, LFP, synchronization, and spike sources are.

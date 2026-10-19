@@ -214,3 +214,48 @@ be real nonsymlink objects.
 Resume, report-recovery, and rerender commands remain documented in the main
 [`README.md`](README.md). Task-decoding and interregional details remain in
 their package-specific README files.
+
+## 8. Copy cluster outputs back to the workstation
+
+After the cluster jobs are complete, define the matching session locations.
+This example uses CT026 2026-08-04:
+
+```bash
+LOCAL_SESSION="/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260804_latent_inference"
+REMOTE_SESSION="mchin1@mchin1.hpc.einsteinmed.edu:~/contextProjectData/CT026/CT026_20260804_latent_inference"
+```
+
+Preview every proposed transfer first:
+
+```bash
+rsync -a --dry-run --itemize-changes --relative \
+  "$REMOTE_SESSION/./analysis_runs/" \
+  "$REMOTE_SESSION/./processed/ppc_prerequisites_preview/" \
+  "$REMOTE_SESSION/./processed/ppc_prerequisites_final/" \
+  "$REMOTE_SESSION/./processed/ppc_prerequisites_adoption.json" \
+  "$LOCAL_SESSION/"
+```
+
+If the dry-run lists only the expected new or updated outputs, perform the
+copy:
+
+```bash
+rsync -a --info=progress2 --relative \
+  "$REMOTE_SESSION/./analysis_runs/" \
+  "$REMOTE_SESSION/./processed/ppc_prerequisites_preview/" \
+  "$REMOTE_SESSION/./processed/ppc_prerequisites_final/" \
+  "$REMOTE_SESSION/./processed/ppc_prerequisites_adoption.json" \
+  "$LOCAL_SESSION/"
+```
+
+`analysis_runs` covers task-variable decoding, condition generalization,
+interregional regression, PPC reports, and preparation receipts. The two PPC
+cache directories contain the completed preview and final components; the
+adoption receipt preserves their cluster provenance. The command has no
+deletion option, so local files absent from the cluster remain untouched.
+
+`processed/lfp_summary_work` is intentionally excluded. It is a large,
+machine-local prepared-phase/checkpoint cache rather than a portable result.
+The detailed task-decoding and pooled-decoding sections in the main README
+retain their stricter per-run staging and validation procedures when an
+individual immutable run must be verified before publication.
