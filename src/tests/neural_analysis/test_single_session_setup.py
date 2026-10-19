@@ -521,3 +521,30 @@ def test_single_session_guide_documents_every_cluster_job() -> None:
     ):
         assert command in guide
     assert "does not run task-variable decoding" in guide
+
+
+def test_single_session_guide_documents_non_destructive_copy_back() -> None:
+    """The quickstart copies all session outputs without deleting local data."""
+    repository_root = Path(__file__).resolve().parents[3]
+    guide = (
+        repository_root / "src" / "neural_analysis" / "SINGLE_SESSION_SETUP.md"
+    ).read_text(encoding="ascii")
+    readme = (
+        repository_root / "src" / "neural_analysis" / "README.md"
+    ).read_text(encoding="ascii")
+
+    section = guide.split("## 8. Copy cluster outputs back to the workstation", 1)[1]
+    assert 'LOCAL_SESSION="/home/matt/Documents/EXPERIMENTS/contextProjectData/' in section
+    assert 'REMOTE_SESSION="mchin1@mchin1.hpc.einsteinmed.edu:' in section
+    assert "rsync -a --dry-run --itemize-changes --relative" in section
+    assert "rsync -a --info=progress2 --relative" in section
+    assert '"$REMOTE_SESSION/./analysis_runs/"' in section
+    assert '"$REMOTE_SESSION/./processed/ppc_prerequisites_preview/"' in section
+    assert '"$REMOTE_SESSION/./processed/ppc_prerequisites_final/"' in section
+    assert '"$REMOTE_SESSION/./processed/ppc_prerequisites_adoption.json"' in section
+    assert "lfp_summary_work" in section
+    assert "intentionally excluded" in section
+    assert "--delete" not in section
+    assert "Task-variable decoding" in guide
+    assert "PPC preparation, preview, and final" in guide
+    assert "SINGLE_SESSION_SETUP.md#8-copy-cluster-outputs-back-to-the-workstation" in readme
