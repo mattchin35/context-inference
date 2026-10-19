@@ -1009,6 +1009,9 @@ def test_public_session_cache_route_is_read_only_and_uses_saved_configuration(
     manifest_path = preview / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     saved_configuration = _full_saved_component_configuration(tmp_path)
+    saved_configuration["output_directory"] = (
+        "/cluster/session/processed/ppc_prerequisites_preview"
+    )
     manifest["configuration"] = saved_configuration
     for entry in manifest["components"].values():
         entry["configuration_snapshot"] = saved_configuration
