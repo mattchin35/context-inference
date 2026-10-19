@@ -757,7 +757,7 @@ class RouteSidebar:
         del kwargs
         self.labels.append(label)
         option_set = set(options)
-        if option_set == {"snapshot", "live"}:
+        if {"snapshot", "live"}.issubset(option_set):
             return self.source_mode
         if option_set == {"ProbeA", "ProbeB"}:
             return "ProbeB"
@@ -830,6 +830,245 @@ class RouteFakeStreamlit(FakeStreamlit):
         """Record one noncomputational provenance/status caption."""
 
         self.messages.append(("caption", message))
+
+
+def _write_session_cache_fixture(
+    root: Path,
+    *,
+    name: str,
+    session_id: str = "synthetic-session",
+    components: tuple[str, ...] = ("power", "synchrony", "spike_phase"),
+) -> Path:
+    """Write one tiny copied-cache topology for read-only discovery tests.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Writable temporary root; no experimental or network path is accessed.
+    name : str
+        Direct child directory name used as the cache's categorical label.
+    session_id : str
+        Saved session identity with no physical units.
+    components : tuple[str, ...]
+        Completed component names. Tiny marker arrays have shape ``(1,)`` and
+        are used only to establish regular NPZ file identities.
+
+    Returns
+    -------
+    pathlib.Path
+        Cache directory containing one manifest and the requested component
+        files. Saved source paths deliberately use a cluster-only prefix.
+    """
+
+    cache = root / name
+    cache.mkdir()
+    configuration = {
+        "session_id": session_id,
+        "output_directory": f"/cluster/session/processed/{name}",
+        "ppc": {"shuffle_count": 100 if "preview" in name else 1000},
+    }
+    manifest = {
+        "schema_version": "1",
+        "session_id": session_id,
+        "configuration": configuration,
+        "components": {
+            component: {
+                "state": "complete",
+                "file_name": f"{component}.npz",
+                "configuration_snapshot": configuration,
+                "warnings": [],
+            }
+            for component in components
+        },
+    }
+    (cache / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for component in components:
+        np.savez(cache / f"{component}.npz", marker=np.array([1], dtype=np.int64))
+    return cache
+
+
+def test_session_cache_inspection_exposes_only_completed_component_files(
+    tmp_path: Path,
+) -> None:
+    """A copied incomplete final cache remains useful without claiming PPC completion."""
+
+    cache = _write_session_cache_fixture(
+        tmp_path,
+        name="ppc_prerequisites_final",
+        components=("power", "synchrony"),
+    )
+
+    inspection = lfp_summary_webapp.inspect_session_cache(
+        cache,
+        expected_session_id="synthetic-session",
+        label="final",
+    )
+
+    assert inspection.is_scientific_result
+    assert inspection.available_components == ("power", "synchrony")
+    assert inspection.missing_components == ("spike_phase",)
+    assert inspection.source_directory == Path(
+        "/cluster/session/processed/ppc_prerequisites_final"
+    )
+
+
+def test_session_cache_inspection_rejects_wrong_session_and_symlinked_component(
+    tmp_path: Path,
+) -> None:
+    """Declared caches cannot cross session identity or component-file boundaries."""
+
+    wrong_session = _write_session_cache_fixture(
+        tmp_path,
+        name="wrong_session",
+        session_id="another-session",
+    )
+    symlinked = _write_session_cache_fixture(
+        tmp_path,
+        name="symlinked",
+        components=("power",),
+    )
+    target = symlinked / "power-target.npz"
+    (symlinked / "power.npz").rename(target)
+    (symlinked / "power.npz").symlink_to(target.name)
+
+    wrong_inspection = lfp_summary_webapp.inspect_session_cache(
+        wrong_session,
+        expected_session_id="synthetic-session",
+        label="preview",
+    )
+    symlink_inspection = lfp_summary_webapp.inspect_session_cache(
+        symlinked,
+        expected_session_id="synthetic-session",
+        label="preview",
+    )
+
+    assert not wrong_inspection.is_scientific_result
+    assert "session" in wrong_inspection.message.lower()
+    assert not symlink_inspection.is_scientific_result
+    assert "symlink" in symlink_inspection.message.lower()
+
+
+def test_session_cache_default_prefers_complete_final_then_complete_preview(
+    tmp_path: Path,
+) -> None:
+    """Default selection is final only when final PPC is actually committed."""
+
+    preview = _write_session_cache_fixture(
+        tmp_path,
+        name="ppc_prerequisites_preview",
+    )
+    final = _write_session_cache_fixture(
+        tmp_path,
+        name="ppc_prerequisites_final",
+        components=("power", "synchrony"),
+    )
+    inspections = {
+        "preview": lfp_summary_webapp.inspect_session_cache(
+            preview,
+            expected_session_id="synthetic-session",
+            label="preview",
+        ),
+        "final": lfp_summary_webapp.inspect_session_cache(
+            final,
+            expected_session_id="synthetic-session",
+            label="final",
+        ),
+    }
+
+    assert lfp_summary_webapp.default_session_cache_label(inspections) == "preview"
+
+    np.savez(final / "spike_phase.npz", marker=np.array([1], dtype=np.int64))
+    manifest = json.loads((final / "manifest.json").read_text(encoding="utf-8"))
+    manifest["components"]["spike_phase"] = {
+        "state": "complete",
+        "file_name": "spike_phase.npz",
+        "configuration_snapshot": manifest["configuration"],
+        "warnings": [],
+    }
+    (final / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    inspections["final"] = lfp_summary_webapp.inspect_session_cache(
+        final,
+        expected_session_id="synthetic-session",
+        label="final",
+    )
+
+    assert lfp_summary_webapp.default_session_cache_label(inspections) == "final"
+
+
+def test_public_session_cache_route_is_read_only_and_uses_saved_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Metadata cache viewing loads one saved component without compute or raw I/O."""
+
+    preview = _write_session_cache_fixture(
+        tmp_path,
+        name="ppc_prerequisites_preview",
+        session_id="cluster-produced-session",
+    )
+    manifest_path = preview / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    saved_configuration = _full_saved_component_configuration(tmp_path)
+    manifest["configuration"] = saved_configuration
+    for entry in manifest["components"].values():
+        entry["configuration_snapshot"] = saved_configuration
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    streamlit = RouteFakeStreamlit(
+        source_mode="session cache",
+        snapshot_text="",
+        view="power",
+    )
+    dependency_calls: list[str] = []
+    metadata_calls: list[Path] = []
+
+    def load_component(
+        path: Path,
+        saved_manifest: dict[str, object],
+        component: str,
+    ) -> dict[str, np.ndarray]:
+        """Return tiny saved Power arrays and record the selected cache identity."""
+
+        assert path == preview / "power.npz"
+        assert saved_manifest["session_id"] == "cluster-produced-session"
+        dependency_calls.append(f"load_{component}")
+        return _small_power_snapshot_arrays()
+
+    dependencies = replace(
+        _fake_dependencies(dependency_calls, []),
+        load_component=load_component,
+    )
+    monkeypatch.setattr(
+        lfp_summary_webapp,
+        "plot_cached_snapshot_component",
+        lambda *_args, **_kwargs: plt.figure(),
+    )
+
+    lfp_summary_webapp.render_lfp_summary_view(
+        streamlit,
+        session_id="cluster-produced-session",
+        session_path=tmp_path,
+        output_directory=tmp_path / "legacy_live_cache",
+        sites=_summary_sites(tmp_path),
+        site_pairs=(("PFC", "HPC1"),),
+        sorter_paths={"ProbeA": tmp_path / "sorter_a", "ProbeB": tmp_path / "sorter_b"},
+        aligned_spike_paths={
+            "ProbeA": tmp_path / "aligned_a.npz",
+            "ProbeB": tmp_path / "aligned_b.npz",
+        },
+        cluster_metadata_loader=lambda path: metadata_calls.append(path),
+        channel_metadata_loader=lambda path: metadata_calls.append(path),
+        session_cache_directories={"preview": preview},
+        dependencies=dependencies,
+    )
+
+    assert dependency_calls == ["load_power"]
+    assert metadata_calls == []
+    assert streamlit.sidebar.button_labels == []
+    assert len(streamlit.figures) == 1
+    assert not plt.fignum_exists(streamlit.figures[0].number)
+    captions = " ".join(message for kind, message in streamlit.messages if kind == "caption")
+    assert "/cluster/session" in captions
 
 
 def test_summary_defaults_are_valid_ui_analysis_settings() -> None:

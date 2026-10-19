@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.neural_analysis import lfp_phase_clustering, psth_webapp
+from src.neural_analysis import lfp_phase_clustering, psth_webapp, session_metadata
 from src.neural_analysis import lfp_summary_webapp
 from src.neural_analysis.lfp_summary_models import component_fingerprint
 from src.neural_analysis.webapp import (
@@ -204,7 +204,26 @@ def test_metadata_summary_route_forwards_arbitrary_probe_sources_lazily(
         )
         for probe in original_session.probes
     )
-    session = replace(original_session, probes=versioned_probes)
+    preview_cache = tmp_path / "processed/ppc_prerequisites_preview"
+    final_cache = tmp_path / "processed/ppc_prerequisites_final"
+    session = replace(
+        original_session,
+        probes=versioned_probes,
+        analysis=session_metadata.ResolvedAnalysisMetadata(
+            probe_roles=session_metadata.AnalysisProbeRoles(
+                pfc="front-probe",
+                hpc="rear-probe",
+                ppc="rear-probe",
+            ),
+            ppc=session_metadata.ResolvedPPCWorkflow(
+                prerequisite_cache=tmp_path / "processed/ppc_prerequisites_open_ephys_v1",
+                preview_cache=preview_cache,
+                final_cache=final_cache,
+                preview_shuffles=100,
+                final_shuffles=1000,
+            ),
+        ),
+    )
     received: dict[str, object] = {}
     loaded_quality_paths: list[str] = []
     expected_channels = pd.DataFrame({"channel": [7]})
@@ -259,6 +278,10 @@ def test_metadata_summary_route_forwards_arbitrary_probe_sources_lazily(
         "rear-probe": (tmp_path / "ephys/rear_sync.npz").resolve(),
     }
     assert received["trial_table_path"] == (tmp_path / "behavior/trials.csv").resolve()
+    assert received["session_cache_directories"] == {
+        "preview": preview_cache,
+        "final": final_cache,
+    }
     channel_loader = received["channel_metadata_loader"]
     assert callable(channel_loader)
     loaded = channel_loader(received["sorter_paths"]["rear-probe"])

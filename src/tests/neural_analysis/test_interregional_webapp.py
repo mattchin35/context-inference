@@ -42,10 +42,34 @@ def _session(tmp_path: Path) -> session_metadata.ResolvedSession:
     )
 
 
-def _saved_run(session: session_metadata.ResolvedSession) -> Path:
-    """Write one valid finalized saved run with a small summary table."""
+def _saved_run(
+    session: session_metadata.ResolvedSession,
+    *,
+    saved_metadata_path: Path | None = None,
+    record_metadata_identity: bool = False,
+) -> Path:
+    """Write one valid finalized saved run with a small summary table.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        Active local session receiving the finalized run directory.
+    saved_metadata_path : pathlib.Path or None
+        Metadata path stored in the saved configuration. A different absolute
+        path models a run copied from the cluster without changing its science.
+    record_metadata_identity : bool
+        When true, record the active metadata file's exact size and SHA-256 in
+        the input manifest under the existing ``session_metadata`` role.
+
+    Returns
+    -------
+    pathlib.Path
+        Finalized synthetic run directory containing configuration, manifest,
+        and one small validated result.
+    """
+
     config = InterregionalAnalysisConfig(
-        session_metadata_path=session.metadata_path,
+        session_metadata_path=saved_metadata_path or session.metadata_path,
         pfc_population=RegionalPopulationConfig(role="PFC", probe_id="pfc"),
         hpc_population=RegionalPopulationConfig(role="HPC", probe_id="hpc"),
         windows=AnalysisWindows(),
@@ -106,7 +130,13 @@ def _saved_run(session: session_metadata.ResolvedSession) -> Path:
         git_head="1" * 40,
         runtime_versions={key: "1" for key in persistence.RUNTIME_VERSION_KEYS},
         resolved_populations=populations,
-        files=(),
+        files=(
+            persistence.hash_input_files(
+                {"session_metadata": session.metadata_path}
+            )
+            if record_metadata_identity
+            else ()
+        ),
     )
     (run / "input_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     persistence.save_interregional_result(result, run / "result.pkl", config)
@@ -132,6 +162,53 @@ def test_discovery_returns_only_valid_matching_final_runs(tmp_path: Path) -> Non
     assert "PFC=pfc[1]" in option.display_label
     assert "HPC=hpc[2]" in option.display_label
     assert "ols_cv" in option.display_label
+
+
+def test_discovery_accepts_relocated_run_with_matching_metadata_identity(
+    tmp_path: Path,
+) -> None:
+    """A copied run is selected when its saved metadata bytes match locally."""
+
+    session = _session(tmp_path)
+    run = _saved_run(
+        session,
+        saved_metadata_path=Path("/cluster/session/neural_session.json"),
+        record_metadata_identity=True,
+    )
+
+    options = interregional_views.discover_interregional_runs(session)
+
+    assert tuple(option.run_directory for option in options) == (run,)
+
+
+def test_discovery_rejects_relocated_run_after_local_metadata_changes(
+    tmp_path: Path,
+) -> None:
+    """Relocation cannot authorize a run for different session metadata bytes."""
+
+    session = _session(tmp_path)
+    _saved_run(
+        session,
+        saved_metadata_path=Path("/cluster/session/neural_session.json"),
+        record_metadata_identity=True,
+    )
+    session.metadata_path.write_text('{"changed": true}', encoding="utf-8")
+
+    assert interregional_views.discover_interregional_runs(session) == ()
+
+
+def test_discovery_rejects_relocated_run_without_metadata_identity(
+    tmp_path: Path,
+) -> None:
+    """A foreign absolute path alone is insufficient evidence of portability."""
+
+    session = _session(tmp_path)
+    _saved_run(
+        session,
+        saved_metadata_path=Path("/cluster/session/neural_session.json"),
+    )
+
+    assert interregional_views.discover_interregional_runs(session) == ()
 
 
 def test_saved_selectors_are_derived_only_from_present_result_rows(tmp_path: Path) -> None:
