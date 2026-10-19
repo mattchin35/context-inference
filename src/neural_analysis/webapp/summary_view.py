@@ -89,6 +89,12 @@ def render_metadata_lfp_summary_view(
     }
     if dependencies is None:
         dependencies = lfp_summary_webapp.make_production_summary_dependencies()
+    session_cache_directories = None
+    if session.analysis is not None:
+        session_cache_directories = {
+            "preview": session.analysis.ppc.preview_cache,
+            "final": session.analysis.ppc.final_cache,
+        }
     lfp_summary_webapp.render_lfp_summary_view(
         streamlit,
         session_id=config.session_id,
@@ -103,6 +109,7 @@ def render_metadata_lfp_summary_view(
         cluster_metadata_loader=load_summary_cluster_metadata,
         channel_metadata_loader=_metadata_channel_loader(session),
         trial_table_path=config.trial_table_path,
+        session_cache_directories=session_cache_directories,
     )
 
 def render_lfp_summary_view(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 import json
 from pathlib import Path
 
@@ -73,6 +74,68 @@ def _population_label(result: InterregionalResults, role: str) -> str:
     return f"{role}={population.probe_id}[{clusters}]"
 
 
+def _metadata_identity_matches(
+    *,
+    saved_metadata_path: Path,
+    manifest: dict[str, object],
+    session: ResolvedSession,
+) -> bool:
+    """Validate same-path or content-identical relocated session metadata.
+
+    Parameters
+    ----------
+    saved_metadata_path : pathlib.Path
+        Absolute metadata path retained by the saved cluster configuration.
+    manifest : dict[str, object]
+        Supported saved input manifest. Its file identities contain byte sizes
+        and SHA-256 values but no numerical analysis arrays.
+    session : ResolvedSession
+        Active local metadata path and categorical session identity.
+
+    Returns
+    -------
+    bool
+        True for the original resolved path, or for a relocated path whose
+        active metadata bytes exactly match the unique saved
+        ``session_metadata`` identity. Data axes and physical units are not
+        transformed.
+    """
+
+    if saved_metadata_path.resolve() == session.metadata_path.resolve():
+        return True
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        return False
+    metadata_entries = [
+        entry
+        for entry in files
+        if isinstance(entry, dict) and entry.get("logical_role") == "session_metadata"
+    ]
+    if len(metadata_entries) != 1:
+        return False
+    entry = metadata_entries[0]
+    expected_size = entry.get("size_bytes")
+    expected_digest = entry.get("sha256")
+    if (
+        isinstance(expected_size, bool)
+        or not isinstance(expected_size, int)
+        or expected_size < 0
+        or not isinstance(expected_digest, str)
+        or len(expected_digest) != 64
+    ):
+        return False
+    try:
+        if session.metadata_path.stat().st_size != expected_size:
+            return False
+        digest = sha256()
+        with session.metadata_path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError:
+        return False
+    return digest.hexdigest() == expected_digest
+
+
 def discover_interregional_runs(
     session: ResolvedSession,
 ) -> tuple[InterregionalRunOption, ...]:
@@ -101,7 +164,11 @@ def discover_interregional_runs(
                 continue
             if manifest["session_id"] != session.session_id:
                 continue
-            if Path(config.session_metadata_path).resolve() != session.metadata_path.resolve():
+            if not _metadata_identity_matches(
+                saved_metadata_path=Path(config.session_metadata_path),
+                manifest=manifest,
+                session=session,
+            ):
                 continue
             result = load_interregional_result(
                 run_directory / "result.pkl",

@@ -40,6 +40,7 @@ from src.neural_analysis.lfp_summary.models import (
     validate_lfp_summary_config,
 )
 from src.neural_analysis.lfp_summary.snapshot import (
+    SessionCacheComponentCache,
     SnapshotComponentCache,
     SnapshotInspection,
     SnapshotPlotSelection,
@@ -64,6 +65,8 @@ from src.neural_analysis.lfp_summary.snapshot import (
     _spike_band_reliability,
     _spike_exemplar_panel,
     _synchrony_entity,
+    default_session_cache_label,
+    inspect_session_cache,
     plot_cached_snapshot_component,
     resolve_summary_source,
     select_spike_snapshot_slice,
@@ -1277,6 +1280,7 @@ def _render_source_enabled_summary_view(
     cluster_metadata_loader: Callable[[Path], object],
     channel_metadata_loader: Callable[[Path], object],
     dependencies: SummaryWebDependencies,
+    session_cache_directories: Mapping[str, Path] | None,
 ) -> None:
     """Render the explicit snapshot/live route while keeping work outside Streamlit.
 
@@ -1301,6 +1305,9 @@ def _render_source_enabled_summary_view(
         snapshots.
     dependencies : SummaryWebDependencies
         Injected composed live actions and cache loaders/plotting seams.
+    session_cache_directories : mapping[str, pathlib.Path] or None
+        Metadata-declared preview/final caches. Saved configuration paths are
+        retained as provenance and are never treated as live local inputs.
 
     Returns
     -------
@@ -1311,8 +1318,95 @@ def _render_source_enabled_summary_view(
 
     sidebar = streamlit.sidebar
     sidebar.header("Cached LFP Summary")
-    source_mode = sidebar.selectbox("Summary source", options=("snapshot", "live"))
+    source_options = (
+        ("session cache", "snapshot", "live")
+        if session_cache_directories
+        else ("snapshot", "live")
+    )
+    source_mode = sidebar.selectbox("Summary source", options=source_options)
     probe_label = sidebar.selectbox("Active population", options=tuple(sorter_paths))
+    if source_mode == "session cache":
+        assert session_cache_directories is not None
+        inspections = {
+            label: inspect_session_cache(
+                directory,
+                expected_session_id=session_id,
+                label=label,
+            )
+            for label, directory in session_cache_directories.items()
+        }
+        try:
+            default_label = default_session_cache_label(inspections)
+        except ValueError:
+            default_label = next(iter(inspections))
+        cache_labels = (default_label,) + tuple(
+            label for label in inspections if label != default_label
+        )
+        selected_label = sidebar.selectbox("Session cache", options=cache_labels)
+        inspection = inspections[selected_label]
+        if not inspection.is_scientific_result:
+            streamlit.error(inspection.message)
+            return
+        streamlit.caption(f"Local session cache: {inspection.cache_directory}")
+        streamlit.caption(
+            f"Saved source cache: {inspection.source_cluster_directory or 'unavailable'}"
+        )
+        streamlit.info(inspection.message)
+        component = sidebar.selectbox(
+            "Summary view",
+            options=inspection.available_components,
+        )
+        try:
+            streamlit.caption(
+                "Source value semantics: "
+                f"{snapshot_component_source_value_semantics(inspection, component)}"
+            )
+            if component == "spike_phase":
+                population = _selected_population(
+                    session_state=streamlit.session_state,
+                    probe_label=probe_label,
+                    sorter_paths=sorter_paths,
+                    aligned_spike_paths=aligned_spike_paths,
+                    cluster_metadata_loader=cluster_metadata_loader,
+                    channel_metadata_loader=channel_metadata_loader,
+                )
+                status = snapshot_component_population_status(
+                    inspection, component, population
+                )
+                streamlit.info(status.message)
+                if not status.can_plot:
+                    return
+            cache = streamlit.session_state.get("lfp_summary_session_component_cache")
+            if not isinstance(cache, SessionCacheComponentCache):
+                cache = SessionCacheComponentCache()
+                streamlit.session_state["lfp_summary_session_component_cache"] = cache
+            arrays = cache.load(inspection, component, dependencies.load_component)
+            selection = _snapshot_selection_controls(sidebar, component, arrays)
+            entry = inspection.manifest["components"][component]  # type: ignore[index]
+            if isinstance(entry, Mapping):
+                warnings = tuple(str(value) for value in entry.get("warnings", ()))
+                for warning in warnings:
+                    streamlit.warning(warning)
+                if warnings:
+                    streamlit.warning(
+                        "Unstable status is reported by saved component warnings."
+                    )
+            _snapshot_component_counts(streamlit, component, arrays, selection)
+            saved_config, _ = _saved_snapshot_config(
+                inspection, component, default_lfp_summary_config()
+            )
+            figure = plot_cached_snapshot_component(
+                component,
+                arrays,
+                saved_config,
+                selection,
+                inspection=inspection,
+            )
+        except (KeyError, OSError, ValueError) as error:
+            streamlit.error(str(error))
+            return
+        render_summary_figure(streamlit, figure)
+        return
     if source_mode == "snapshot":
         entered_path = sidebar.text_input("Snapshot directory", value="")
         inspection = _retained_snapshot_inspection(streamlit.session_state, entered_path)
@@ -1426,6 +1520,7 @@ def render_lfp_summary_view(
     cluster_metadata_loader: Callable[[Path], object] | None = None,
     channel_metadata_loader: Callable[[Path], object] | None = None,
     trial_table_path: Path | None = None,
+    session_cache_directories: Mapping[str, Path] | None = None,
 ) -> None:
     """Render legacy controls or the explicit snapshot/live child route.
 
@@ -1452,6 +1547,9 @@ def render_lfp_summary_view(
     trial_table_path : pathlib.Path or None
         Explicit trial CSV for metadata-driven live configuration. ``None``
         retains the legacy derived path.
+    session_cache_directories : mapping[str, pathlib.Path] or None
+        Optional metadata-declared saved caches exposed through a read-only
+        session-cache source. The mapping contains no numerical arrays.
 
     Returns
     -------
@@ -1486,6 +1584,7 @@ def render_lfp_summary_view(
             cluster_metadata_loader=cluster_metadata_loader,
             channel_metadata_loader=channel_metadata_loader,
             dependencies=dependencies,
+            session_cache_directories=session_cache_directories,
         )
         return
     defaults = default_summary_ui_values()

@@ -254,6 +254,15 @@ cache directories contain the completed preview and final components; the
 adoption receipt preserves their cluster provenance. The command has no
 deletion option, so local files absent from the cluster remain untouched.
 
+The metadata-driven webapp needs no path-rewrite or adoption command after this
+copy. **Cached LFP Summary** reads the metadata-declared preview/final locations
+through its read-only `session cache` source. It prefers a fully completed final
+cache, then a fully completed preview; a still-running final cache is shown as
+partial and does not fabricate `spike_phase.npz`. **Inter-regional regression
+results** accepts a copied finalized run when the local metadata file matches
+the `session_metadata` size and SHA-256 saved in its input manifest. The saved
+absolute cluster paths remain provenance and should not be edited.
+
 `processed/lfp_summary_work` is intentionally excluded. It is a large,
 machine-local prepared-phase/checkpoint cache rather than a portable result.
 The detailed task-decoding and pooled-decoding sections in the main README

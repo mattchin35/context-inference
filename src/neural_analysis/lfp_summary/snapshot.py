@@ -72,6 +72,41 @@ class SnapshotInspection:
 
 
 @dataclass(frozen=True)
+class SessionCacheInspection:
+    """Read-only validation state for one metadata-declared PPC cache.
+
+    ``available_components`` contains only committed regular component files in
+    canonical component order. ``missing_components`` records absent or
+    noncommitted products without relabeling a partial cache as complete.
+    ``source_directory`` is saved provenance and is never dereferenced. Array
+    shapes and physical units remain in the saved manifest and NPZ files.
+    """
+
+    label: str
+    state: str
+    message: str
+    cache_directory: Path
+    manifest: dict[str, object] | None = None
+    component_paths: dict[str, Path] | None = None
+    available_components: tuple[str, ...] = ()
+    missing_components: tuple[str, ...] = SUMMARY_COMPONENTS
+    source_directory: Path | None = None
+    stat_identity: tuple[tuple[str, int, int, int, int], ...] | None = None
+
+    @property
+    def is_scientific_result(self) -> bool:
+        """Return whether at least one committed component can be inspected."""
+
+        return self.state == "valid"
+
+    @property
+    def source_cluster_directory(self) -> str | None:
+        """Return saved source provenance using the snapshot-compatible name."""
+
+        return None if self.source_directory is None else str(self.source_directory)
+
+
+@dataclass(frozen=True)
 class SummarySource:
     """Selected source-mode state without implicit cache discovery or compute.
 
@@ -312,6 +347,286 @@ def validate_cache_snapshot(snapshot_directory: Path | str) -> SnapshotInspectio
         file_digests,
         stat_identity,
     )
+
+
+def _session_cache_failure(
+    label: str,
+    directory: Path,
+    state: str,
+    message: str,
+) -> SessionCacheInspection:
+    """Return one failed declared-cache inspection without numerical loading.
+
+    Parameters
+    ----------
+    label : str
+        Human-facing cache identity such as ``"preview"`` or ``"final"``.
+    directory : pathlib.Path
+        Exact metadata-declared cache path; it is not searched or rewritten.
+    state, message : str
+        Categorical failure state and user-facing explanation.
+
+    Returns
+    -------
+    SessionCacheInspection
+        Failed inspection containing no manifest or component paths.
+    """
+
+    return SessionCacheInspection(label, state, message, directory)
+
+
+def inspect_session_cache(
+    cache_directory: Path | str,
+    *,
+    expected_session_id: str,
+    label: str,
+) -> SessionCacheInspection:
+    """Inspect completed products in one metadata-declared PPC cache.
+
+    Parameters
+    ----------
+    cache_directory : pathlib.Path or str
+        Exact local cache directory. Only its manifest and canonical immediate
+        component files are inspected; saved source paths are provenance only.
+    expected_session_id : str
+        Active metadata session identity that the saved manifest must match.
+    label : str
+        Human-facing cache identity, normally ``"preview"`` or ``"final"``.
+
+    Returns
+    -------
+    SessionCacheInspection
+        Read-only inspection listing committed and missing components. It
+        contains no numerical arrays and preserves all saved axis/unit metadata.
+    """
+
+    directory = Path(cache_directory)
+    if directory.is_symlink():
+        return _session_cache_failure(
+            label, directory, "invalid", "Session cache directory must not be a symlink."
+        )
+    if not directory.is_dir():
+        return _session_cache_failure(
+            label, directory, "missing", "Session cache directory is missing."
+        )
+    manifest_path = directory / "manifest.json"
+    try:
+        manifest_stat = manifest_path.lstat()
+    except OSError:
+        return _session_cache_failure(
+            label, directory, "missing", "Session cache manifest is missing."
+        )
+    if manifest_path.is_symlink() or not stat.S_ISREG(manifest_stat.st_mode):
+        return _session_cache_failure(
+            label,
+            directory,
+            "invalid",
+            "Session cache manifest must be a nonsymlink regular file.",
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        return _session_cache_failure(
+            label, directory, "malformed", f"Session cache manifest is unreadable: {error}"
+        )
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != "1":
+        return _session_cache_failure(
+            label, directory, "malformed", "Session cache manifest schema is unsupported."
+        )
+    if manifest.get("session_id") != expected_session_id:
+        return _session_cache_failure(
+            label,
+            directory,
+            "mismatch",
+            "Session cache manifest belongs to a different session.",
+        )
+    components = manifest.get("components")
+    if not isinstance(components, Mapping):
+        return _session_cache_failure(
+            label, directory, "malformed", "Session cache manifest lacks components."
+        )
+
+    component_paths: dict[str, Path] = {}
+    identities = [
+        (
+            "manifest.json",
+            manifest_stat.st_dev,
+            manifest_stat.st_ino,
+            manifest_stat.st_size,
+            manifest_stat.st_mtime_ns,
+        )
+    ]
+    for component in SUMMARY_COMPONENTS:
+        entry = components.get(component)
+        if not isinstance(entry, Mapping) or entry.get("state") != "complete":
+            continue
+        expected_filename = _SNAPSHOT_COMPONENT_FILENAMES[component]
+        if entry.get("file_name", expected_filename) != expected_filename:
+            return _session_cache_failure(
+                label,
+                directory,
+                "malformed",
+                f"Session cache {component} has a noncanonical filename.",
+            )
+        component_path = directory / expected_filename
+        try:
+            component_stat = component_path.lstat()
+        except OSError:
+            continue
+        if component_path.is_symlink():
+            return _session_cache_failure(
+                label,
+                directory,
+                "invalid",
+                f"Session cache {component} file must not be a symlink.",
+            )
+        if not stat.S_ISREG(component_stat.st_mode):
+            return _session_cache_failure(
+                label,
+                directory,
+                "invalid",
+                f"Session cache {component} must be a regular file.",
+            )
+        component_paths[component] = component_path
+        identities.append(
+            (
+                expected_filename,
+                component_stat.st_dev,
+                component_stat.st_ino,
+                component_stat.st_size,
+                component_stat.st_mtime_ns,
+            )
+        )
+    available = tuple(
+        component for component in SUMMARY_COMPONENTS if component in component_paths
+    )
+    if not available:
+        return _session_cache_failure(
+            label, directory, "incomplete", "Session cache has no completed component files."
+        )
+
+    configuration = manifest.get("configuration")
+    source_value = (
+        configuration.get("output_directory")
+        if isinstance(configuration, Mapping)
+        else None
+    )
+    source_directory = Path(source_value) if isinstance(source_value, str) else None
+    missing_tuple = tuple(component for component in SUMMARY_COMPONENTS if component not in available)
+    message = (
+        "Session cache is complete."
+        if not missing_tuple
+        else f"Session cache is partial; missing: {', '.join(missing_tuple)}."
+    )
+    return SessionCacheInspection(
+        label=label,
+        state="valid",
+        message=message,
+        cache_directory=directory.resolve(),
+        manifest=manifest,
+        component_paths=component_paths,
+        available_components=available,
+        missing_components=missing_tuple,
+        source_directory=source_directory,
+        stat_identity=tuple(identities),
+    )
+
+
+def default_session_cache_label(
+    inspections: Mapping[str, SessionCacheInspection],
+) -> str:
+    """Choose a deterministic initial declared-cache label.
+
+    Parameters
+    ----------
+    inspections : mapping[str, SessionCacheInspection]
+        Named preview/final inspection states containing no numerical arrays.
+
+    Returns
+    -------
+    str
+        ``"final"`` when all three final components are committed, otherwise
+        complete preview, then any valid final/preview cache in that order.
+
+    Raises
+    ------
+    ValueError
+        If no declared cache has an inspectable scientific component.
+    """
+
+    for label in ("final", "preview"):
+        inspection = inspections.get(label)
+        if (
+            inspection is not None
+            and inspection.is_scientific_result
+            and inspection.available_components == SUMMARY_COMPONENTS
+        ):
+            return label
+    for label in ("final", "preview"):
+        inspection = inspections.get(label)
+        if inspection is not None and inspection.is_scientific_result:
+            return label
+    for label, inspection in inspections.items():
+        if inspection.is_scientific_result:
+            return label
+    raise ValueError("No metadata-declared session cache has a completed component.")
+
+
+class SessionCacheComponentCache:
+    """In-process lazy component arrays keyed by declared-cache file identity."""
+
+    def __init__(self) -> None:
+        """Initialize an empty mapping without opening a component file."""
+
+        self._entries: dict[
+            tuple[str, str, tuple[tuple[str, int, int, int, int], ...]],
+            dict[str, np.ndarray],
+        ] = {}
+
+    def load(
+        self,
+        inspection: SessionCacheInspection,
+        component: str,
+        loader: LoadComponent,
+    ) -> dict[str, np.ndarray]:
+        """Load one committed component once for its current stat identity.
+
+        Parameters
+        ----------
+        inspection : SessionCacheInspection
+            Valid metadata-declared cache identity with no loaded arrays.
+        component : str
+            Selected completed component name.
+        loader : callable
+            Existing schema-validating loader returning named arrays with their
+            manifest-defined shapes, axes, and physical units unchanged.
+
+        Returns
+        -------
+        dict[str, numpy.ndarray]
+            Selected saved component arrays retained only in process memory.
+        """
+
+        if (
+            not inspection.is_scientific_result
+            or inspection.manifest is None
+            or inspection.component_paths is None
+            or inspection.stat_identity is None
+            or component not in inspection.available_components
+        ):
+            raise ValueError("session cache component is not committed")
+        key = (
+            str(inspection.cache_directory),
+            component,
+            inspection.stat_identity,
+        )
+        if key not in self._entries:
+            self._entries[key] = loader(
+                inspection.component_paths[component],
+                inspection.manifest,
+                component,
+            )
+        return self._entries[key]
 
 
 def resolve_summary_source(

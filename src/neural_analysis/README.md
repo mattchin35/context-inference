@@ -102,6 +102,15 @@ retain their existing view-specific loading behavior; selecting a cached
 summary keeps the existing saved provenance. A missing optional source
 disables the affected view and explains which source is unavailable.
 
+For version-3 metadata, **Cached LFP Summary** defaults to the read-only
+`session cache` source. It inspects only the declared preview and final cache
+directories. A final cache is selected first only after Power, Synchrony, and
+Spike phase/PPC are all committed; otherwise a complete preview is selected.
+Partial caches remain selectable and list their missing components. Saved
+cluster paths are displayed as provenance and are never opened as workstation
+inputs. The separate `snapshot` source retains its identity-receipt validation,
+and `live` remains the only compute-capable source.
+
 ## Run Spike-phase/PPC computation
 
 ### Prepare Power, Synchrony, and phase
@@ -268,6 +277,10 @@ include the exact configuration, content-hashed input manifest, typed result,
 copied runners, stage log, scientific summary, and PNG figures. Select
 **Inter-regional regression results** in the metadata-driven webapp to inspect
 these saved outputs. The view is read-only and never runs or resumes analysis.
+Copied runs remain discoverable when the current `neural_session.json` bytes
+match the saved manifest's `session_metadata` size and SHA-256, even though the
+saved configuration retains an absolute cluster path. Do not edit copied
+configuration or result files to replace that path.
 See `src/neural_analysis/interregional/README.md` for axes, units, module
 ownership, persistence details, and interpretation limits.
 
