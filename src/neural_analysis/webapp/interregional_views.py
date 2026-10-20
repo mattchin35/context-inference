@@ -7,6 +7,8 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from src.neural_analysis.session_metadata import ResolvedSession
 from src.neural_analysis.interregional.configuration import (
     ANALYSIS_VERSION,
@@ -30,6 +32,11 @@ from src.neural_analysis.interregional.records import InterregionalResults
 
 DEFAULT_RESULTS_ROOT = "analysis_runs"
 
+_FOLD_FAILURE_LABELS = {
+    "rank_deficient_restricted": "Rank-deficient restricted model",
+    "rank_deficient_full": "Rank-deficient full model",
+}
+
 
 @dataclass(frozen=True)
 class InterregionalRunOption:
@@ -40,6 +47,66 @@ class InterregionalRunOption:
     analysis_version: str
     session_id: str
     display_label: str
+
+
+def _render_unavailable_cv_explanation(
+    st_module: object,
+    target_rows: pd.DataFrame,
+    fold_rows: pd.DataFrame,
+    *,
+    representation: str,
+) -> None:
+    """Explain an unestimable held-out selection, if present.
+
+    Parameters
+    ----------
+    st_module : object
+        Streamlit-compatible renderer exposing ``warning``.
+    target_rows : pandas.DataFrame
+        Selected target-summary rows. Each row represents one target and its
+        dimensionless held-out metric; rows are not transformed.
+    fold_rows : pandas.DataFrame
+        Fold-score rows for the same condition, window, representation, and
+        model family. Each row represents one target-fold fit.
+    representation : str
+        Saved representation identifier, normally ``"units"`` or ``"pcs"``.
+
+    Returns
+    -------
+    None
+        Returns after either finding a valid target or rendering a warning.
+    """
+    if target_rows["status"].eq("ok").any():
+        return
+
+    failure_counts = (
+        fold_rows.loc[fold_rows["status"].ne("ok"), "reason"]
+        .fillna("unspecified_failure")
+        .astype(str)
+        .value_counts()
+    )
+    failure_descriptions = []
+    for reason, count in failure_counts.items():
+        label = _FOLD_FAILURE_LABELS.get(
+            reason, reason.replace("_", " ").capitalize()
+        )
+        fold_label = "fold" if count == 1 else "folds"
+        failure_descriptions.append(f"{label}: {count} {fold_label}")
+    failure_text = "; ".join(failure_descriptions)
+    representation_label = "unit-level" if representation == "units" else "PC-level"
+    explanation = (
+        f"No valid held-out estimate is available for the selected "
+        f"{representation_label} models."
+    )
+    if failure_text:
+        explanation += f" Fold failures: {failure_text}."
+    if any(reason.startswith("rank_deficient") for reason in failure_counts.index):
+        explanation += (
+            " Rank deficiency means that the affected design contained linearly "
+            "dependent predictor columns, so the regression could not be estimated."
+        )
+    explanation += " Unavailable fits are not evidence of zero inter-regional effect."
+    st_module.warning(explanation)
 
 
 def _read_manifest(path: Path) -> dict[str, object]:
@@ -394,11 +461,33 @@ def render_interregional_view(st_module: object, session: ResolvedSession) -> No
     ]
     st_module.subheader("Target summaries")
     st_module.dataframe(selected_targets)
+    selected_folds = result.fold_scores.loc[
+        result.fold_scores["condition"].eq(condition)
+        & result.fold_scores["window"].eq(window)
+        & result.fold_scores["representation"].eq(representation)
+        & result.fold_scores["model_family"].eq(model_family)
+    ]
+    _render_unavailable_cv_explanation(
+        st_module,
+        selected_targets,
+        selected_folds,
+        representation=representation,
+    )
     unavailable = result.fold_scores.loc[result.fold_scores["status"].ne("ok")]
     if not unavailable.empty:
         st_module.subheader("Unavailable fold rows")
         st_module.dataframe(unavailable)
-    if metric in {"delta_r2", "delta_deviance_explained"} and not result.population_summaries.empty:
+    increment_rows = result.target_summaries.loc[
+        result.target_summaries["window"].eq(window)
+        & result.target_summaries["representation"].eq(representation)
+        & result.target_summaries["model_family"].eq(model_family)
+        & result.target_summaries["metric_name"].eq(metric)
+    ]
+    if (
+        metric in {"delta_r2", "delta_deviance_explained"}
+        and not result.population_summaries.empty
+        and increment_rows["status"].eq("ok").any()
+    ):
         figure, _ = plot_cv_increment_summary(
             result.target_summaries,
             result.population_summaries,
@@ -411,15 +500,25 @@ def render_interregional_view(st_module: object, session: ResolvedSession) -> No
     if model_family == "ols" and {"r2_restricted", "r2_full"} <= set(
         compatible_metrics
     ):
-        figure, _ = plot_absolute_cv_scores(
-            result.target_summaries,
-            representation=representation,
-            model_family=model_family,
-            condition=condition,
-            window=window,
-            coverage_assumption_version=result.coverage_assumption_version,
-        )
-        st_module.pyplot(figure)
+        absolute_rows = result.target_summaries.loc[
+            result.target_summaries["condition"].eq(condition)
+            & result.target_summaries["window"].eq(window)
+            & result.target_summaries["representation"].eq(representation)
+            & result.target_summaries["model_family"].eq(model_family)
+            & result.target_summaries["metric_name"].isin(
+                ("r2_restricted", "r2_full")
+            )
+        ]
+        if absolute_rows["status"].eq("ok").any():
+            figure, _ = plot_absolute_cv_scores(
+                result.target_summaries,
+                representation=representation,
+                model_family=model_family,
+                condition=condition,
+                window=window,
+                coverage_assumption_version=result.coverage_assumption_version,
+            )
+            st_module.pyplot(figure)
     if model_family == "poisson" and {"ols", "poisson"} <= set(
         available_families
     ):
