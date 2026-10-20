@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from src.neural_analysis import session_metadata
 from src.neural_analysis.interregional.configuration import (
@@ -361,6 +362,106 @@ def test_poisson_saved_view_uses_deviance_and_separate_exploratory_mse(
     assert ("increment", "poisson") in calls
     assert ("mse", "all") in calls
     assert "exploratory" in " ".join(st.messages).lower()
+
+
+def test_unestimable_unit_selection_explains_rank_deficiency_without_empty_plot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An unavailable unit model reports rank failures instead of empty axes."""
+    session = _session(tmp_path)
+    run = _saved_run(session)
+    config, _ = interregional_views.load_interregional_config(run / "config.json")
+    result = persistence.load_interregional_result(
+        run / "result.pkl", config, trusted_run_directory=run
+    )
+    unavailable_target = result.target_summaries.iloc[0].to_dict()
+    unavailable_target.update(
+        status="incomplete_folds",
+        reason="incomplete_requested_folds",
+        valid_folds=0,
+        mean_value=None,
+    )
+    unavailable_population = {
+        "session_id": "session-a",
+        "evaluation_scope": "held_out_cv",
+        "direction": "HPC_to_PFC",
+        "representation": "units",
+        "model_family": "ols",
+        "condition": "all",
+        "window": "before",
+        "metric_name": "delta_r2",
+        "status": "not_applicable",
+        "reason": "no_complete_targets",
+        "n_targets": 0,
+        "q25": None,
+        "median": None,
+        "q75": None,
+    }
+    unavailable_folds = [
+        {
+            "condition": "all",
+            "window": "before",
+            "representation": "units",
+            "model_family": "ols",
+            "status": "fit_unavailable",
+            "reason": "rank_deficient_restricted",
+        },
+        {
+            "condition": "all",
+            "window": "before",
+            "representation": "units",
+            "model_family": "ols",
+            "status": "fit_unavailable",
+            "reason": "rank_deficient_full",
+        },
+    ]
+    result = replace(
+        result,
+        target_summaries=records.result_table_from_rows(
+            "target_summaries", [unavailable_target]
+        ),
+        population_summaries=records.result_table_from_rows(
+            "population_summaries", [unavailable_population]
+        ),
+        fold_scores=pd.DataFrame(unavailable_folds),
+    )
+    option = interregional_views.InterregionalRunOption(
+        run, "a" * 64, result.analysis_version, result.session_id, "saved"
+    )
+    monkeypatch.setattr(
+        interregional_views, "discover_interregional_runs", lambda value: (option,)
+    )
+    monkeypatch.setattr(
+        interregional_views,
+        "_selected_result",
+        lambda value: (
+            config,
+            result,
+            {
+                "resolved_populations": [],
+                "git_head": "1",
+                "runtime_versions": {},
+                "entrypoint": "x",
+            },
+        ),
+    )
+    plot_calls: list[str] = []
+    monkeypatch.setattr(
+        interregional_views,
+        "plot_cv_increment_summary",
+        lambda *args, **kwargs: (plot_calls.append("increment") or object(), object()),
+    )
+
+    st = _FakeStreamlit()
+    interregional_views.render_interregional_view(st, session)
+
+    visible = " ".join(st.messages).lower()
+    assert "rank-deficient restricted model: 1 fold" in visible
+    assert "rank-deficient full model: 1 fold" in visible
+    assert "linearly dependent predictor columns" in visible
+    assert "not evidence of zero inter-regional effect" in visible
+    assert "figure" not in st.messages
+    assert plot_calls == []
 
 
 def test_granger_saved_view_appears_only_from_present_in_sample_rows(
