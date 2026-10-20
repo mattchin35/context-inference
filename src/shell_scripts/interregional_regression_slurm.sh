@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #SBATCH --partition=unlimited
-#SBATCH --job-name=interregional_poisson
+#SBATCH --job-name=interregional_regression
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
