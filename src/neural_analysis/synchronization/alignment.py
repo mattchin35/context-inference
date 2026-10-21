@@ -408,7 +408,7 @@ def sync_open_ephys_kilosort_spikes_to_utc(
     if output_file is not None:
         meta = {
             "generator": "sync_open_ephys_kilosort_spikes_to_utc",
-            "analysis_version": "0.3.0",
+            "analysis_version": "0.3.1",
             "kilosort_dir": str(kilosort_path),
             "spike_times_file": str(spike_times_path),
             "ttl_dir": str(ttl_path),

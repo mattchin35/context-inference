@@ -231,8 +231,10 @@ def decode_open_ephys_ttl_irig(
         bit_period_s: IRIG-H bit period in seconds.
         irig_format: IRIG frame format, ``"neurokairos"`` or
             ``"standard_decisecond"``.
-        sample_rate_hz: Optional sample rate in Hz. Used only if
-            ``timestamps.npy`` is absent.
+        sample_rate_hz: Optional sample rate in Hz. When provided, pulse
+            widths are calculated from sample counts so timestamp
+            discontinuities cannot change IRIG bit classification. It is also
+            used to compute timestamps if ``timestamps.npy`` is absent.
         min_high_duration_s: Debounce threshold for short high glitches, in
             seconds.
         min_low_duration_s: Debounce threshold for short low glitches, in
@@ -253,8 +255,16 @@ def decode_open_ephys_ttl_irig(
         min_low_duration_s=min_low_duration_s,
     )
     pulse_df = extract_irig_pulses_from_transitions(debounced_df)
+    pulse_width_s = pulse_df["pulse_width_s"].to_numpy(dtype=float)
+    if sample_rate_hz is not None:
+        if float(sample_rate_hz) <= 0:
+            raise ValueError("sample_rate_hz must be positive when provided.")
+        pulse_width_s = (
+            pulse_df["pulse_width_samples"].to_numpy(dtype=float)
+            / float(sample_rate_hz)
+        )
     decoded = irig_core.decode_irig_pulses(
-        pulse_width_s=pulse_df["pulse_width_s"].to_numpy(dtype=float),
+        pulse_width_s=pulse_width_s,
         source_onset_time_s=pulse_df["source_onset_time_s"].to_numpy(dtype=float),
         source_onset_ix=pulse_df["source_onset_ix"].to_numpy(dtype=np.int64),
         irig_format=irig_format,
@@ -285,7 +295,9 @@ def decode_open_ephys_ttl_irig_utc(
         bit_period_s: IRIG-H bit period in seconds.
         irig_format: IRIG frame format, ``"neurokairos"`` or
             ``"standard_decisecond"``.
-        sample_rate_hz: Optional sample rate in Hz for timestamp fallback.
+        sample_rate_hz: Optional sample rate in Hz. When provided, pulse
+            widths are calculated from sample counts for IRIG classification.
+            It is also used for timestamp fallback.
         min_high_duration_s: Debounce threshold for short high glitches, in
             seconds.
         min_low_duration_s: Debounce threshold for short low glitches, in
