@@ -252,6 +252,7 @@ def test_main_open_ephys_workflow_dispatches_configured_streams_without_real_io(
     output_files = [Path(call["output_file"]) for call in calls]
     assert len(output_files) == len(set(output_files))
     assert all(output_file.suffix == ".npz" for output_file in output_files)
+    assert all(call["sample_rate_hz"] == 30_000.0 for call in calls)
     assert len(alignment_notes) == 1
 
 

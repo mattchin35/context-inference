@@ -277,6 +277,61 @@ def test_decode_open_ephys_ttl_irig_recovers_neurokairos_frames_with_glitches(tm
     assert np.allclose(decoded.pulse_df["utc_unix"].to_numpy(dtype=float), expected_unix)
 
 
+def test_decode_open_ephys_ttl_irig_uses_explicit_sample_rate_for_pulse_widths(
+    tmp_path: Path,
+):
+    sample_rate_hz = 30_000.0
+    start_time_utc = datetime(2026, 8, 28, 17, 46, 0, tzinfo=timezone.utc)
+    ttl_dir = tmp_path / "TTL"
+    _, expected_unix = _synthetic_open_ephys_irig_folder(
+        ttl_dir=ttl_dir,
+        start_time_utc=start_time_utc,
+        n_frames=3,
+        sample_rate_hz=sample_rate_hz,
+    )
+
+    second_frame_bits = irig_core.encode_irig_frame(
+        (start_time_utc + timedelta(seconds=60)).timestamp(),
+        irig_format="neurokairos",
+    )
+    target_bit_ix = next(
+        bit_ix
+        for bit_ix, bit in enumerate(second_frame_bits)
+        if bit is False and bit_ix % 17 != 0
+    )
+    target_onset_sample = int(round((60 + target_bit_ix) * sample_rate_hz))
+    target_falling_sample = target_onset_sample + int(round(0.2 * sample_rate_hz))
+
+    states = np.load(ttl_dir / "states.npy", allow_pickle=False)
+    sample_numbers = np.load(ttl_dir / "sample_numbers.npy", allow_pickle=False)
+    timestamps = np.load(ttl_dir / "timestamps.npy", allow_pickle=False)
+    target_falling_positions = np.flatnonzero(
+        (sample_numbers == target_falling_sample) & (states == -1)
+    )
+    assert target_falling_positions.size == 1
+
+    timestamp_jump_position = int(target_falling_positions[0])
+    timestamps[timestamp_jump_position:] -= 0.17425
+    np.save(ttl_dir / "timestamps.npy", timestamps)
+
+    decoded = open_ephys_irig.decode_open_ephys_ttl_irig(
+        ttl_dir,
+        line=0,
+        sample_rate_hz=sample_rate_hz,
+        min_high_duration_s=0.01,
+        min_low_duration_s=0.01,
+        irig_format="neurokairos",
+    )
+
+    assert decoded.invalid_pulse_ix.size == 0
+    assert decoded.frame_df.shape[0] == 3
+    assert np.allclose(decoded.pulse_df["utc_unix"].to_numpy(dtype=float), expected_unix)
+    assert np.isclose(
+        decoded.pulse_df.loc[60 + target_bit_ix, "pulse_width_s"],
+        0.2,
+    )
+
+
 def test_decode_open_ephys_ttl_irig_utc_matches_existing_sync_schema(tmp_path: Path):
     sample_rate_hz = 20_000.0
     _synthetic_open_ephys_irig_folder(
