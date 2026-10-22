@@ -526,10 +526,12 @@ view in the same metadata-driven webapp. It automatically discovers
 completed `pooled_task_variable_decoding_*` directories directly beneath the
 selected session's `analysis_runs` directory. Select the run, training window,
 target, and one of the saved native, reference-transfer, or native-minus-
-transfer-gap displays. The view strictly reloads `results.npz`; it does not recompute
-a decoder, load raw spikes, or write analysis files. Absolute cluster
-paths in `execution.json` are shown only as provenance, so a complete run copied
-back under the workstation session remains viewable.
+transfer-gap displays. For categorical targets, choose balanced accuracy or
+AUC from the metric selector; numerical targets use R2. The view strictly
+reloads `results.npz`; it does not recompute a decoder, load raw spikes, or
+write analysis files. Absolute cluster paths in `execution.json` are shown only
+as provenance, so a complete run copied back under the workstation session
+remains viewable.
 
 ### Fixed, tuned, and benchmark planning
 

@@ -370,6 +370,14 @@ def render_condition_generalization_view(
     target_names = arrays["target_names"].tolist()
     selected_window = st_module.selectbox("Training window", options=window_names)
     selected_target = st_module.selectbox("Target", options=target_names)
+    target_index = target_names.index(selected_target)
+    target_family = str(arrays["target_family_names"][target_index])
+    if target_family == "categorical":
+        selected_metric = st_module.selectbox(
+            "Metric", options=["balanced_accuracy", "auc"]
+        )
+    else:
+        selected_metric = "r2"
     result_label = st_module.selectbox(
         "Result type", options=list(FIGURE_KIND_BY_LABEL)
     )
@@ -378,6 +386,7 @@ def render_condition_generalization_view(
         figure_kind=FIGURE_KIND_BY_LABEL[result_label],
         window_name=selected_window,
         target_name=selected_target,
+        metric_name=selected_metric,
     )
     try:
         st_module.pyplot(figure)

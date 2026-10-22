@@ -70,7 +70,11 @@ def _fold_mean(scores: np.ndarray, statuses: np.ndarray) -> np.ndarray | None:
     )
 
 
-def _metric_indices(arrays: Mapping[str, np.ndarray], target_index: int) -> tuple[int, ...]:
+def _metric_indices(
+    arrays: Mapping[str, np.ndarray],
+    target_index: int,
+    metric_name: str | None = None,
+) -> tuple[int, ...]:
     """Return applicable saved metric positions for one target family.
 
     Parameters
@@ -79,15 +83,27 @@ def _metric_indices(arrays: Mapping[str, np.ndarray], target_index: int) -> tupl
         Validated pooled result arrays.
     target_index : int
         Zero-based target coordinate.
+    metric_name : str or None, optional
+        One requested display metric. ``None`` retains every metric applicable
+        to the target family for completion-artifact compatibility.
 
     Returns
     -------
     tuple[int, ...]
-        Balanced-accuracy/AUC positions for categorical targets, otherwise R2.
+        Requested applicable metric position, or all categorical
+        balanced-accuracy/AUC positions or the numerical R2 position.
     """
     family = str(arrays["target_family_names"][target_index])
     names = arrays["metric_names"].astype(str).tolist()
     wanted = ("balanced_accuracy", "auc") if family == "categorical" else ("r2",)
+    if metric_name is not None:
+        if metric_name not in wanted:
+            target_name = str(arrays["target_names"][target_index])
+            raise ValueError(
+                f"Metric {metric_name!r} is not applicable to target "
+                f"{target_name!r}."
+            )
+        wanted = (metric_name,)
     return tuple(names.index(name) for name in wanted)
 
 
@@ -173,6 +189,7 @@ def plot_pooled_timecourses(
     figure_kind: str,
     window_name: str,
     target_name: str,
+    metric_name: str | None = None,
 ) -> matplotlib.figure.Figure:
     """Create one six-panel light-mode figure from validated saved arrays.
 
@@ -185,6 +202,9 @@ def plot_pooled_timecourses(
         Requested required completion figure.
     window_name, target_name : str
         Exact saved coordinates selecting one window/target cell.
+    metric_name : {"balanced_accuracy", "auc", "r2"} or None, optional
+        Display-only metric selection. It must apply to the selected target.
+        ``None`` retains every applicable metric for legacy completion PNGs.
 
     Returns
     -------
@@ -204,7 +224,7 @@ def plot_pooled_timecourses(
         arrays["training_window_names"], "training window", window_name
     )
     target_index = _coordinate_index(arrays["target_names"], "target", target_name)
-    metric_indices = _metric_indices(arrays, target_index)
+    metric_indices = _metric_indices(arrays, target_index, metric_name)
     metric_names = arrays["metric_names"].astype(str)
     time_s = arrays["evaluation_time_centers_s"]
     start_s = float(arrays["training_window_start_s"][window_index])
@@ -277,8 +297,12 @@ def plot_pooled_timecourses(
             "held-out temporal generalization."
         )
     )
+    metric_caption = (
+        f"Selected metric: {metric_name}. " if metric_name is not None else ""
+    )
     caption = (
         f"{figure_kind.title()} pooled-window decoding for target {target_name}. "
+        f"{metric_caption}"
         "Conditions/evaluation pairs: "
         f"{', '.join(arrays['condition_names'].astype(str))}; these are overlapping "
         "contrasts, not mutually exclusive levels. "

@@ -283,8 +283,11 @@ runs.
 To inspect a completed run interactively, launch the metadata-driven webapp and
 select **Condition generalization results**. The view automatically scans the
 selected session's `analysis_runs` directory, then offers saved run, training
-window, target, and native/transfer/gap selectors. It validates and plots the
-selected `results.npz`; it does not recompute models or open raw neural data.
+window, target, and native/transfer/gap selectors. Categorical targets also
+offer a metric selector that displays either balanced accuracy or AUC, rather
+than overlaying both; numerical targets use their sole R2 metric. The view
+validates and plots the selected `results.npz`; it does not recompute models or
+open raw neural data.
 The execution-time session path is displayed only as provenance, allowing a
 cluster run copied into the corresponding workstation session to remain
 portable.
