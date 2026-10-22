@@ -297,6 +297,7 @@ def test_selectors_render_one_saved_figure_and_close_it(
             calls.append(("selectbox", (label, tuple(options))))
             selected = {
                 "Target": "current_action",
+                "Metric": "auc",
                 "Result type": "Reference transfer",
             }
             return selected.get(label, options[0])
@@ -326,11 +327,18 @@ def test_selectors_render_one_saved_figure_and_close_it(
         figure_kind: str,
         window_name: str,
         target_name: str,
+        metric_name: str,
     ) -> plt.Figure:
         calls.append(
             (
                 "plot",
-                (saved_result, figure_kind, window_name, target_name),
+                (
+                    saved_result,
+                    figure_kind,
+                    window_name,
+                    target_name,
+                    metric_name,
+                ),
             )
         )
         return plt.figure()
@@ -342,15 +350,86 @@ def test_selectors_render_one_saved_figure_and_close_it(
 
     plot_calls = [value for name, value in calls if name == "plot"]
     assert len(plot_calls) == 1
-    saved_result, figure_kind, window_name, target_name = plot_calls[0]
+    saved_result, figure_kind, window_name, target_name, metric_name = plot_calls[0]
     assert saved_result["run_fingerprint"] == "run-fingerprint"
-    assert (figure_kind, window_name, target_name) == (
+    assert (figure_kind, window_name, target_name, metric_name) == (
         "transfer",
         "pre_choice",
         "current_action",
+        "auc",
     )
+    metric_controls = [
+        value for name, value in calls if name == "selectbox" and value[0] == "Metric"
+    ]
+    assert metric_controls == [("Metric", ("balanced_accuracy", "auc"))]
     assert len(figure_numbers) == 1
     assert not plt.fignum_exists(figure_numbers[0])
+
+
+def test_numerical_target_uses_r2_without_metric_dropdown(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A sole numerical metric is forwarded without adding a redundant control."""
+    from src.neural_analysis.webapp import condition_generalization_views as view
+
+    session_root = tmp_path / "session"
+    run_directory = (
+        session_root
+        / "analysis_runs"
+        / "pooled_task_variable_decoding_20261012T045944Z"
+    )
+    _write_completed_run(run_directory)
+    controls: list[tuple[str, tuple[str, ...]]] = []
+    plotted_metrics: list[str] = []
+
+    class NumericalStreamlit:
+        """Select a numerical target and record the controls presented."""
+
+        def subheader(self, _message: str) -> None:
+            pass
+
+        def selectbox(self, label: str, *, options: list[str]) -> str:
+            controls.append((label, tuple(options)))
+            return "relative_doubt" if label == "Target" else options[0]
+
+        def caption(self, _message: str) -> None:
+            pass
+
+        def json(self, _value: object, **_kwargs: object) -> None:
+            pass
+
+        def pyplot(self, _figure: plt.Figure) -> None:
+            pass
+
+        def info(self, message: str) -> None:
+            raise AssertionError(message)
+
+        def code(self, message: str) -> None:
+            raise AssertionError(message)
+
+        def error(self, message: str) -> None:
+            raise AssertionError(message)
+
+    def fake_plot(
+        _saved_result: object,
+        *,
+        figure_kind: str,
+        window_name: str,
+        target_name: str,
+        metric_name: str,
+    ) -> plt.Figure:
+        del figure_kind, window_name, target_name
+        plotted_metrics.append(metric_name)
+        return plt.figure()
+
+    monkeypatch.setattr(view, "plot_pooled_timecourses", fake_plot)
+    view.render_condition_generalization_view(
+        NumericalStreamlit(), SimpleNamespace(session_root=session_root)
+    )
+
+    assert "Metric" not in [label for label, _options in controls]
+    assert plotted_metrics == ["r2"]
 
 
 def test_condition_generalization_is_available_without_raw_sources(

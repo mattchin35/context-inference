@@ -189,6 +189,44 @@ def test_full_transfer_uses_one_contained_shared_legend_without_overlap() -> Non
         plt.close(figure)
 
 
+def test_categorical_metric_filter_removes_the_other_metric_from_the_figure() -> None:
+    """Interactive plotting can show AUC without balanced-accuracy clutter."""
+    from src.neural_analysis.task_decoding.pooled import plotting
+
+    figure = plotting.plot_pooled_timecourses(
+        _full_condition_saved_result(),
+        figure_kind="transfer",
+        window_name="pre_choice",
+        target_name="current_action",
+        metric_name="auc",
+    )
+    try:
+        visible = _all_figure_text(figure)
+        assert "auc" in visible
+        assert "balanced_accuracy" not in visible
+        assert all(axis.get_ylabel() == "auc" for axis in figure.axes)
+        assert "selected metric: auc" in visible
+    finally:
+        plt.close(figure)
+
+
+def test_metric_filter_rejects_a_metric_from_another_target_family() -> None:
+    """Numerical targets cannot be mislabeled with a categorical metric."""
+    from src.neural_analysis.task_decoding.pooled import plotting
+
+    arrays, metadata = make_result_template()
+    saved = {"arrays": arrays, "metadata": metadata}
+
+    with pytest.raises(ValueError, match="not applicable.*relative_doubt"):
+        plotting.plot_pooled_timecourses(
+            saved,
+            figure_kind="native",
+            window_name="pre_choice",
+            target_name="relative_doubt",
+            metric_name="auc",
+        )
+
+
 @pytest.mark.parametrize(
     ("figure_kind", "expected_label_count"),
     (("native", 13), ("gap", 13)),
