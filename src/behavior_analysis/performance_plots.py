@@ -3878,7 +3878,8 @@ def plot_cross_mouse_learning_curve(
             linewidth=1.5,
             color=all_colors[mouse_index % len(all_colors)],
             alpha=0.75,
-            label=mouse,
+            # label=mouse,
+            label="_no_legend_",
         )
 
     mean_df = (

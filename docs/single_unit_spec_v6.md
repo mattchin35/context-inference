@@ -1,6 +1,6 @@
 # Single-Unit Selectivity Analysis Spec
 
-> Working revision v6: incorporates the agreed first-pass inspection defaults. Predictor-coding examples are illustrative only: Codex must verify the existing source codes and choose an appropriate, documented model encoding. Effect maps are in-sample; the unit-level OLS–Poisson MSE comparison is held out. Significance remains provisional, with temporal-fluctuation controls and broader multicollinearity work explicitly deferred. The former open review points are replaced by an accepted-defaults summary and codebase verification tasks.
+> Working revision v6, updated 2026-10-27: incorporates the agreed source names, trial and unit selection, shared configurable neural bins, independent regional coverage, saved-feature inputs, and offline OLS-first execution. Effect maps are in-sample; the unit-level OLS–Poisson MSE comparison is held out. Significance remains provisional, with temporal-fluctuation controls and broader multicollinearity work explicitly deferred. Source values and model encodings must be documented consistently with the existing codebase.
 
 ## Goal
 
@@ -38,17 +38,27 @@ The summary figures should allow selection among these three windows. Use the ex
 
 No time-resolved selectivity output or "selective at any time during the trial" summary is required. The selected ±2 s windows do not overlap between trials by task design; no overlap-detection or boundary-trial exclusion machinery is needed.
 
+### Shared Neural Bins and Time Scales
+
+Unit and PC analyses must start from the **same regional binned activity**, with axes **trial × time bin × unit**. Use **100-ms bins by default**, with one configurable bin width shared by both analyses. Use the same alignment, full -2 to +2 s window, bin edges, and before/after/whole bin membership; do not use a separate temporal resolution for PCs and units.
+
+- Construct the full-window activity once per region/alignment/bin configuration using the existing binned-activity utility. Retain spike counts per bin; any existing utility's conversion to/from Hz must be explicit and preserve bin width and units.
+- Use complete bins with the window endpoints and time zero as bin boundaries. Follow the existing half-open convention: before is [-2, 0), after is [0, 2), and whole is [-2, 2), in seconds. A spike at time zero belongs to after, not both halves. A configured bin width must partition both halves without truncating or padding the requested windows.
+- For a unit, sum its counts over the selected bins to obtain one trial response. For a PC, average its scores over those same bins to obtain one trial response after the regional PCA transformation.
+- Apply the same trial-level predictor construction, full/reduced OLS comparisons, coefficient-display policy, and OLS null procedure to either neural representation. Their response units differ, and only unit counts support the Poisson model. Shared bins do not turn bins into independent regression observations.
+- Changing bin width defines a new analysis configuration for both representations and requires recomputing its activity/PCA products and fits. Retain the actual bin width and edges with the results.
+
 ## Predictor Set
 
 Use the following requested predictor set **by default**, with individual predictors manually selectable. These are **predictors of neural activity**, not separate decoding targets. The response remains the selected unit's spike count or the selected PC response.
 
-| Predictor | Requested variable or definition | Trial timing |
+| Predictor | Existing source column or definition | Trial timing |
 |---|---|---|
-| Task/context state | Actual task context governing trial $i$; map to the existing state field | State on trial $i$ |
-| Action | Choice made on trial $i$; map to the existing action field | Action on trial $i$ |
-| Current reward | Reward outcome on trial $i$; map to the existing reward field | Outcome on trial $i$ |
-| Previous reward | The same reward measure from the immediately preceding trial | Outcome on trial $i-1$ |
-| Value | `FQl_rel_value` | Value entering trial $i$ |
+| Task/context state | `state_int` | State on trial $i$ |
+| Action | `action` | Action on trial $i$ |
+| Current reward | `reward` | Outcome on trial $i$ |
+| Previous reward | `reward` from the immediately preceding chronological trial, subject to availability below | Outcome on trial $i-1$ |
+| Value | `FQlearning_rel_value` | Value entering trial $i$ |
 | Belief | `HMM_rel_value_logodds` | Value entering trial $i$ |
 | Doubt | `relative_doubt_index` | Value entering trial $i$ |
 | Consecutive rewards | `consecutive_rewards` | History entering trial $i$ |
@@ -60,32 +70,40 @@ Use the following requested predictor set **by default**, with individual predic
 
 - Keep **current reward and previous reward as separate predictor terms**. Do not merge them into one generic reward/history variable.
 - All listed values, beliefs, doubt measures, and history DVs describe the state **entering trial $i$**, before incorporating that trial's outcome. Use the same predictor definitions for before, after, and whole-window neural responses; do not change their update timing with the selected neural epoch.
-- Derive previous reward from the original chronological trial sequence within the session, before analysis-specific filtering. A missing previous-trial value is unavailable, not zero and not the last retained trial's outcome. Apply the agreed identical-trial rule to full/reduced fits.
-- The source identifiers above preserve the user's requested spelling, including `FQl_rel_value`. Codex must check the existing codebase for the actual column names, numerical representations, and update/reset conventions, and document any mapping. Do not silently substitute another value/belief model or shift a column without checking how it is already aligned.
-- `FQl_rel_value` and `relative_value` are intentionally listed separately. Similar names do not establish that they are identical, nor should they be silently merged. Any actual exact redundancy is handled only by the agreed minimal rank check.
+- Derive previous reward from the original chronological trial sequence within the session, before analysis-specific filtering. It is unavailable on the first trial, when the immediately preceding reward is missing/invalid, or when the immediately preceding trial is manual-reward, no-choice, or dark-state. Do not fill it with zero or use the last retained trial's outcome. Neural-coverage and predictor filtering must not change which chronological row is the predecessor. Apply the agreed identical-trial rule to full/reduced fits.
+- Use the existing source names exactly, including `FQlearning_rel_value`; correct misspellings in specification labels or configuration references rather than creating renamed copies of existing feature columns. Verify numerical representations and update/reset conventions against the saved features and their existing generators. Do not silently substitute another value/belief model or shift an already pre-update column.
+- `FQlearning_rel_value` and `relative_value` are intentionally separate. The former is the existing forgetting-Q value; `relative_value` is the pre-trial `left_value - right_value` history counter. `relative_omissions` is `left_omissions - right_omissions`, not the separate `relative_omissions_index`. Any actual exact redundancy is handled only by the agreed minimal rank check.
+- Preserve `HMM_rel_value_logodds` as stored: the current generator returns `tanh(tanh_scale * log_odds)` from the entering-trial belief, not an untransformed log-odds value. Document the saved `tanh_scale`; do not invert this transform or substitute `HMM_rel_value_logodds_decay`.
+- Existing history counters are recorded before the current outcome, carry across block transitions, and skip state updates on manual-reward/no-choice trials. Preserve these saved conventions; do not reset, recompute, or realign histories after filtering for neural analysis. `relative_doubt_index` remains the existing feature derived from counterfactual omission counters.
 - Do not automatically add other decoding targets, value models, or history variables to this simultaneous predictor set. Include **main effects only**, with an intercept: no automatic interactions, polynomial terms, additional lags, or predictor selection. Choose predictor coding as specified below.
 
 Current-trial reward is an outcome-associated predictor even in the before-event model. A relationship with before-event activity should be described as an association with the trial's eventual reward outcome, not automatically as a neural response to reward delivery.
 
-### Predictor Coding — Verify the Codebase, Then Choose an Appropriate Encoding
+### Predictor Coding — Existing Source Values and Documented Model Encoding
 
-**Codex must inspect the existing codebase before assigning predictor codes.** Verify source values, category meanings, left/right sign conventions, reward semantics, and missing-value codes. Choose an appropriate regression encoding consistent with those verified meanings, and document the mapping from source values to model columns.
+**Use the verified existing source meanings.** Check the saved inputs for consistency with these codes and the project's missing-value conventions. Choose an appropriate regression encoding consistent with those meanings, and document the mapping from source values to model columns.
 
-The following is an **illustrative encoding, not a mandatory mapping or a claim about the existing data**:
+The existing task-table representations are:
 
-| Predictor | Example model encoding |
+| Predictor | Existing source representation |
 |---|---|
-| State | Left = −1; right = +1 |
-| Action | Left = −1; right = +1 |
+| `state_int` | Right = 0; left = 1; dark = 2, excluded from this analysis |
+| `action` | Right = 0; left = 1; missing/no-choice entries are excluded |
 | Current reward | No reward = 0; reward = 1 |
 | Previous reward | No reward = 0; reward = 1 |
-| Listed numerical DVs | Preserve the verified variable's existing numerical values |
+| Listed numerical DVs | Preserve the existing numerical values and transformations |
 
-For example, if the verified source uses a different left/right code, Codex may retain a suitable existing binary convention or explicitly map it to a suitable contrast. It must not assume that a numeric sign or integer label means left, right, rewarded, or missing. Keep the meanings consistent across windows, units, PCs, and response-model families; label the resulting coefficient direction/reference category.
+Retaining the existing 0/1 binary coding is appropriate; an explicitly documented nonredundant contrast is also permitted. Do not infer category meanings from numeric signs or silently recode missing/no-choice/dark values as a valid binary class. Keep the meanings consistent across windows, units, PCs, and response-model families; label the resulting coefficient direction/reference category.
 
 Represent a binary predictor with one appropriately coded column alongside the intercept; avoid redundant category columns. If a selected predictor genuinely requires multiple category contrasts, use an appropriate nonredundant encoding and retain the agreed joint test of its complete term. Do not add category expansions that the current predictors do not require. Numerical DVs remain numerical predictors; coefficient standardization is the post-fit display conversion below, not a reason to change their definitions.
 
 An ambiguous or unavailable source mapping must be reported, not guessed or silently replaced with a different variable. Source verification is an implementation task, not an invitation to redesign the predictor set.
+
+### Saved Behavioral Inputs
+
+Consume the existing saved `*_augmented_trials.csv` and associated `trial_feature_params.json`. Preserve the complete chronological trial sequence and its `cur_trial` identities when deriving previous reward; use `cur_block` as the existing behavioral-block identifier for held-out grouping.
+
+Do not run behavioral feature generation, refit behavioral models, or automatically regenerate a missing feature during this neural analysis. Report missing required columns or unavailable feature settings explicitly. Retain the input file identities and relevant saved feature parameters with the analysis so the selected predictors and transformations can be interpreted.
 
 ### Overlapping Predictors and Inspection Scope
 
@@ -113,11 +131,28 @@ Do not add an in-sample/CV toggle for the selectivity maps. Cross-validation is 
 For each unit and selected analysis window, use **one response per eligible trial: the total spike count within that window**.
 
 - Before, after, and whole windows are fitted separately. Each supplies one spike-count response per trial.
+- Obtain that total by summing the selected bins from the shared regional activity described under **Shared Neural Bins and Time Scales**. PC responses use the same bins and epochs; do not build a separate unit-analysis grid.
 - With $N$ eligible trials, the response vector has $N$ entries and the predictor matrix has $N$ rows. Do not treat time bins within a trial as additional independent observations in this summary analysis.
 - Use the same count response for OLS and Poisson and for their held-out MSE comparison. Firing rate may be shown descriptively, but it is not a separate response-model toggle here.
 - Do not z-score the count response before the Poisson fit. Coefficient standardization is a post-fit display conversion, defined under **Coefficient Scales and Interpretation**, not an additional response-preprocessing step.
 
 The count-response definition applies to individual units. For PCs, use one window-mean PC score per trial, as defined under **Summary Figure 3: PC × Variable Selectivity**.
+
+### Offline Execution — OLS First, Poisson Afterwards
+
+Run fits and null resampling **offline**. The webapp and plotting layer load saved results; selecting a result or changing a display control must not start fitting. Changing the selected predictor set or another fitted setting requires an explicit offline analysis configuration.
+
+Support this staged workflow:
+
+1. Prepare the saved predictors, regional activity, descriptive PC responses, and unit comparison folds where available. Insufficient groups or unavailable comparison folds affect held-out MSE only; they must not block valid in-sample effects or null tests.
+2. Run and save **unit OLS and PC OLS** effects, coefficients, null tests, and their separate BH families. Save unit OLS held-out predictions, fold scores, counts, and assignments for the later paired model comparison. OLS effects and inference remain available even if a unit's held-out comparison is unavailable.
+3. Make completed OLS results available for inspection **before Poisson starts or finishes**. An OLS-only execution is supported; its output must not remain hidden until a requested future Poisson stage completes.
+4. Run **unit Poisson** effects, bootstrap tests, its separate BH family, and matched held-out fits afterwards. Reuse compatible saved preparation and OLS comparison results rather than refitting completed OLS work. The saved predictors, eligible rows, counts, settings, and fold assignments must match for a paired comparison; changed inputs/settings require a new compatible analysis, not silent mixing of results.
+5. Publish the paired OLS–Poisson MSE comparison only when all five requested paired folds are valid. Before the Poisson comparison stage completes, identify that comparison as pending or not run rather than inventing a paired score.
+
+Save completed work at practical response/configuration boundaries with explicit progress and stage status. Subsequent offline execution must be able to continue compatible unfinished stages without rerunning completed work. Completed OLS outputs remain readable if a Poisson stage is interrupted or fails. Preserve previous results when inputs, parameters, or analysis version change.
+
+BH correction still uses each complete family defined below. A partial checkpoint is progress evidence; do not present correction over only the finished cells as a finalized family. Retain configured seeds and reproducible resampling so executing Poisson later does not change completed OLS results. These requirements do not introduce adaptive resampling or an elaborate recovery framework.
 
 ### OLS / Gaussian Linear Model
 
@@ -239,7 +274,7 @@ Label the coefficient display **Log-count coefficient per predictor SD (Poisson)
 
 ### Scope and Availability
 
-For a nonconstant binary predictor, the same column-level scaling can be calculated, but document its verified coding: a one-SD change is not generally a complete switch between its two classes. Follow **Predictor Coding — Verify the Codebase, Then Choose an Appropriate Encoding** rather than assuming that the illustrative signs apply. A multilevel predictor has separate contrast coefficients rather than one arbitrary signed variable-level coefficient; its partial effect and significance test remain joint across the complete term.
+For a nonconstant binary predictor, the same column-level scaling can be calculated, but document its verified coding: a one-SD change is not generally a complete switch between its two classes. Follow **Predictor Coding — Existing Source Values and Documented Model Encoding** and label the coefficient direction using the chosen model encoding. A multilevel predictor has separate contrast coefficients rather than one arbitrary signed variable-level coefficient; its partial effect and significance test remain joint across the complete term.
 
 Do not convert an undefined coefficient scale, such as OLS standardization with $s_y=0$, into a zero coefficient. Mark that coefficient display unavailable. This does not introduce a new predictor-selection or multicollinearity workflow.
 
@@ -415,7 +450,7 @@ Define the testing families as follows:
 
 Mark invalid or unavailable tests as unavailable and exclude them from the valid-test family; do not invent raw p-values for them. Retain the family definition and number of valid tests.
 
-Correction belongs to the analysis configuration, not the visible subset of a plot. Hiding a region, unit, PC, or predictor row/column must not recalculate BH over only the displayed cells. Changing the fitted predictor set defines a different model configuration, not a display-only change.
+Correction belongs to the analysis configuration, including its shared bin width and analyzed regional populations, not the visible subset of a plot. Hiding a region, unit, PC, or predictor row/column must not recalculate BH over only the displayed cells. Changing the fitted predictor set defines a different model configuration, not a display-only change.
 
 Do not add another correction across all windows, model families, or manually explored predictor configurations for this inspection analysis. Include the caveat:
 
@@ -442,7 +477,16 @@ This is a minimal validity check, not a comprehensive multicollinearity analysis
 
 ## Eligibility and Minimal Failure Handling
 
-Reuse the existing unit-quality selection. Do not add an arbitrary minimum spike-count threshold or a new QC/diagnostic framework. Retain eligible trial counts and total spike counts for inspection.
+### Trial and Regional Coverage Eligibility
+
+- Exclude **manual-reward, no-choice, and dark-state trials** from both unit and PC analyses, including the descriptive PCA input pool. These are baseline exclusions even when the corresponding action/state predictor is deselected. Use the existing `experimenter_reward_given` flag and normalization of its legacy `give_reward` name, existing no-choice/missing-action conventions, and `state_int` codes. Missing/invalid required baseline information is unavailable, not an eligible default value.
+- Treat PFC and HPC **independently**. Require full coverage of the entire -2 to +2 s alignment window in a region for a trial to enter that region's activity tensor, including when fitting a before-only or after-only summary. Coverage means recorded/aligned temporal support, not the presence of spikes; do not mistake an unrecorded interval for measured silence.
+- Do not require common PFC/HPC trials. A trial unavailable in one region can still contribute to the other; a regional failure must not suppress valid independent results. This coverage requirement does not add overlap detection or an exclusion based on crossing behavioral trial boundaries.
+- Within a region/alignment/bin configuration, use one shared baseline-valid, full-coverage activity pool for unit counts and PCA construction. Fit the descriptive PCA on that pool before selected-predictor missingness is applied. Subsequent unit and PC regressions apply the full selected predictor and response eligibility masks; selecting a different predictor subset must not by itself refit the descriptive PCA basis.
+
+### Unit Selection and Fit Validity
+
+Reuse the existing channel and cluster selection, including **both `good` and `mua` units**. Preserve the configured PFC/HPC probe roles and channel restrictions. Use the existing quality-column convention (`group` for manual Phy labels, or explicitly selected `KSLabel`) and existing normalization of missing quality labels to `mua`; retain the actual column, labels, and selection with the results. Do not add an arbitrary minimum spike-count threshold or a new QC/diagnostic framework. Retain eligible trial counts and total spike counts for inspection.
 
 - Select eligible trials using the full selected predictor set and the required neural response. Exclude missing/invalid required observations without filling them with zero. Reuse this mask for all corresponding reduced models.
 - Require **more eligible observations than fitted design-matrix columns, including the intercept**, and a full-rank predictor matrix. This is a minimal positive-residual-degrees-of-freedom check, not a guarantee of reliable estimation.
@@ -547,12 +591,12 @@ Use OLS for one **window-mean PC score per trial**.
 
 ### PC Response Construction
 
-1. Start from regional unit activity in **100-ms bins by default**, using valid neural trials pooled across the full **−2 to +2 s** analysis window for the selected alignment. Reuse the existing binned-activity utility.
+1. Start from the **same regional trial × time-bin × unit activity tensor used for the unit responses**, in **100-ms bins by default**, with the shared configurable bin width and edges defined under **Shared Neural Bins and Time Scales**. Pool the baseline-valid, regionally full-coverage trials across the full **−2 to +2 s** window. Do not require bilateral coverage or restrict this PCA pool by the selected predictors' missingness.
 2. Z-score each usable unit once using observations pooled across those trials and time bins. A unit with zero variance in this input matrix cannot be z-scored; omit that input from PCA and report the usable-unit count. This does not automatically exclude that unit from independent trial-count analyses.
-3. Fit separate shared-temporal PCAs for PFC and HPC. Use **one descriptive basis per session, region, and selected alignment**, reused across before, after, and whole-window summaries rather than refitted for each epoch.
+3. Fit separate shared-temporal PCAs for PFC and HPC. Use **one descriptive basis per session, region, selected alignment, and shared activity configuration**, reused across before, after, and whole-window summaries rather than refitted for each epoch or predictor subset. A change to bin width, input trials, or selected units changes this activity configuration.
 4. Retain **up to 10 PCs per region by default**, with the count configurable. If fewer usable dimensions are available, retain that smaller count and report the actual count rather than failing the session or padding with zero-variance components.
 5. Project the regional activity into those PC coordinates with **whitening disabled**. Use ordinary PC scores directly: no additional PC-score z-scoring, post-PCA centering/scaling, or PC-scaling toggle.
-6. For each trial and PC, average that PC's scores over the time bins in the selected before, after, or whole window. Apply the required predictor/response eligibility mask for the subsequent trial-level fit.
+6. For each trial and PC, average that PC's scores over exactly the bins used to sum that trial's unit counts for the selected before, after, or whole window. Apply the required predictor/response eligibility mask for the subsequent trial-level fit.
 7. Fit the unpenalized multivariable OLS model to that trial-level response, using all its eligible trials for the descriptive partial effects. The predictor table has one row per trial, just as in the unit analysis.
 
 Time bins define the PC trajectory and its window average; they are **not additional independent observations** for the summary encoding model. Keep the original PCA basis fixed during PC-response null resamples; resample the trial-level PC response residuals as specified, not the PCA fitting procedure.
@@ -593,6 +637,7 @@ This figure answers:
 - Use stable unit-ID ordering grouped by region and PC component order within each region. Preserve the identity of rows when switching windows or models.
 - Label partial-effect maps **In-sample conditional effect**, with the specific scale: **Partial $R^2$** for OLS and **Partial deviance explained** for Poisson. Keep the distinct coefficient-display labels defined above.
 - Include the first-pass temporal caveat and the within-family FDR scope in figure notes or an immediately associated result description.
+- Load saved offline results for presentation. Completed OLS results must be inspectable while Poisson is pending, running, or failed; distinguish incomplete-stage status from an unavailable scientific test.
 - Retain a compact result record with session, alignment, window, model family, selected predictor set, verified source-to-model coding, eligible trial and spike counts, unit/PC identities, fit/test validity and reasons, actual PCA settings, null-draw count and seed, raw/adjusted p-values, and BH family definition/size. For the MSE comparison, also retain fold assignments, observation counts, and fold-level scores.
 - Reuse existing result/plotting structures where practical. These records are ordinary analysis metadata, not a new provenance or validation framework.
 
@@ -652,14 +697,21 @@ The previously open scientific settings are resolved for this first-pass impleme
 |---|---|
 | Analysis scope | Single session; choice alignment by default, trial-start alignment available |
 | Windows | Before −2 to 0 s; after 0 to +2 s; whole −2 to +2 s |
-| Unit response | One total spike count per eligible trial/window |
+| Shared neural bins | Same regional trial × bin × unit activity for units and PCs; 100-ms default width, configurable together; identical bin edges and epochs |
+| Unit response | One total spike count per eligible trial/window, summed over the shared bins |
+| Baseline trial exclusions | Manual-reward, no-choice, and dark-state trials, regardless of selected predictors |
+| Previous reward | Immediately preceding chronological reward; unavailable after manual-reward/no-choice/dark trials or missing/invalid preceding reward; no bridging |
+| Regional coverage | Independent PFC/HPC eligibility; full -2 to +2 s coverage required for both unit and PC inputs |
+| Unit quality | Both `good` and `mua`, using existing quality/channel selection and recorded source column |
+| Behavioral inputs | Existing saved augmented-trial table and `trial_feature_params.json`; no feature regeneration |
+| Execution | Offline, with saved progress; unit/PC OLS can complete and be inspected before unit Poisson runs; resume compatible unfinished stages |
 | Primary effects | In-sample full/reduced fits; no CV toggle for effect maps |
 | Response models | Unpenalized OLS and Poisson log-link GLM, with intercept and main effects only |
-| Predictor set | Requested table above, manually selectable; no automatic additions or pruning |
-| Predictor coding | Verify codebase meanings; choose and document an appropriate consistent encoding; listed codes are examples only |
+| Predictor set | Existing source names in the table above, including `FQlearning_rel_value`; manually selectable; no automatic additions or pruning |
+| Predictor coding | Preserve verified source meanings and numerical DV transformations; document the chosen consistent binary model encoding |
 | Coefficients | Post-fit OLS standardized coefficient; Poisson log-count coefficient per predictor SD |
 | PC response | Window-mean score from one descriptive shared-temporal PCA per region/alignment |
-| PCA inputs/default size | 100-ms bins, full −2 to +2 s, unit z-scoring once, up to 10 PCs per region |
+| PCA inputs/default size | Shared bins and regional baseline/full-coverage activity pool, full −2 to +2 s, independent of predictor missingness; unit z-scoring once, up to 10 PCs per region |
 | PC scaling | No whitening or extra PC-score scaling |
 | OLS null | Across-eligible-trial Freedman–Lane residual permutation within session |
 | Poisson null | Independent count draws from the fitted reduced Poisson means |
@@ -674,9 +726,10 @@ The previously open scientific settings are resolved for this first-pass impleme
 
 Codex should now resolve **codebase facts**, not reopen the accepted scientific defaults:
 
-1. Verify source columns, trial identifiers, left/right and reward codes, missing-value meanings, and the entering-trial update/reset conventions. Document any source-to-predictor mapping; do not guess unresolved meanings.
-2. Reuse the existing unit-quality selection, regional assignments, alignment/window extraction, binned-activity utilities, and behavioral-block identifiers. Check that the comparison grouping uses the intended existing blocks.
+1. Verify the saved augmented-trial columns and feature parameters against the existing source names, trial identifiers, category codes, missing-value meanings, and entering-trial update/reset conventions documented above. Preserve saved feature values and report any mismatch; do not regenerate or guess unresolved inputs.
+2. Reuse the existing `good`/`mua` unit-quality selection, regional assignments, shared alignment/bin extraction, and `cur_block` identifiers. Implement independent regional full-window coverage and the agreed baseline exclusions without adding a bilateral trial requirement.
 3. Reuse appropriate unpenalized model-fitting and result/plotting utilities. Confirm intercept handling, convergence reporting, and the explicit absence of an inherited regularization penalty.
 4. Implement the agreed minimal validity and unavailable-result behavior. Do not add automatic predictor pruning, numerical-result substitution, model-family expansion, adaptive resampling, or a broad recovery workflow.
+5. Provide offline staged execution and saved progress so OLS results can be completed, published, and inspected before Poisson runs. Keep display-only selection separate from changes requiring a new fit configuration.
 
 Known codebase mismatches should be reported with their scope, while independent valid analyses continue. The spec is ready for first-pass implementation planning; its provisional statistical interpretation and required future temporal re-evaluation remain part of the delivered results.

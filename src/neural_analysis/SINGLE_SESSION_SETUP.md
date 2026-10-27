@@ -240,7 +240,7 @@ If the dry-run lists only the expected new or updated outputs, perform the
 copy:
 
 ```bash
-rsync -a --info=progress2 --relative \
+ rsync -a --info=progress2 --relative \
   "$REMOTE_SESSION/./analysis_runs/" \
   "$REMOTE_SESSION/./processed/ppc_prerequisites_preview/" \
   "$REMOTE_SESSION/./processed/ppc_prerequisites_final/" \
