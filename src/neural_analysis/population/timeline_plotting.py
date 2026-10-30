@@ -402,17 +402,29 @@ def _add_choices(
     row: int,
     contexts: pd.DataFrame,
 ) -> None:
-    """Add choice lanes and logged-context hover to a one-based subplot row.
+    """Add outcome-styled choice lanes and context hover to a one-based subplot row.
 
     choices retains original trial IDs and elapsed/UTC-second choice times.
     contexts is the elapsed-second interval table from context_intervals.
-    Custom data has shape (selected choices, 3): trial ID, UTC time, context.
+    Optional reward is 1/0/NaN (rewarded/unrewarded/unknown). Marker sizes are
+    pixels: 12 filled, 7 open, or 9 gray cross for unknown. Custom data has
+    shape (selected choices, 4): trial ID, UTC time, context, reward status.
     """
     for action, label, color in ((1, "Left", "#2563eb"), (0, "Right", "#c2410c")):
         selected = choices.loc[choices.action == action]
-        custom = np.empty((len(selected), 3), dtype=object)
+        rewards = np.full(len(selected), np.nan)
+        if "reward" in selected:
+            rewards = pd.to_numeric(selected.reward, errors="coerce").to_numpy(
+                dtype=float, na_value=np.nan
+            )
+        rewarded, unrewarded = rewards == 1, rewards == 0
+        symbol = "triangle-up" if action else "triangle-down"
+        custom = np.empty((len(selected), 4), dtype=object)
         custom[:, :2] = selected[["trial_id", "choice_time"]].to_numpy()
         custom[:, 2] = _choice_context_labels(selected.elapsed_s.to_numpy(), contexts)
+        custom[:, 3] = np.select(
+            [rewarded, unrewarded], ["Rewarded", "Unrewarded"], default="Unknown"
+        )
         figure.add_trace(
             go.Scatter(
                 x=selected.elapsed_s,
@@ -421,12 +433,18 @@ def _add_choices(
                 name=f"{label} choices",
                 customdata=custom,
                 marker={
-                    "color": color,
-                    "size": 9,
-                    "symbol": "triangle-up" if action else "triangle-down",
+                    "color": np.where(rewarded | unrewarded, color, "#6b7280").tolist(),
+                    "size": np.select(
+                        [rewarded, unrewarded], [12, 7], default=9
+                    ).tolist(),
+                    "symbol": np.select(
+                        [rewarded, unrewarded], [symbol, symbol + "-open"], default="x"
+                    ).tolist(),
+                    "line": {"width": 1.5},
                 },
                 hovertemplate=f"{label} choice<br>Trial %{{customdata[0]}}<br>Elapsed %{{x:.3f}} s"
-                "<br>UTC %{customdata[1]:.6f} s<br>Active context: %{customdata[2]}<extra></extra>",
+                "<br>UTC %{customdata[1]:.6f} s<br>Active context: %{customdata[2]}"
+                "<br>Reward: %{customdata[3]}<extra></extra>",
             ),
             row=row,
             col=1,

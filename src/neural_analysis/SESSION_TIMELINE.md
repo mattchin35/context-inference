@@ -22,6 +22,8 @@ the supported source layouts. No additional configuration file is required.
   existing legacy experimenter-reward flags follow the normal project rules.
   Incorrect and unrewarded choices are included. Experimenter rewards,
   nonchoices, and the unsaved active end-of-file trial are excluded.
+  The optional `reward` column uses `1=rewarded`, `0=unrewarded`; missing or
+  other values stay unknown. Correctness is not used as a reward substitute.
 - Optional event CSVs use the existing `Time`, `Event`, and `Note` columns:
   `trial_start`, `left_entry`, `right_entry`, LED on/off transitions, and
   `enter_left_patch`/`enter_right_patch`/`enter_dark_period` context entries.
@@ -103,6 +105,18 @@ red for right active, and gray for dark periods. The shading uses the actual
 context-entry timestamps and continues through gaps between choices until
 the next entry or session end. It affects only the choices row.
 
+Choice markers show actual reward outcomes: **large filled triangles**
+(12 px) are rewarded and **small open triangles** (7 px) are unrewarded.
+Left/right colors and lanes stay the same, including for correct choices
+without reward. Gray crosses indicate unknown reward status. Hover includes
+the outcome alongside the trial ID, time, and active context.
+
+New prepared results retain reward flags in the choice table. When an older
+result omits them, the metadata-driven viewer uses a cached behavior-table
+read and checks choice identities before attaching outcomes in memory. This
+does not rewrite the archive or require PCA recomputation. A standalone old
+archive without its behavior source displays unknown reward status.
+
 Time before the first logged context entry remains unshaded and is labeled
 **Unknown** in choice hover. If context entries are absent, the checkbox is
 disabled and the viewer reports context unavailable. Context is not inferred
@@ -133,8 +147,8 @@ interval. Use Window start or Jump to load another part of the session;
 dragging the native range slider does not request new data from Python.
 
 The chart defaults to a light background. Hover a choice for trial ID, side,
-time, and true active context from the logged transitions. Hover a heatmap
-cell for region/probe, PC identity and session variance percentage, original
+time, reward outcome, and true active context from the logged transitions.
+Hover a heatmap cell for region/probe, PC identity and session variance percentage, original
 trial ID, elapsed/UTC/choice-relative bin intervals, and the signed score (or
 per-PC z-score when enabled). LED intervals use verified on/off pairs;
 unpaired transitions remain markers without invented endpoints.

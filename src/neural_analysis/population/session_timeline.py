@@ -56,8 +56,10 @@ class SessionTimelineResult:
 
     ``time_origin_s`` is first-trial UTC Unix seconds. ``choices`` has one row
     per completed ordinary choice: original row_position/trial_id, action,
-    choice_time (UTC seconds), elapsed_s. ``events`` retains source columns
-    plus elapsed_s. ``regions`` maps PFC/HPC to independent regional results;
+    choice_time (UTC seconds), elapsed_s, and reward (1/0/NaN for rewarded,
+    unrewarded, or unknown). Older saved choices may omit reward. ``events``
+    retains source columns plus elapsed_s. ``regions`` maps PFC/HPC to
+    independent regional results;
     ``unavailable`` maps unavailable region names to reasons. ``meta`` stores
     analysis parameters, source identities, and units/axis descriptions.
     """
@@ -78,6 +80,8 @@ def prepare_timeline_choices(trial_df: pd.DataFrame) -> tuple[float, pd.DataFram
     action 0=right/1=left, and cur_trial or trial_id. Existing manual-reward
     flag aliases are accepted. Return (origin UTC seconds, choice DataFrame);
     row_position always means original zero-based position, never index label.
+    Optional reward uses the existing 1=rewarded/0=unrewarded convention;
+    missing or other values become NaN (unknown), never inferred from correct.
     The input is not modified; raw event choices are never reconstructed.
     """
     required = {"start_time", "choice_time", "action"}
@@ -101,6 +105,12 @@ def prepare_timeline_choices(trial_df: pd.DataFrame) -> tuple[float, pd.DataFram
     positions = np.flatnonzero(np.isfinite(times) & np.isin(actions, [0, 1]) & ordinary)
     if np.any(np.diff(times[positions]) < 0):
         raise ValueError("Completed choices must be in chronological source order.")
+    rewards = np.full(len(trial_df), np.nan)
+    if "reward" in trial_df:
+        values = pd.to_numeric(trial_df["reward"], errors="coerce").to_numpy(
+            dtype=float, na_value=np.nan
+        )
+        rewards = np.where(np.isin(values, [0, 1]), values, np.nan)
     choices = pd.DataFrame(
         {
             "row_position": positions,
@@ -108,6 +118,7 @@ def prepare_timeline_choices(trial_df: pd.DataFrame) -> tuple[float, pd.DataFram
             "choice_time": times[positions],
             "action": actions[positions].astype(int),
             "elapsed_s": times[positions] - origin,
+            "reward": rewards[positions],
         }
     )
     return origin, choices

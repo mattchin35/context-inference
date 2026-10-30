@@ -183,6 +183,7 @@ def save_timeline_result(
                 "relative_time": "seconds",
                 "activity": "spike counts per bin",
                 "scores": "unwhitened standardized-unit scores",
+                "choice_reward": "dimensionless flag: 1=rewarded, 0=unrewarded, NaN=unknown",
             },
             "axes": {
                 "scores": ["choice_window", "time_bin", "session_pc"],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 from time import perf_counter
 
@@ -69,6 +70,22 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
             result = load_timeline_result_cached(
                 str(saved), info.st_size, info.st_mtime_ns
             )
+            if "reward" not in result.choices:
+                _, current_choices, _ = load_timeline_behavior_cached(
+                    str(session.metadata_path), config["configuration_id"]
+                )
+                # Legacy archives lack reward flags; verify identity before attaching them.
+                identity = ["row_position", "trial_id", "choice_time", "action"]
+                if not result.choices[identity].equals(current_choices[identity]):
+                    raise ValueError(
+                        "Saved choices do not match the current trial table for reward labels."
+                    )
+                result = replace(
+                    result,
+                    choices=result.choices.assign(
+                        reward=current_choices.reward.to_numpy()
+                    ),
+                )
             st_module.caption(f"Prepared result: {saved}")
         else:
             origin, choices, events = load_timeline_behavior_cached(
@@ -160,6 +177,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
     render_timeline_chart(figure, key=f"{scope}_chart")
     st_module.caption(
         "Completed choices and unsmoothed activity within [-2, +2) s windows. "
+        "Choices: large filled = rewarded; small open = unrewarded; gray crosses = unknown reward. "
         "Blank intervals contain no displayed neural measurements. "
         "Drag horizontally to pan; the mouse wheel scrolls the page. "
         "PC and display changes preserve the current time range; "
@@ -212,7 +230,12 @@ def load_timeline_result_cached(
 
 @st.cache_data(show_spinner=False, max_entries=2)
 def load_timeline_behavior_cached(metadata_path: str, configuration_id: str) -> tuple:
-    """Return origin/choices/events, keyed by actual source identity, without neural arrays."""
+    """Return UTC-second origin, choices with reward flags, and source events.
+
+    metadata_path identifies a session; configuration_id binds its current
+    source files. Choices retain reward=1/0/NaN (rewarded/unrewarded/unknown).
+    The cached tuple contains no neural arrays.
+    """
     from src.neural_analysis.webapp.session_inputs import load_webapp_session
 
     return timeline_io.load_timeline_behavior(load_webapp_session(metadata_path))

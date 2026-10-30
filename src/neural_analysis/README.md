@@ -124,6 +124,9 @@ The optional **Z-score each PC** display uses each PC's own session mean and
 SD, updates heatmap units, and works live without changing prepared results.
 PC-rank and display changes preserve the current panned/navigator time window;
 the time controls and Jump move it explicitly.
+Rewarded choices use larger filled markers; unrewarded choices use smaller
+open markers. Older results pick up outcomes from the behavior table without
+PCA recomputation.
 
 Prepare in advance, using version-3 metadata probe roles:
 

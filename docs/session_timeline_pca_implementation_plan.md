@@ -65,6 +65,17 @@ during review. They take precedence over the earlier review's suggestions.
   and repeated Jump after panning away. Panning remains entirely browser-local.
   Final combined regression: 230 passed, with the same four existing Pynapple
   warnings; Ruff and the offline dependency-lock check passed.
+- Approved pre-Stage-2 refinement: reward=1 choices use filled 12-pixel
+  triangles; reward=0 choices use open 7-pixel triangles. Unknown outcomes use
+  gray crosses, with reward status in hover. Existing side/context styling
+  and viewport state are preserved. New choices retain the reward field;
+  legacy archives are enriched in memory from identity-checked cached behavior
+  data, without archive writes or PCA recomputation. Tests-first commit
+  `2db7530` observed six RED failures. The combined regression passes 235 tests
+  with four existing warnings. Read-only CT026 verification matched all 715
+  saved choices to the source table (289 rewarded, 426 unrewarded) and confirmed
+  the existing archive remained byte-identical. Browser inspection confirmed
+  filled/open markers over context shading and rewarded/unrewarded hover labels.
 
 Small synthetic benchmark examples (three choices, two units/PCs per region):
 
