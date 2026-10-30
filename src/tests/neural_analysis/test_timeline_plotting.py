@@ -383,3 +383,29 @@ def test_all_constant_zscored_rows_have_valid_limits_and_measured_zero_cells(
     assert np.isnan(np.asarray(heatmap.z)[:, 8]).all()
     assert np.isfinite([heatmap.zmin, heatmap.zmax]).all()
     assert heatmap.zmax > 0 and heatmap.zmin == -heatmap.zmax
+
+
+def test_pc_and_track_row_changes_reset_y_axes_without_resetting_session_time(
+    timeline_result,
+):
+    """Stable time UI must not preserve stale vertical ranges after subplot roles or PC ranks change."""
+    first = plotting.plot_session_timeline(
+        timeline_result, pc_ranges={"PFC": (1, 2)}, event_tracks=()
+    )
+    selected = plotting.plot_session_timeline(
+        timeline_result, pc_ranges={"PFC": (2, 2)}, event_tracks=()
+    )
+    with_events = plotting.plot_session_timeline(
+        timeline_result, pc_ranges={"PFC": (1, 2)}, event_tracks=("LED",)
+    )
+    assert (
+        first.layout.uirevision
+        == selected.layout.uirevision
+        == with_events.layout.uirevision
+    )
+    assert first.layout.yaxis2.uirevision is not None
+    assert first.layout.yaxis2.uirevision != selected.layout.yaxis2.uirevision
+    assert first.layout.yaxis2.uirevision != with_events.layout.yaxis2.uirevision
+    assert (
+        first.layout.yaxis2.autorange == selected.layout.yaxis2.autorange == "reversed"
+    )
