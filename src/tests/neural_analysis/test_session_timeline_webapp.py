@@ -66,6 +66,12 @@ def _render_timeline_for_test(metadata_path):
     render_session_timeline_view(st, load_webapp_session(metadata_path))
 
 
+def _timeline_figure_spec(app_test):
+    """Return the Plotly figure dictionary sent through the persistent timeline component."""
+    component = app_test.get("bidi_component")[0]
+    return json.loads(json.loads(component.proto.json)["figure_json"])
+
+
 def test_streamlit_display_changes_reuse_saved_basis(synthetic_timeline_session):
     """Actual Streamlit reruns keep one saved analysis while PC/event controls change."""
     from src.neural_analysis.population.run_session_timeline import run_session_timeline
@@ -82,7 +88,7 @@ def test_streamlit_display_changes_reuse_saved_basis(synthetic_timeline_session)
     selector = next(widget for widget in at.selectbox if widget.label == "PFC probe")
     selector.select("A").run()
     assert not at.exception
-    assert at.get("plotly_chart")
+    assert at.get("bidi_component")
     checkbox = next(widget for widget in at.checkbox if widget.label == "Trial start")
     checkbox.uncheck().run()
     assert not at.exception
@@ -128,12 +134,10 @@ def test_context_checkbox_changes_overlay_without_another_preparation(
         widget for widget in at.checkbox if widget.label == "Show active context"
     )
     assert checkbox.value is True
-    assert (
-        len(json.loads(at.get("plotly_chart")[0].proto.spec)["layout"]["shapes"]) == 3
-    )
+    assert len(_timeline_figure_spec(at)["layout"]["shapes"]) == 3
     checkbox.uncheck().run()
     assert not at.exception
-    assert not json.loads(at.get("plotly_chart")[0].proto.spec)["layout"].get("shapes")
+    assert not _timeline_figure_spec(at)["layout"].get("shapes")
     assert report.result_path.stat().st_mtime_ns == modified_at
     assert (
         len(list((session.session_root / "analysis_runs").glob("*/results.npz"))) == 1
@@ -166,13 +170,13 @@ def test_zscore_checkbox_reuses_saved_result_and_keeps_manual_limit_units_separa
         widget for widget in at.checkbox if widget.label == "Z-score each PC"
     )
     assert checkbox.value is False
-    raw = json.loads(at.get("plotly_chart")[0].proto.spec)
+    raw = _timeline_figure_spec(at)
     raw_heatmap = next(trace for trace in raw["data"] if trace["type"] == "heatmap")
     assert raw_heatmap["colorbar"]["title"]["text"] == "PFC score"
     raw_variance = [item.value for item in at.markdown if "80% =" in item.value]
     checkbox.check().run()
     assert not at.exception
-    standardized = json.loads(at.get("plotly_chart")[0].proto.spec)
+    standardized = _timeline_figure_spec(at)
     z_heatmap = next(
         trace for trace in standardized["data"] if trace["type"] == "heatmap"
     )
@@ -191,7 +195,7 @@ def test_zscore_checkbox_reuses_saved_result_and_keeps_manual_limit_units_separa
     )
     z_limit.set_value(0.5).run()
     assert not at.exception
-    manual = json.loads(at.get("plotly_chart")[0].proto.spec)
+    manual = _timeline_figure_spec(at)
     manual_heatmap = next(
         trace for trace in manual["data"] if trace["type"] == "heatmap"
     )
@@ -225,3 +229,84 @@ def test_zscore_option_is_disabled_without_prepared_pc_scores(
         widget for widget in at.checkbox if widget.label == "Z-score each PC"
     )
     assert checkbox.disabled and checkbox.value is False
+
+
+def test_rank_changes_keep_component_identity_and_navigation_revision(
+    synthetic_timeline_session,
+):
+    """Rank and z-score changes update data in place; explicit navigation requests a new range."""
+    from src.neural_analysis.population.run_session_timeline import run_session_timeline
+
+    session = synthetic_timeline_session
+    report = run_session_timeline(session.metadata_path, {"PFC": "A"})
+    before = report.result_path.read_bytes()
+    at = AppTest.from_function(
+        _render_timeline_for_test, args=(str(session.metadata_path),)
+    ).run()
+    next(widget for widget in at.selectbox if widget.label == "PFC probe").select(
+        "A"
+    ).run()
+    assert not at.exception
+    component_id = at.get("bidi_component")[0].proto.id
+    original = _timeline_figure_spec(at)
+    ranks = next(widget for widget in at.slider if widget.label == "PFC PC ranks")
+    ranks.set_value((2, 2)).run()
+    assert not at.exception
+    changed = _timeline_figure_spec(at)
+    assert changed["data"] != original["data"]
+    assert at.get("bidi_component")[0].proto.id == component_id
+    assert changed["layout"]["uirevision"] == original["layout"]["uirevision"]
+    next(
+        widget for widget in at.checkbox if widget.label == "Z-score each PC"
+    ).check().run()
+    assert not at.exception
+    assert at.get("bidi_component")[0].proto.id == component_id
+    assert (
+        _timeline_figure_spec(at)["layout"]["uirevision"]
+        == original["layout"]["uirevision"]
+    )
+    duration = next(
+        widget for widget in at.number_input if widget.label == "Visible duration (s)"
+    )
+    duration.set_value(10.0).run()
+    shorter = _timeline_figure_spec(at)
+    assert shorter["layout"]["uirevision"] != original["layout"]["uirevision"]
+    start = next(
+        widget for widget in at.number_input if widget.label == "Window start (s)"
+    )
+    start.set_value(20.0).run()
+    moved = _timeline_figure_spec(at)
+    assert moved["layout"]["xaxis"]["range"] == [20.0, 30.0]
+    assert moved["layout"]["uirevision"] != shorter["layout"]["uirevision"]
+    assert report.result_path.read_bytes() == before
+
+
+def test_repeated_jump_and_clamped_duration_changes_still_request_navigation(
+    synthetic_timeline_session,
+):
+    """A deliberate navigation action overrides a browser pan even if target bounds repeat."""
+    at = AppTest.from_function(
+        _render_timeline_for_test, args=(str(synthetic_timeline_session.metadata_path),)
+    ).run()
+    first = _timeline_figure_spec(at)["layout"]
+    next(
+        widget for widget in at.number_input if widget.label == "Visible duration (s)"
+    ).set_value(200.0).run()
+    full = _timeline_figure_spec(at)["layout"]
+    next(
+        widget for widget in at.number_input if widget.label == "Visible duration (s)"
+    ).set_value(300.0).run()
+    clamped = _timeline_figure_spec(at)["layout"]
+    assert full["xaxis"]["range"] == clamped["xaxis"]["range"]
+    assert full["uirevision"] != clamped["uirevision"]
+    assert first["uirevision"] != clamped["uirevision"]
+    next(widget for widget in at.selectbox if widget.label == "Jump to trial").select(
+        102
+    ).run()
+    jump = next(widget for widget in at.button if widget.label == "Jump")
+    jump.click().run()
+    jumped = _timeline_figure_spec(at)["layout"]
+    next(widget for widget in at.button if widget.label == "Jump").click().run()
+    repeated = _timeline_figure_spec(at)["layout"]
+    assert jumped["xaxis"]["range"] == repeated["xaxis"]["range"]
+    assert jumped["uirevision"] != repeated["uirevision"]
