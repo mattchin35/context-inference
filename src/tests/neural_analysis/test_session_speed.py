@@ -54,7 +54,7 @@ def test_speed_round_trip_reuses_then_reruns_without_neural_loading(
     np.testing.assert_allclose(
         loaded.utc_s, synthetic_speed_messages["utc_s"], atol=2e-6, rtol=0
     )
-    assert loaded.meta["analysis_version"] == "treadmill-speed-v1"
+    assert loaded.meta["analysis_version"] == "treadmill-speed-v2"
     assert loaded.meta["random_seed"] is None
     assert loaded.meta["units"]["speed_mm_s"] == "signed mm/s"
     assert loaded.meta["units"]["frame_utc_s"] == "UTC Unix seconds"
