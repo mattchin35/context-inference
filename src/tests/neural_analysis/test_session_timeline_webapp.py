@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from streamlit.testing.v1 import AppTest
+
 from src.neural_analysis.webapp import app, session_inputs, timeline_view
 from src.tests.neural_analysis.test_session_timeline_io import synthetic_timeline_session
 
@@ -42,3 +44,36 @@ def test_pc_ranges_are_display_only_and_do_not_exceed_available_rows():
     """Few-PC populations have a valid initial selection without special estimator paths."""
     assert timeline_view.default_pc_range(3) == (1, 3)
     assert timeline_view.default_pc_range(40) == (1, 10)
+
+
+def _render_timeline_for_test(metadata_path):
+    """Render only the new view for an existing synthetic metadata path."""
+    import streamlit as st
+    from src.neural_analysis.webapp.session_inputs import load_webapp_session
+    from src.neural_analysis.webapp.timeline_view import render_session_timeline_view
+    render_session_timeline_view(st, load_webapp_session(metadata_path))
+
+
+def test_streamlit_display_changes_reuse_saved_basis(synthetic_timeline_session):
+    """Actual Streamlit reruns keep one saved analysis while PC/event controls change."""
+    from src.neural_analysis.population.run_session_timeline import run_session_timeline
+    from src.neural_analysis.population.session_timeline_io import load_timeline_result
+    import numpy as np
+
+    session = synthetic_timeline_session
+    report = run_session_timeline(session.metadata_path, {"PFC": "A"})
+    before = load_timeline_result(report.result_path).regions["PFC"].scores.copy()
+    at = AppTest.from_function(_render_timeline_for_test, args=(str(session.metadata_path),)).run()
+    assert not at.exception
+    selector = next(widget for widget in at.selectbox if widget.label == "PFC probe")
+    selector.select("A").run()
+    assert not at.exception
+    assert at.get("plotly_chart")
+    checkbox = next(widget for widget in at.checkbox if widget.label == "Trial start")
+    checkbox.uncheck().run()
+    assert not at.exception
+    pc_range = next(widget for widget in at.slider if widget.label == "PFC PC ranks")
+    pc_range.set_value((2, 2)).run()
+    assert not at.exception
+    assert len(list((session.session_root / "analysis_runs").glob("*/results.npz"))) == 1
+    np.testing.assert_array_equal(load_timeline_result(report.result_path).regions["PFC"].scores, before)
