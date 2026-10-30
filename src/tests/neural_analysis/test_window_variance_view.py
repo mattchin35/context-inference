@@ -100,6 +100,7 @@ def test_webapp_prepares_only_on_request_then_reuses_summary_and_selected_trial(
     assert not at.exception
     assert len(list(stage1.parent.glob("window_variance_*/results.npz"))) == 1
     figure = _timeline_figure_spec(at)
+    component_position = next(index for index, element in at.main.children.items() if element.type == "bidi_component")
     assert any(
         trace.get("name") == "PFC fixed-axis count (95%)" for trace in figure["data"]
     )
@@ -132,6 +133,7 @@ def test_webapp_prepares_only_on_request_then_reuses_summary_and_selected_trial(
     ).uncheck().run()
     assert not at.exception
     hidden = _timeline_figure_spec(at)
+    assert next(index for index, element in at.main.children.items() if element.type == "bidi_component") == component_position
     assert hidden["layout"]["uirevision"] == figure["layout"]["uirevision"]
     assert not any(
         "fixed-axis count" in trace.get("name", "") for trace in hidden["data"]
@@ -155,11 +157,21 @@ def test_stage2_preparation_is_disabled_without_stage1(synthetic_timeline_sessio
 def test_twenty_ms_view_defaults_to_bounded_neural_payload(synthetic_timeline_session):
     """Measured CT026 full-session JSON exceeds transport limits at 20 ms; default to bounded loading."""
     session = synthetic_timeline_session
-    run_session_timeline(session.metadata_path, {"PFC": "A"}, .02)
-    at = AppTest.from_function(_render_timeline_for_test, args=(str(session.metadata_path),)).run()
-    next(widget for widget in at.selectbox if widget.label == "PFC probe").select("A").run()
-    next(widget for widget in at.selectbox if widget.label == "Timeline bin width (ms)").select(20).run()
+    run_session_timeline(session.metadata_path, {"PFC": "A"}, 0.02)
+    at = AppTest.from_function(
+        _render_timeline_for_test, args=(str(session.metadata_path),)
+    ).run()
+    next(widget for widget in at.selectbox if widget.label == "PFC probe").select(
+        "A"
+    ).run()
+    next(
+        widget for widget in at.selectbox if widget.label == "Timeline bin width (ms)"
+    ).select(20).run()
     assert not at.exception
-    bounded = next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval")
+    bounded = next(
+        widget
+        for widget in at.checkbox
+        if widget.label == "Load only visible neural interval"
+    )
     assert bounded.value is True
     assert "minallowed" in _timeline_figure_spec(at)["layout"]["xaxis"]
