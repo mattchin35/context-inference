@@ -57,6 +57,8 @@ def test_speed_round_trip_reuses_then_reruns_without_neural_loading(
     assert loaded.meta["analysis_version"] == "treadmill-speed-v1"
     assert loaded.meta["random_seed"] is None
     assert loaded.meta["units"]["speed_mm_s"] == "signed mm/s"
+    assert loaded.meta["units"]["frame_utc_s"] == "UTC Unix seconds"
+    assert loaded.meta["axes"]["source_rows"] == ["speed_sample"]
     for name in (
         "config.json",
         "run.log",
