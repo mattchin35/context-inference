@@ -93,3 +93,15 @@ def test_documented_cli_shapes_execute_dry_runs(synthetic_timeline_session, tmp_
     listing = tmp_path / "sessions.txt"
     listing.write_text(path + "\n")
     assert batch.main(["--session-list", str(listing), "--pfc-probe", "A", "--dry-run"]) == 0
+
+
+def test_benchmark_reports_separate_numerical_and_display_costs(synthetic_timeline_session):
+    """Measured loading/build/serialization costs are distinct from saved PCA timings."""
+    report = runner.run_session_timeline(synthetic_timeline_session.metadata_path, {"PFC": "A"})
+    measured = runner.benchmark_timeline_result(report.result_path)
+    assert measured["measurement"] == "measured; filesystem cache state unspecified"
+    for key in ("npz_load_s", "figure_construction_s", "serialization_s", "json_bytes", "peak_process_rss_bytes"):
+        assert measured[key] >= 0
+    assert measured["populations"]["PFC"]["windows"] == 3
+    assert measured["populations"]["PFC"]["bins"] == 8
+    assert "standardization_and_pca" in measured["populations"]["PFC"]["preparation_timings_s"]

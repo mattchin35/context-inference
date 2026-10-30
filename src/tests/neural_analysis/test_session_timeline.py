@@ -38,6 +38,14 @@ def test_legacy_manual_reward_flags_use_existing_convention():
     assert choices.trial_id.tolist() == [1]
 
 
+def test_nonchronological_choices_are_rejected_before_tensor_reordering():
+    """An invalid source ordering must not silently change the trial axis in Pynapple."""
+    trials = pd.DataFrame({"cur_trial": [1, 2], "start_time": [0., 10.],
+                           "choice_time": [22., 12.], "action": [1, 0]})
+    with pytest.raises(ValueError, match="chronological"):
+        timeline.prepare_timeline_choices(trials)
+
+
 def test_coverage_is_regional_and_does_not_exclude_elapsed_zero():
     """Recording bounds, rather than behavioral origin or spike presence, decide coverage."""
     times = np.array([101., 110., 120.])
