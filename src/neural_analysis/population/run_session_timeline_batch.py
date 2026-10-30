@@ -61,6 +61,7 @@ def run_batch(
     workers: int | None = None,
     rerun: bool = False,
     dry_run: bool = False,
+    window_summary: bool = False,
 ) -> list[TimelineRunReport]:
     """Run session-level preparation and return reports in input order.
 
@@ -69,16 +70,21 @@ def run_batch(
     never launches workers. Real sessions run in independent processes.
     """
     count = choose_worker_count(len(metadata_paths), workers)
+    action = run_session_timeline
+    if window_summary:
+        from src.neural_analysis.population.run_window_variance import (
+            run_session_window_variance,
+        )
+
+        action = run_session_window_variance
     if dry_run:
         return [
-            run_session_timeline(path, probe_roles, bin_width_s, dry_run=True)
+            action(path, probe_roles, bin_width_s, dry_run=True)
             for path in metadata_paths
         ]
     with ProcessPoolExecutor(max_workers=count) as executor:
         futures = [
-            executor.submit(
-                run_session_timeline, path, probe_roles, bin_width_s, rerun=rerun
-            )
+            executor.submit(action, path, probe_roles, bin_width_s, rerun=rerun)
             for path in metadata_paths
         ]
         return [future.result() for future in futures]
@@ -96,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int)
     parser.add_argument("--rerun", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--window-summary", action="store_true")
     args = parser.parse_args(argv)
     try:
         paths = read_session_list(args.session_list)
@@ -107,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             workers=args.workers,
             rerun=args.rerun,
             dry_run=args.dry_run,
+            window_summary=args.window_summary,
         )
     except (OSError, ValueError) as error:
         print(f"Timeline batch failed: {error}", file=sys.stderr)

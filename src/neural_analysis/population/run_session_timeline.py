@@ -244,6 +244,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rerun", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--window-summary",
+        action="store_true",
+        help="Prepare Stage 2 from an existing Stage 1 result, without refitting.",
+    )
+    parser.add_argument(
         "--benchmark",
         action="store_true",
         help="Measure saved-result loading and figure payload after preparation/reuse.",
@@ -251,7 +256,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     roles = probe_roles_from_arguments(args.pfc_probe, args.hpc_probe)
     try:
-        report = run_session_timeline(
+        action = run_session_timeline
+        if args.window_summary:
+            from src.neural_analysis.population.run_window_variance import (
+                run_session_window_variance,
+            )
+
+            action = run_session_window_variance
+        report = action(
             args.session_metadata,
             roles,
             args.bin_width_ms / 1000.0,
@@ -265,7 +277,20 @@ def main(argv: list[str] | None = None) -> int:
         f"{report.status}: {report.result_path or report.configuration_id} ({report.elapsed_s:.3f} s)"
     )
     if args.benchmark and report.result_path is not None:
-        measured = benchmark_timeline_result(report.result_path)
+        if args.window_summary:
+            from src.neural_analysis.population.run_window_variance import (
+                benchmark_window_variance,
+            )
+            from src.neural_analysis.population.window_variance_io import (
+                load_window_variance,
+            )
+
+            summary = load_window_variance(report.result_path)
+            measured = benchmark_window_variance(
+                summary.meta["source_stage1"]["path"], report.result_path
+            )
+        else:
+            measured = benchmark_timeline_result(report.result_path)
         stamp = datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S_%f")
         path = report.result_path.parent / f"benchmark_{stamp}.json"
         path.write_text(json.dumps(measured, indent=2) + "\n", encoding="ascii")

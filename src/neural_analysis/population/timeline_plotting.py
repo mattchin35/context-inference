@@ -13,6 +13,7 @@ from src.neural_analysis.population.session_timeline import (
     RegionalTimelinePCA,
     SessionTimelineResult,
 )
+from src.neural_analysis.population.window_variance import WindowVarianceSummary
 
 
 EVENT_TRACKS = ("trial_start", "left_entry", "right_entry", "LED")
@@ -242,6 +243,7 @@ def plot_session_timeline(
     viewport_revision: int = 0,
     show_context: bool = True,
     zscore_pcs: bool = False,
+    window_variance: dict[str, WindowVarianceSummary] | None = None,
 ) -> go.Figure:
     """Build synchronized tracks from a prepared result, without modifying its arrays.
 
@@ -253,6 +255,8 @@ def plot_session_timeline(
     window/bin observations, before loaded-range filtering. Color limits are
     then in PC-SD units, with automatic limits spanning the selected PCs' full
     session z-score range. Saved scores and variance percentages are unchanged.
+    window_variance optionally adds saved fixed-axis count points after each
+    regional heatmap; it is independent of PC selection and display scaling.
     Return a Plotly figure;
     native chart navigation does not send arbitrary range events to Python.
     """
@@ -261,6 +265,7 @@ def plot_session_timeline(
     visible = time_range_s or full_bounds
     pc_ranges = pc_ranges or {}
     color_limits = color_limits or {}
+    window_variance = window_variance or {}
     tracks = [
         track
         for track in event_tracks
@@ -274,6 +279,9 @@ def plot_session_timeline(
         first, last = pc_ranges.get(role, (1, min(10, regional.scores.shape[2])))
         titles.append(f"{role} ({regional.probe_id}) - session PCs {first}-{last}")
         heights.append(max(2.0, (last - first + 1) * 0.2))
+        if role in window_variance:
+            titles.append(f"{role} - fixed session axes for 95% window variance")
+            heights.append(0.9)
     titles.append("Session navigator")
     heights.append(0.45)
     figure = make_subplots(
@@ -352,6 +360,9 @@ def plot_session_timeline(
             col=1,
         )
         row += 1
+        if role in window_variance:
+            _add_window_counts(figure, window_variance[role], result.choices, row)
+            row += 1
     figure.add_trace(
         go.Scatter(
             x=result.choices.elapsed_s,
@@ -379,7 +390,7 @@ def plot_session_timeline(
     identity = result.meta.get("configuration_id", result.session_id)
     # Only time navigation persists; PC/track changes must recalculate vertical ranges.
     figure.update_yaxes(
-        uirevision=f"{identity}:rows:{tuple(tracks)}:{sorted(pc_ranges.items())}"
+        uirevision=f"{identity}:rows:{tuple(tracks)}:{sorted(pc_ranges.items())}:{tuple(window_variance)}"
     )
     figure.update_layout(
         height=max(600, int(sum(heights) * 90 + 180)),
@@ -396,6 +407,58 @@ def plot_session_timeline(
 
 
 # Plotting-only helpers. All x coordinates below are elapsed seconds.
+def _add_window_counts(
+    figure: go.Figure,
+    summary: WindowVarianceSummary,
+    choices: pd.DataFrame,
+    row: int,
+) -> None:
+    """Add marker-only counts at actual choice times to one subplot row.
+
+    summary has W aligned counts (NaN unavailable); choices supplies original
+    IDs and UTC/elapsed seconds. Hover includes status, denominator, and basis.
+    """
+    selected = choices.iloc[summary.choice_positions]
+    bins = len(summary.bin_edges_s) - 1
+    basis = "complete" if summary.basis_complete else "restricted"
+    # Keep numeric hover values numeric when mixed with status strings.
+    custom = np.empty((len(selected), 7), dtype=object)
+    custom[:, 0] = selected.trial_id
+    custom[:, 1] = selected.choice_time
+    custom[:, 2] = summary.status
+    custom[:, 3] = summary.total_variance
+    custom[:, 4] = bins
+    custom[:, 5] = len(summary.unit_ids)
+    custom[:, 6] = basis
+    figure.add_trace(
+        go.Scattergl(
+            x=selected.elapsed_s,
+            y=summary.counts95,
+            mode="markers",
+            name=f"{summary.region} fixed-axis count (95%)",
+            marker={
+                "size": 6,
+                "color": "#7c3aed",
+                "symbol": "circle" if summary.basis_complete else "diamond-open",
+            },
+            customdata=custom,
+            hovertemplate=(
+                "Trial %{customdata[0]}<br>Elapsed %{x:.3f} s; UTC %{customdata[1]:.6f} s"
+                "<br>Fixed-axis count (95%): %{y}<br>Status: %{customdata[2]}"
+                "<br>Total variance: %{customdata[3]:.5g}<br>%{customdata[4]} bins; %{customdata[5]} units"
+                "<br>%{customdata[6]} basis<extra></extra>"
+            ),
+        ),
+        row=row,
+        col=1,
+    )
+    finite_counts = summary.counts95[np.isfinite(summary.counts95)]
+    step = max(1, int(np.ceil(finite_counts.max() / 4))) if len(finite_counts) else 1
+    figure.update_yaxes(
+        title_text="PC count", rangemode="tozero", dtick=step, row=row, col=1
+    )
+
+
 def _add_choices(
     figure: go.Figure,
     choices: pd.DataFrame,

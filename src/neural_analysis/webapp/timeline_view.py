@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+from pathlib import Path
 from time import perf_counter
 
+import numpy as np
+import pandas as pd
 import streamlit as st
 
 from src.neural_analysis.population.run_session_timeline import (
@@ -14,6 +17,12 @@ from src.neural_analysis.population.run_session_timeline import (
     run_session_timeline,
 )
 from src.neural_analysis.population import session_timeline_io as timeline_io
+from src.neural_analysis.population.run_window_variance import (
+    find_saved_window_variance,
+    run_window_variance,
+)
+from src.neural_analysis.population.window_variance import SessionWindowVariance
+from src.neural_analysis.population.window_variance_io import load_window_variance
 from src.neural_analysis.population.session_timeline import (
     SessionTimelineResult,
     summarize_session_variance,
@@ -106,6 +115,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         return
     load_elapsed = perf_counter() - started
     state_key = f"{scope}_{config['configuration_id']}"
+    summary = _window_summary_controls(st_module, saved, state_key)
     visible, revision = _navigation_controls(st_module, result, state_key)
     zscore_pcs = st_module.sidebar.checkbox(
         "Z-score each PC",
@@ -172,6 +182,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         revision,
         show_context=show_context,
         zscore_pcs=zscore_pcs,
+        window_variance=summary.regions if summary is not None else None,
     )
     construction_elapsed = perf_counter() - started
     render_timeline_chart(figure, key=f"{scope}_chart")
@@ -184,6 +195,10 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         "Window start/duration and Jump request a new range."
     )
     _render_variance_footer(st_module, result, zscore_pcs)
+    if summary is not None:
+        _render_window_readout(
+            st_module, summary, st_module.session_state.get(f"{state_key}_trial")
+        )
     with st_module.expander("Display timing"):
         st_module.write(
             f"Result/behavior load: {load_elapsed:.3f} s; figure construction: {construction_elapsed:.3f} s."
@@ -242,6 +257,115 @@ def load_timeline_behavior_cached(metadata_path: str, configuration_id: str) -> 
 
 
 # UI helpers keep widget and navigation state outside numerical functions.
+@st.cache_data(show_spinner=False, max_entries=4)
+def load_window_summary_cached(
+    path: str, size_bytes: int, mtime_ns: int
+) -> SessionWindowVariance:
+    """Load a saved summary keyed by exact path/stat; no computation or raw loading.
+
+    Return the documented session summary with unchanged window/PC axes/units.
+    """
+    return load_window_variance(path)
+
+
+def _window_summary_controls(
+    st_module: object, stage1_path: Path | None, key: str
+) -> SessionWindowVariance | None:
+    """Prepare only on explicit clicks; return saved summary when its display is enabled.
+
+    stage1_path is the exact loaded archive (None if unprepared); key scopes UI
+    state. Missing/stale summaries do not trigger automatic analysis or writes.
+    """
+    saved = find_saved_window_variance(stage1_path) if stage1_path is not None else None
+    prepare = st_module.sidebar.button(
+        "Prepare window summary",
+        disabled=stage1_path is None,
+        key=f"{key}_prepare_summary",
+    )
+    rerun = st_module.sidebar.button(
+        "Recompute window summary", disabled=saved is None, key=f"{key}_rerun_summary"
+    )
+    try:
+        if prepare or rerun:
+            with st_module.spinner("Summarizing saved fixed-axis window variance..."):
+                saved = run_window_variance(stage1_path, rerun=rerun).result_path
+        if saved is None:
+            st_module.caption(
+                "Prepare window summary to add fixed-axis 95% counts from the saved session PCs."
+            )
+            return None
+        enabled = st_module.sidebar.checkbox(
+            "Show fixed-axis window counts", value=True, key=f"{key}_show_summary"
+        )
+        if not enabled:
+            return None
+        info = saved.stat()
+        summary = load_window_summary_cached(str(saved), info.st_size, info.st_mtime_ns)
+    except (OSError, ValueError, KeyError) as error:
+        st_module.error(f"Could not load window summary: {error}")
+        return None
+    st_module.caption(
+        "Fixed-axis counts use original session scores and all retained axes. "
+        "They measure variation around each window's mean, not sustained mean displacement or local PCA dimensionality."
+    )
+    return summary
+
+
+def _render_window_readout(
+    st_module: object, summary: SessionWindowVariance, trial_id: object
+) -> None:
+    """Display one original trial's sorted fixed-PC contributions from saved arrays.
+
+    trial_id is the existing Jump selector value or None. Fractions are unitless;
+    total variance is the sum of standardized-unit sample variances (ddof=1).
+    Missing regional windows and invalid counts are explicitly described.
+    """
+    st_module.markdown("**Selected choice - fixed-session-axis contributions**")
+    if trial_id is None:
+        st_module.caption(
+            "Select a trial with Jump to trial to inspect its contributions; Jump also centers the timeline."
+        )
+        return
+    positions = np.flatnonzero(summary.choices.trial_id.to_numpy() == trial_id)
+    if not len(positions):
+        return
+    for role, region in summary.regions.items():
+        matches = np.flatnonzero(region.choice_positions == positions[0])
+        if not len(matches):
+            st_module.write(f"{role}: no complete neural window for Trial {trial_id}.")
+            continue
+        index = int(matches[0])
+        count = region.counts95[index]
+        status = region.status[index]
+        label = f"{int(count)} PCs" if np.isfinite(count) else "unavailable"
+        st_module.markdown(f"**Trial {trial_id} - {role}: {label} ({status})**")
+        st_module.caption(
+            f"Total standardized-unit sample variance: {region.total_variance[index]:.6g}; "
+            f"{len(region.bin_edges_s) - 1} bins; {len(region.unit_ids)} units; "
+            f"{'complete' if region.basis_complete else 'restricted'} basis "
+            f"({region.pc_ids.shape[1]}/{region.full_pc_count} session axes)."
+        )
+        if status == "not_reached":
+            st_module.write("95% not reached by retained basis.")
+        elif status == "restricted":
+            st_module.write(
+                "Restricted count; the exact minimum over all session axes is unavailable."
+            )
+        elif status != "ok":
+            continue
+        stop = int(count) if np.isfinite(count) else region.pc_ids.shape[1]
+        st_module.dataframe(
+            pd.DataFrame(
+                {
+                    "Session PC": region.pc_ids[index, :stop],
+                    "Window variance fraction": region.fractions[index, :stop],
+                    "Cumulative fraction": region.cumulative[index, :stop],
+                }
+            ),
+            hide_index=True,
+        )
+
+
 def _population_controls(
     st_module: object, session: ResolvedSession, scope: str
 ) -> tuple[dict[str, str], float]:
