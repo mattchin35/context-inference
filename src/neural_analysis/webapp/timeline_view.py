@@ -21,6 +21,7 @@ from src.neural_analysis.population.timeline_plotting import (
     EVENT_LABELS,
     EVENT_TRACKS,
     available_event_tracks,
+    context_intervals,
     plot_session_timeline,
     session_time_bounds,
 )
@@ -89,6 +90,22 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
     state_key = f"{scope}_{config['configuration_id']}"
     visible, revision = _navigation_controls(st_module, result, state_key)
     pc_ranges, limits = _pc_controls(st_module, result, state_key)
+    context_available = not context_intervals(
+        result.events, session_time_bounds(result)[1]
+    ).empty
+    show_context = st_module.sidebar.checkbox(
+        "Show active context",
+        value=context_available,
+        disabled=not context_available,
+        key=f"{state_key}_context",
+    )
+    if not context_available:
+        st_module.caption("Active context unavailable: no logged context-entry events.")
+    elif show_context:
+        st_module.caption(
+            "Choice background: blue = left active; red = right active; gray = dark period. "
+            "Unshaded time has unknown context."
+        )
     available = available_event_tracks(result.events)
     selected_tracks = tuple(
         track
@@ -121,7 +138,14 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         )
     started = perf_counter()
     figure = plot_session_timeline(
-        result, visible, pc_ranges, selected_tracks, loaded, limits, revision
+        result,
+        visible,
+        pc_ranges,
+        selected_tracks,
+        loaded,
+        limits,
+        revision,
+        show_context=show_context,
     )
     construction_elapsed = perf_counter() - started
     st_module.plotly_chart(

@@ -22,6 +22,16 @@ EVENT_LABELS = {
     "right_entry": "Right licks",
     "LED": "LED",
 }
+CONTEXT_EVENTS = {
+    "enter_left_patch": "Left active",
+    "enter_right_patch": "Right active",
+    "enter_dark_period": "Dark period",
+}
+CONTEXT_COLORS = {
+    "Left active": "blue",
+    "Right active": "darkred",
+    "Dark period": "#6b7280",
+}
 
 
 def build_timeline_heatmap_data(
@@ -119,6 +129,41 @@ def verified_led_intervals(events: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(intervals, columns=["identity", "start_s", "end_s"])
 
 
+def context_intervals(events: pd.DataFrame, session_end_s: float) -> pd.DataFrame:
+    """Return logged task-context intervals in elapsed-session seconds.
+
+    events contains Event and elapsed_s; session_end_s is the displayed session
+    extent. Return context/start_s/end_s columns, one half-open interval per
+    context-entry event. Each state lasts until the next entry or session end,
+    matching the existing behavioral color-block raster. Times before the first
+    logged entry remain unknown. No context is inferred from choices or LEDs.
+    """
+    columns = ["context", "start_s", "end_s"]
+    if not {"Event", "elapsed_s"}.issubset(events.columns):
+        return pd.DataFrame(columns=columns)
+    entries = events.loc[
+        events.Event.isin(CONTEXT_EVENTS), ["Event", "elapsed_s"]
+    ].copy()
+    entries["elapsed_s"] = pd.to_numeric(entries["elapsed_s"], errors="coerce")
+    entries = entries.loc[np.isfinite(entries.elapsed_s)].sort_values(
+        "elapsed_s", kind="stable"
+    )
+    starts = entries.elapsed_s.to_numpy(dtype=float)
+    ends = (
+        np.minimum(np.r_[starts[1:], session_end_s], session_end_s)
+        if len(starts)
+        else np.array([])
+    )
+    intervals = pd.DataFrame(
+        {
+            "context": entries.Event.map(CONTEXT_EVENTS).to_numpy(),
+            "start_s": starts,
+            "end_s": ends,
+        }
+    )
+    return intervals.loc[intervals.end_s > intervals.start_s].reset_index(drop=True)
+
+
 def session_time_bounds(result: SessionTimelineResult) -> tuple[float, float]:
     """Return full elapsed-second extent of choices/windows/events, including time zero.
 
@@ -160,15 +205,19 @@ def plot_session_timeline(
     loaded_range_s: tuple[float, float] | None = None,
     color_limits: dict[str, float] | None = None,
     viewport_revision: int = 0,
+    show_context: bool = True,
 ) -> go.Figure:
     """Build synchronized tracks from a prepared result, without modifying its arrays.
 
     Time ranges are elapsed seconds, PC ranges inclusive one-based ranks,
     and color_limits are positive symmetric score limits keyed by region.
-    loaded_range_s bounds the neural payload only. Return a Plotly figure;
+    loaded_range_s bounds the neural payload only. show_context toggles logged
+    task-context shading on the choices row; context hover remains available.
+    Return a Plotly figure;
     native chart navigation does not send arbitrary range events to Python.
     """
     full_bounds = session_time_bounds(result)
+    contexts = context_intervals(result.events, full_bounds[1])
     visible = time_range_s or full_bounds
     pc_ranges = pc_ranges or {}
     color_limits = color_limits or {}
@@ -178,6 +227,8 @@ def plot_session_timeline(
         if track in available_event_tracks(result.events)
     ]
     titles = ["Choices"] + [EVENT_LABELS[track] for track in tracks]
+    if show_context and not contexts.empty:
+        titles[0] = "Choices - context: blue=left, red=right, gray=dark"
     heights = [1.0] + [0.65] * len(tracks)
     for role, regional in result.regions.items():
         first, last = pc_ranges.get(role, (1, min(10, regional.scores.shape[2])))
@@ -193,7 +244,9 @@ def plot_session_timeline(
         vertical_spacing=min(0.025, 0.16 / len(titles)),
         subplot_titles=titles,
     )
-    _add_choices(figure, result.choices, 1)
+    if show_context:
+        _add_context_overlay(figure, contexts)
+    _add_choices(figure, result.choices, 1, contexts)
     row = 2
     for track in tracks:
         _add_event_track(figure, result.events, track, row)
@@ -285,11 +338,23 @@ def plot_session_timeline(
 
 
 # Plotting-only helpers. All x coordinates below are elapsed seconds.
-def _add_choices(figure: go.Figure, choices: pd.DataFrame, row: int) -> None:
-    """Add the shared (choice,columns) table as distinguishable left/right marker lanes."""
+def _add_choices(
+    figure: go.Figure,
+    choices: pd.DataFrame,
+    row: int,
+    contexts: pd.DataFrame,
+) -> None:
+    """Add choice lanes and logged-context hover to a one-based subplot row.
+
+    choices retains original trial IDs and elapsed/UTC-second choice times.
+    contexts is the elapsed-second interval table from context_intervals.
+    Custom data has shape (selected choices, 3): trial ID, UTC time, context.
+    """
     for action, label, color in ((1, "Left", "#2563eb"), (0, "Right", "#c2410c")):
         selected = choices.loc[choices.action == action]
-        custom = selected[["trial_id", "choice_time"]].to_numpy()
+        custom = np.empty((len(selected), 3), dtype=object)
+        custom[:, :2] = selected[["trial_id", "choice_time"]].to_numpy()
+        custom[:, 2] = _choice_context_labels(selected.elapsed_s.to_numpy(), contexts)
         figure.add_trace(
             go.Scatter(
                 x=selected.elapsed_s,
@@ -303,7 +368,7 @@ def _add_choices(figure: go.Figure, choices: pd.DataFrame, row: int) -> None:
                     "symbol": "triangle-up" if action else "triangle-down",
                 },
                 hovertemplate=f"{label} choice<br>Trial %{{customdata[0]}}<br>Elapsed %{{x:.3f}} s"
-                "<br>UTC %{customdata[1]:.6f} s<extra></extra>",
+                "<br>UTC %{customdata[1]:.6f} s<br>Active context: %{customdata[2]}<extra></extra>",
             ),
             row=row,
             col=1,
@@ -316,6 +381,46 @@ def _add_choices(figure: go.Figure, choices: pd.DataFrame, row: int) -> None:
         row=row,
         col=1,
     )
+
+
+def _add_context_overlay(figure: go.Figure, contexts: pd.DataFrame) -> None:
+    """Shade only the choices subplot from an elapsed-second context interval table.
+
+    Each rectangle spans the top y-axis domain, below markers, with actual
+    transition x coordinates. Keeping all intervals preserves native panning.
+    """
+    for interval in contexts.itertuples():
+        figure.add_shape(
+            type="rect",
+            xref="x",
+            yref="y domain",
+            x0=interval.start_s,
+            x1=interval.end_s,
+            y0=0,
+            y1=1,
+            fillcolor=CONTEXT_COLORS[interval.context],
+            opacity=0.18,
+            line={"width": 0},
+            layer="below",
+        )
+
+
+def _choice_context_labels(times_s: np.ndarray, contexts: pd.DataFrame) -> np.ndarray:
+    """Return (N,) context strings at (N,) elapsed-second choice times.
+
+    Context intervals are sorted and half-open; an exact switch uses the new
+    state. Times outside logged intervals receive Unknown, never a choice-based
+    guess. The result is separate from the saved choice table.
+    """
+    labels = np.full(len(times_s), "Unknown", dtype=object)
+    if contexts.empty:
+        return labels
+    positions = np.searchsorted(contexts.start_s.to_numpy(), times_s, side="right") - 1
+    known = (positions >= 0) & (
+        times_s < contexts.end_s.to_numpy()[np.maximum(positions, 0)]
+    )
+    labels[known] = contexts.context.to_numpy()[positions[known]]
+    return labels
 
 
 def _add_event_track(

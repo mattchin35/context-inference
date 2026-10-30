@@ -36,6 +36,12 @@ during review. They take precedence over the earlier review's suggestions.
   no custom JavaScript component was added.
 - Usage documentation: `src/neural_analysis/SESSION_TIMELINE.md`, linked from
   the neural-analysis README.
+- Approved follow-up: choices-row context overlay from logged patch/dark entry
+  events, with default-on visibility control and active context in choice hover.
+  Tests-first commit `5356911` produced eight expected RED failures; the
+  updated combined suite passes 215 tests with the same four existing warnings.
+  This display-only addition reuses existing archives and requires no PCA
+  recomputation or saved-result format change.
 
 Small synthetic benchmark examples (three choices, two units/PCs per region):
 

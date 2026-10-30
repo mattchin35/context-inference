@@ -115,8 +115,9 @@ and `live` remains the only compute-capable source.
 
 Select **Session timeline and PCA** in the metadata-driven webapp to inspect
 completed choices, optional behavioral events, and fixed regional PC heatmaps
-on elapsed session time. Preparation uses all complete choice windows once;
-navigation and display changes reuse saved results. The default is 500-ms
+on elapsed session time. Logged active context is overlaid behind the choices
+with an optional visibility toggle. Preparation uses all complete choice windows
+once; navigation and display changes reuse saved results. The default is 500-ms
 bins over `[-2, +2)` seconds around each choice.
 
 Prepare in advance, using version-3 metadata probe roles:

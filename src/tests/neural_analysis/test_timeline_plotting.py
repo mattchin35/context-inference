@@ -153,59 +153,92 @@ def test_context_intervals_use_logged_switch_times_and_carry_state_to_session_en
     """Logged patch/dark entries define half-open elapsed-second intervals, even before zero."""
     events = pd.DataFrame(
         {
-            "Event": ["enter_right_patch", "left_entry", "enter_left_patch", "enter_dark_period"],
-            "elapsed_s": [105., 103., 95., 110.],
+            "Event": [
+                "enter_right_patch",
+                "left_entry",
+                "enter_left_patch",
+                "enter_dark_period",
+            ],
+            "elapsed_s": [105.0, 103.0, 95.0, 110.0],
         }
     )
-    intervals = plotting.context_intervals(events, 116.)
+    intervals = plotting.context_intervals(events, 116.0)
     assert intervals.to_dict("records") == [
-        {"context": "Left active", "start_s": 95., "end_s": 105.},
-        {"context": "Right active", "start_s": 105., "end_s": 110.},
-        {"context": "Dark period", "start_s": 110., "end_s": 116.},
+        {"context": "Left active", "start_s": 95.0, "end_s": 105.0},
+        {"context": "Right active", "start_s": 105.0, "end_s": 110.0},
+        {"context": "Dark period", "start_s": 110.0, "end_s": 116.0},
     ]
-    earlier = pd.DataFrame({"Event": ["enter_left_patch"], "elapsed_s": [-2.]})
-    assert plotting.context_intervals(earlier, 5.).start_s.tolist() == [-2.]
+    earlier = pd.DataFrame({"Event": ["enter_left_patch"], "elapsed_s": [-2.0]})
+    assert plotting.context_intervals(earlier, 5.0).start_s.tolist() == [-2.0]
 
 
-def test_context_shading_is_confined_to_choice_row_and_keeps_true_boundaries(timeline_result):
+def test_context_shading_is_confined_to_choice_row_and_keeps_true_boundaries(
+    timeline_result,
+):
     """A transition before the viewport still determines its initial state; neural rows stay unshaded."""
     result = timeline_result
-    result.events.loc[len(result.events)] = [95., 95., "enter_left_patch"]
-    result.events.loc[len(result.events)] = [105., 105., "enter_right_patch"]
-    result.events.loc[len(result.events)] = [110., 110., "enter_dark_period"]
-    figure = plotting.plot_session_timeline(result, time_range_s=(98., 116.), loaded_range_s=(98., 116.))
+    result.events.loc[len(result.events)] = [95.0, 95.0, "enter_left_patch"]
+    result.events.loc[len(result.events)] = [105.0, 105.0, "enter_right_patch"]
+    result.events.loc[len(result.events)] = [110.0, 110.0, "enter_dark_period"]
+    figure = plotting.plot_session_timeline(
+        result, time_range_s=(98.0, 116.0), loaded_range_s=(98.0, 116.0)
+    )
     shapes = figure.layout.shapes
-    assert [(shape.x0, shape.x1) for shape in shapes] == [(95., 105.), (105., 110.), (110., 116.)]
+    assert [(shape.x0, shape.x1) for shape in shapes] == [
+        (95.0, 105.0),
+        (105.0, 110.0),
+        (110.0, 116.0),
+    ]
     assert all(shape.xref == "x" and shape.yref == "y domain" for shape in shapes)
-    assert all(shape.y0 == 0 and shape.y1 == 1 and shape.layer == "below" for shape in shapes)
+    assert all(
+        shape.y0 == 0 and shape.y1 == 1 and shape.layer == "below" for shape in shapes
+    )
     assert len({shape.fillcolor for shape in shapes}) == 3
-    assert all(0 < shape.opacity < .3 for shape in shapes)
+    assert all(0 < shape.opacity < 0.3 for shape in shapes)
 
 
 @pytest.mark.parametrize(
     "entries, expected_contexts",
     [
-        ([(100., "enter_right_patch"), (114., "enter_left_patch")], ("Right active", "Left active")),
-        ([(105., "enter_right_patch")], ("Unknown", "Right active")),
-        ([(95., "enter_left_patch"), (114., "enter_dark_period")], ("Left active", "Dark period")),
+        (
+            [(100.0, "enter_right_patch"), (114.0, "enter_left_patch")],
+            ("Right active", "Left active"),
+        ),
+        ([(105.0, "enter_right_patch")], ("Unknown", "Right active")),
+        (
+            [(95.0, "enter_left_patch"), (114.0, "enter_dark_period")],
+            ("Left active", "Dark period"),
+        ),
     ],
 )
 def test_choice_hover_uses_actual_context_at_choice_including_switch_boundary(
-    timeline_result, entries, expected_contexts,
+    timeline_result,
+    entries,
+    expected_contexts,
 ):
     """Context follows logged state, not chosen side, and switches take effect at their timestamp."""
     for time_s, event in entries:
-        timeline_result.events.loc[len(timeline_result.events)] = [time_s, time_s, event]
+        timeline_result.events.loc[len(timeline_result.events)] = [
+            time_s,
+            time_s,
+            event,
+        ]
     figure = plotting.plot_session_timeline(timeline_result)
-    choices = [trace for trace in figure.data if trace.name in ("Left choices", "Right choices")]
+    choices = [
+        trace
+        for trace in figure.data
+        if trace.name in ("Left choices", "Right choices")
+    ]
     assert tuple(trace.customdata[0][2] for trace in choices) == expected_contexts
     assert all("Active context" in trace.hovertemplate for trace in choices)
 
 
-def test_context_toggle_reuses_scores_and_does_not_mutate_saved_choices(timeline_result, monkeypatch):
+def test_context_toggle_reuses_scores_and_does_not_mutate_saved_choices(
+    timeline_result, monkeypatch
+):
     """The overlay is a plotting setting; hiding it keeps context hover and all scientific products."""
     result = timeline_result
-    result.events.loc[len(result.events)] = [95., 95., "enter_left_patch"]
+    result.events.loc[len(result.events)] = [95.0, 95.0, "enter_left_patch"]
     before_choices = result.choices.copy(deep=True)
     before_scores = result.regions["PFC"].scores.copy()
     monkeypatch.setattr(timeline, "fit_regional_pca", _forbid_fit)
@@ -223,8 +256,12 @@ def test_context_toggle_reuses_scores_and_does_not_mutate_saved_choices(timeline
 
 def test_missing_context_leaves_choices_unknown_and_unshaded(timeline_result):
     """Licks/LEDs or an absent event table do not imply a task context."""
-    assert plotting.context_intervals(pd.DataFrame(), 116.).empty
+    assert plotting.context_intervals(pd.DataFrame(), 116.0).empty
     figure = plotting.plot_session_timeline(timeline_result)
     assert not figure.layout.shapes
-    choices = [trace for trace in figure.data if trace.name in ("Left choices", "Right choices")]
+    choices = [
+        trace
+        for trace in figure.data
+        if trace.name in ("Left choices", "Right choices")
+    ]
     assert all(trace.customdata[0][2] == "Unknown" for trace in choices)

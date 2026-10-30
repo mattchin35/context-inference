@@ -97,7 +97,9 @@ def test_streamlit_display_changes_reuse_saved_basis(synthetic_timeline_session)
     )
 
 
-def test_context_checkbox_changes_overlay_without_another_preparation(synthetic_timeline_session):
+def test_context_checkbox_changes_overlay_without_another_preparation(
+    synthetic_timeline_session,
+):
     """A saved Stage 1 result with logged transitions gains a default-on display toggle."""
     import pandas as pd
     from src.neural_analysis.population.run_session_timeline import run_session_timeline
@@ -105,20 +107,34 @@ def test_context_checkbox_changes_overlay_without_another_preparation(synthetic_
     session = synthetic_timeline_session
     event_path = session.behavior.event_table_file
     events = pd.read_csv(event_path)
-    transitions = pd.DataFrame({"Time": [1700000000., 1700000014., 1700000028.],
-                                "Event": ["enter_left_patch", "enter_right_patch", "enter_dark_period"],
-                                "Note": ["", "", ""]})
+    transitions = pd.DataFrame(
+        {
+            "Time": [1700000000.0, 1700000014.0, 1700000028.0],
+            "Event": ["enter_left_patch", "enter_right_patch", "enter_dark_period"],
+            "Note": ["", "", ""],
+        }
+    )
     pd.concat([events, transitions], ignore_index=True).to_csv(event_path, index=False)
     report = run_session_timeline(session.metadata_path, {"PFC": "A"})
     modified_at = report.result_path.stat().st_mtime_ns
-    at = AppTest.from_function(_render_timeline_for_test, args=(str(session.metadata_path),)).run()
-    next(widget for widget in at.selectbox if widget.label == "PFC probe").select("A").run()
+    at = AppTest.from_function(
+        _render_timeline_for_test, args=(str(session.metadata_path),)
+    ).run()
+    next(widget for widget in at.selectbox if widget.label == "PFC probe").select(
+        "A"
+    ).run()
     assert not at.exception
-    checkbox = next(widget for widget in at.checkbox if widget.label == "Show active context")
+    checkbox = next(
+        widget for widget in at.checkbox if widget.label == "Show active context"
+    )
     assert checkbox.value is True
-    assert len(json.loads(at.get("plotly_chart")[0].proto.spec)["layout"]["shapes"]) == 3
+    assert (
+        len(json.loads(at.get("plotly_chart")[0].proto.spec)["layout"]["shapes"]) == 3
+    )
     checkbox.uncheck().run()
     assert not at.exception
     assert not json.loads(at.get("plotly_chart")[0].proto.spec)["layout"].get("shapes")
     assert report.result_path.stat().st_mtime_ns == modified_at
-    assert len(list((session.session_root / "analysis_runs").glob("*/results.npz"))) == 1
+    assert (
+        len(list((session.session_root / "analysis_runs").glob("*/results.npz"))) == 1
+    )

@@ -23,7 +23,8 @@ the supported source layouts. No additional configuration file is required.
   Incorrect and unrewarded choices are included. Experimenter rewards,
   nonchoices, and the unsaved active end-of-file trial are excluded.
 - Optional event CSVs use the existing `Time`, `Event`, and `Note` columns:
-  `trial_start`, `left_entry`, `right_entry`, and LED on/off transitions.
+  `trial_start`, `left_entry`, `right_entry`, LED on/off transitions, and
+  `enter_left_patch`/`enter_right_patch`/`enter_dark_period` context entries.
 - Each probe supplies the existing aligned spike archive with
   `spike_utc_unix` and `irig_utc_unix`, sorter `spike_clusters.npy`, manually
   curated `cluster_info.tsv`, and `channel_quality.csv` or `.json`.
@@ -93,6 +94,19 @@ uv run streamlit run src/neural_analysis/psth_webapp.py -- \
    selection is the first ten available PCs. Change optional event checkboxes
    to show trial starts, licks, and LED intervals/transitions.
 
+**Show active context** is on by default when logged context entries are
+available. Faint shading behind the choices indicates blue for left active,
+red for right active, and gray for dark periods. The shading uses the actual
+context-entry timestamps and continues through gaps between choices until
+the next entry or session end. It affects only the choices row.
+
+Time before the first logged context entry remains unshaded and is labeled
+**Unknown** in choice hover. If context entries are absent, the checkbox is
+disabled and the viewer reports context unavailable. Context is not inferred
+from chosen side, correctness, LEDs, or model estimates. Turning off shading
+keeps context in choice hover. Existing prepared results already contain the
+event stream, so enabling this overlay does not require PCA recomputation.
+
 The chart axes stay synchronized during native panning. In installed
 Streamlit 1.58, changing sidebar display controls restores the explicit
 Window start/duration viewport, including after a native mouse pan. Use those
@@ -106,8 +120,9 @@ start or Jump to load another part of the session; dragging the native range
 slider does not request new data from Python.
 
 The chart defaults to a light background. Hover a choice for trial ID, side,
-and time. Hover a heatmap cell for region/probe, PC identity and session
-variance percentage, original trial ID, elapsed/UTC/choice-relative bin
+time, and true active context from the logged transitions. Hover a heatmap
+cell for region/probe, PC identity and session variance percentage, original
+trial ID, elapsed/UTC/choice-relative bin
 intervals, and the signed score. LED intervals use verified on/off pairs;
 unpaired transitions remain markers without invented endpoints.
 
