@@ -111,6 +111,26 @@ cluster paths are displayed as provenance and are never opened as workstation
 inputs. The separate `snapshot` source retains its identity-receipt validation,
 and `live` remains the only compute-capable source.
 
+## Session timeline and PCA
+
+Select **Session timeline and PCA** in the metadata-driven webapp to inspect
+completed choices, optional behavioral events, and fixed regional PC heatmaps
+on elapsed session time. Preparation uses all complete choice windows once;
+navigation and display changes reuse saved results. The default is 500-ms
+bins over `[-2, +2)` seconds around each choice.
+
+Prepare in advance, using version-3 metadata probe roles:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json
+```
+
+You can also click **Prepare** in the viewer. See the
+[session timeline usage guide](SESSION_TIMELINE.md) for explicit probe
+assignments, navigation, saved outputs, benchmarking, and session-level batch
+preparation. Stage 1 does not compute per-choice participation counts.
+
 ## Run Spike-phase/PPC computation
 
 ### Prepare Power, Synchrony, and phase
