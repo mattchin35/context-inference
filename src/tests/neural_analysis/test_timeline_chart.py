@@ -58,9 +58,12 @@ const parent = {
     querySelector() { return children[0] ?? null; },
 };
 let fullscreenRequests = 0;
+const plotHandlers = new Map();
 globalThis.document = {createElement() { return {
     style: {}, dataset: {}, setAttribute() {},
     addEventListener() {}, removeEventListener() {},
+    on(name, callback) { plotHandlers.set(name, callback); },
+    removeListener(name) { plotHandlers.delete(name); },
     requestFullscreen() { fullscreenRequests += 1; return Promise.resolve(); },
 }; }};
 const observers = [];
@@ -100,7 +103,9 @@ assert.equal(fullscreenRequests, 1);
 assert.equal(purges, 0);
 assert.equal(observers.length, 1);
 // Adding/removing matched subplot axes must not propagate an old server range.
-children[0]._fullLayout = {xaxis: {range: [35, 95]}};
+// A newly matched top axis can lag the actual user range on the navigator.
+children[0]._fullLayout = {xaxis: {range: [0, 60]}, xaxis4: {range: [35, 95]}};
+plotHandlers.get('plotly_relayout')({'xaxis4.range': [35, 95]});
 figure.layout.xaxis = {range: [0, 60]};
 figure.layout.xaxis2 = {range: [0, 60], matches: 'x'};
 await render({parentElement: parent, data: {figure_json: JSON.stringify(figure)}});
@@ -121,6 +126,7 @@ assert.equal(relayouts.length, priorRelayouts);
 cleanup();
 assert.equal(purges, 1);
 assert.equal(observers[0].disconnected, true);
+assert.equal(plotHandlers.size, 0);
 """
     completed = subprocess.run(
         [node, "--input-type=module", "--eval", script, str(source)],
