@@ -83,6 +83,7 @@ const cleanup = await render({parentElement: parent, data: {figure_json: JSON.st
 assert.equal(children.length, 1);
 assert.equal(calls.length, 2);
 assert.equal(calls[0].element, calls[1].element);
+assert.equal(calls[0].config, calls[1].config);
 assert.equal(calls[0].layout.uirevision, calls[1].layout.uirevision);
 assert.equal(calls[1].config.scrollZoom, false);
 assert.equal(calls[1].config.showSendToCloud, false);
