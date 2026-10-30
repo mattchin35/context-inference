@@ -209,41 +209,75 @@ def _interleaved_speed_fixture(fixture, next_offset_s):
     The first LOW is at UTC +0.8 s. The previous retained speed is at +0.781433 s;
     the next is next_offset_s after LOW. The ambiguous sample's time is unknown.
     """
-    parsed = irig_serial_io.parse_coolterm_serial_text(fixture["text"], pc_timestamp_format="ignore")
+    parsed = irig_serial_io.parse_coolterm_serial_text(
+        fixture["text"], pc_timestamp_format="ignore"
+    )
     scale = fixture["scale"]
-    low = int(np.flatnonzero(parsed.label.eq("syncPinState") & parsed.value.eq("LOW"))[0])
+    low = int(
+        np.flatnonzero(parsed.label.eq("syncPinState") & parsed.value.eq("LOW"))[0]
+    )
     rows = []
     for label, value, offset in (
-        ("runSpeed", "-31.37", round(.781433 * scale * 1e6) / 1e6),
-        ("distance", "123", .000009),
-        ("dacval", "1516.80", .000009),
-        ("runSpeed", "-22.13", .000009),
+        ("runSpeed", "-31.37", round(0.781433 * scale * 1e6) / 1e6),
+        ("distance", "123", 0.000009),
+        ("dacval", "1516.80", 0.000009),
+        ("runSpeed", "-22.13", 0.000009),
     ):
-        rows.append({"pc_date": "", "pc_time": "", "label": label, "value": value, "time_label": "timeSincePinChangeUs", "time_value": offset})
+        rows.append(
+            {
+                "pc_date": "",
+                "pc_time": "",
+                "label": label,
+                "value": value,
+                "time_label": "timeSincePinChangeUs",
+                "time_value": offset,
+            }
+        )
     ambiguous_row = low + 3
-    parsed = pd.concat([parsed.iloc[:low], pd.DataFrame(rows), parsed.iloc[low:]], ignore_index=True)
-    following = pd.DataFrame([{"pc_date": "", "pc_time": "", "label": "runSpeed", "value": "-22.73", "time_label": "timeSincePinChangeUs", "time_value": round(next_offset_s * scale * 1e6) / 1e6}])
-    parsed = pd.concat([parsed.iloc[:low+5], following, parsed.iloc[low+5:]], ignore_index=True)
+    parsed = pd.concat(
+        [parsed.iloc[:low], pd.DataFrame(rows), parsed.iloc[low:]], ignore_index=True
+    )
+    following = pd.DataFrame(
+        [
+            {
+                "pc_date": "",
+                "pc_time": "",
+                "label": "runSpeed",
+                "value": "-22.73",
+                "time_label": "timeSincePinChangeUs",
+                "time_value": round(next_offset_s * scale * 1e6) / 1e6,
+            }
+        ]
+    )
+    parsed = pd.concat(
+        [parsed.iloc[: low + 5], following, parsed.iloc[low + 5 :]], ignore_index=True
+    )
     return parsed, ambiguous_row
 
 
-def test_reject_interleaved_reading_only_when_retained_neighbors_are_under_50_ms(synthetic_speed_messages):
+def test_reject_interleaved_reading_only_when_retained_neighbors_are_under_50_ms(
+    synthetic_speed_messages,
+):
     """Omit the ambiguous value instead of assigning it a guessed post-edge time."""
     module = importlib.import_module("src.mouse_behavior_preprocessing.treadmill_speed")
-    parsed, rejected = _interleaved_speed_fixture(synthetic_speed_messages, .018087)
+    parsed, rejected = _interleaved_speed_fixture(synthetic_speed_messages, 0.018087)
     original = parsed.copy(deep=True)
     result = module.align_treadmill_speed(parsed)
     speed_rows = np.flatnonzero(parsed.label.to_numpy() == "runSpeed")
     expected_rows = speed_rows[speed_rows != rejected]
     np.testing.assert_array_equal(result.source_rows, expected_rows)
-    np.testing.assert_array_equal(result.speed_mm_s, pd.to_numeric(parsed.value.iloc[expected_rows]))
+    np.testing.assert_array_equal(
+        result.speed_mm_s, pd.to_numeric(parsed.value.iloc[expected_rows])
+    )
     assert -22.13 not in result.speed_mm_s
     assert len(result.frame_utc_s) == 3
     assert result.meta["rejected_speed_rows"] == [rejected]
     rejection = result.meta["rejected_speed_records"][0]
     assert rejection["source_row"] == rejected
     assert rejection["logged_speed_mm_s"] == -22.13
-    assert rejection["retained_interval_s"] == pytest.approx(.036645, abs=2e-6)
+    assert rejection["retained_interval_s"] == pytest.approx(
+        0.8 + 0.018087 - 0.781433, abs=2e-6
+    )
     assert rejection["reason"] == "offset_reset_before_sync_record"
     assert rejection["following_sync_row"] == rejected + 1
     assert np.isnan(module.reconstruct_treadmill_clock(parsed)[rejected])
@@ -252,12 +286,12 @@ def test_reject_interleaved_reading_only_when_retained_neighbors_are_under_50_ms
     before = np.flatnonzero(result.source_rows < rejected)[-1]
     after = before + 1
     assert result.speed_mm_s[before] == -31.37 and result.speed_mm_s[after] == -22.73
-    assert result.utc_s[after] - result.utc_s[before] < .05
+    assert result.utc_s[after] - result.utc_s[before] < 0.05
 
 
 def test_interleaved_rejection_cannot_hide_a_long_gap(synthetic_speed_messages):
     """The user approved omission only with less than 50 ms between retained updates."""
     module = importlib.import_module("src.mouse_behavior_preprocessing.treadmill_speed")
-    parsed, _ = _interleaved_speed_fixture(synthetic_speed_messages, .06)
+    parsed, _ = _interleaved_speed_fixture(synthetic_speed_messages, 0.06)
     with pytest.raises(ValueError, match="50 ms|rejection interval"):
         module.align_treadmill_speed(parsed)

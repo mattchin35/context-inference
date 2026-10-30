@@ -21,6 +21,7 @@ import numpy as np
 
 from src.irig_tools import irig_serial_io
 from src.mouse_behavior_preprocessing.treadmill_speed import (
+    MAX_REJECTED_INTERVAL_S,
     TreadmillSpeed,
     align_treadmill_speed,
 )
@@ -30,7 +31,7 @@ from src.neural_analysis.session_metadata import (
     resolve_session_metadata,
 )
 
-ANALYSIS_VERSION = "treadmill-speed-v1"
+ANALYSIS_VERSION = "treadmill-speed-v2"
 ARRAY_NAMES = ("utc_s", "speed_mm_s", "source_rows", "frame_clock_s", "frame_utc_s")
 
 
@@ -75,6 +76,8 @@ def speed_configuration(session: ResolvedSession) -> dict:
             "clock": "sync intervals plus offsets",
             "speed_units": "signed mm/s",
             "mapping": "piecewise linear; endpoint extrapolation only to actual records",
+            "timing_rejection": "omit reset-offset suffix before following sync; do not reassign time",
+            "maximum_rejected_interval_s": MAX_REJECTED_INTERVAL_S,
         },
     }
     encoded = json.dumps(config, sort_keys=True, separators=(",", ":"))
@@ -284,6 +287,8 @@ def _write_speed_summary(directory: Path, result: TreadmillSpeed) -> None:
         f"Source: {result.meta['source']['path']}",
         "Scripts: run_session.py --speed; run_batch.py --speed (entry point copies).",
         f"Samples: {len(result.utc_s)}; decoded frames: {len(result.frame_utc_s)}.",
+        f"Rejected speed records: {len(result.meta['rejected_speed_rows'])}; parsed rows {result.meta['rejected_speed_rows']}.",
+        f"Rejection ledger (seconds): {result.meta['rejected_speed_records']}",
         f"UTC Unix extent: {result.utc_s[0]:.6f} to {result.utc_s[-1]:.6f} seconds.",
         f"Signed speed range: {result.speed_mm_s.min():g} to {result.speed_mm_s.max():g} mm/s.",
         f"Positive/negative/zero samples: {(result.speed_mm_s > 0).sum()}/{(result.speed_mm_s < 0).sum()}/{(result.speed_mm_s == 0).sum()}.",

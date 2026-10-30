@@ -10,6 +10,8 @@ import pandas as pd
 from src.irig_tools import irig_core
 from src.neural_analysis.synchronization.manual import make_timebase_mapper
 
+MAX_REJECTED_INTERVAL_S = 0.05
+
 
 @dataclass(frozen=True)
 class TreadmillSpeed:
@@ -37,8 +39,22 @@ def reconstruct_treadmill_clock(parsed: pd.DataFrame) -> np.ndarray:
     SECONDS, already converted by irig_serial_io. Sync rows contain intervals
     from the preceding edge; other rows contain offsets from the latest edge.
     Clock zero is the edge preceding the first recorded sync. Leading offsets
-    use that same zero. Reject unsupported semantics, resets, or nonfinite/
-    negative timing. Input rows/order/values are never modified.
+    use that same zero. A reset-offset suffix immediately before a printed
+    sync edge becomes NaN only when retained speed neighbors are under 50 ms
+    apart. Other resets, unsupported or nonfinite/negative timing raise.
+    Input rows/order/values are never modified; no timestamp is reassigned.
+    """
+    clock, _ = _clock_and_rejections(parsed)
+    return clock
+
+
+def _clock_and_rejections(parsed: pd.DataFrame) -> tuple[np.ndarray, list[dict]]:
+    """Return (N,) source seconds/NaNs and a ledger of short-gap rejected speeds.
+
+    Parsed input follows reconstruct_treadmill_clock. Only a decreasing-offset
+    suffix directly before the next sync record is eligible; every omitted
+    speed requires retained neighbors less than MAX_REJECTED_INTERVAL_S apart.
+    Sync rows stay intact. Ledger row indices are zero-based parsed positions.
     """
     required = {"label", "value", "time_label", "time_value"}
     if parsed.empty or not required.issubset(parsed.columns):
@@ -64,10 +80,53 @@ def reconstruct_treadmill_clock(parsed: pd.DataFrame) -> np.ndarray:
     # Only edge intervals advance the base clock; payload offsets repeat it.
     edges = np.cumsum(np.where(sync, times, 0.0))
     clock = edges + np.where(sync, 0.0, times)
-    if (np.diff(clock) < -1e-9).any():
-        row = int(np.flatnonzero(np.diff(clock) < -1e-9)[0] + 1)
-        raise ValueError(f"Contradictory offset or timer reset at parsed row {row}.")
-    return clock
+    sync_rows = np.flatnonzero(sync)
+    groups = []
+    for row in np.flatnonzero(np.diff(clock) < -1e-9) + 1:
+        following = sync_rows[sync_rows > row]
+        if sync[row] or not len(following):
+            raise ValueError(
+                f"Contradictory offset or timer reset at parsed row {row}."
+            )
+        edge = int(following[0])
+        suffix = times[row:edge]
+        if (np.diff(suffix) < -1e-9).any() or suffix.max() >= times[row - 1]:
+            raise ValueError(f"Ambiguous timer reset at parsed row {row}.")
+        groups.append((int(row), edge))
+    # Leave unknown times absent rather than attach them to a guessed sync edge.
+    for row, edge in groups:
+        clock[row:edge] = np.nan
+    retained_clock = clock[np.isfinite(clock)]
+    if (np.diff(retained_clock) < -1e-9).any():
+        raise ValueError("Contradictory retained treadmill clock.")
+    speed = parsed.label.to_numpy() == "runSpeed"
+    retained_rows = np.flatnonzero(speed & np.isfinite(clock))
+    rejected = []
+    for row, edge in groups:
+        before = retained_rows[retained_rows < row]
+        after = retained_rows[retained_rows > edge]
+        if not len(before) or not len(after):
+            raise ValueError(
+                "Speed rejection requires retained readings on both sides."
+            )
+        previous, following = int(before[-1]), int(after[0])
+        interval = float(clock[following] - clock[previous])
+        if not 0 <= interval < MAX_REJECTED_INTERVAL_S:
+            raise ValueError("Speed rejection interval must be less than 50 ms.")
+        for rejected_row in np.flatnonzero(speed[row:edge]) + row:
+            rejected.append(
+                {
+                    "source_row": int(rejected_row),
+                    "logged_speed_mm_s": float(parsed.value.iloc[rejected_row]),
+                    "offset_s": float(times[rejected_row]),
+                    "following_sync_row": edge,
+                    "previous_retained_row": previous,
+                    "next_retained_row": following,
+                    "retained_interval_s": interval,
+                    "reason": "offset_reset_before_sync_record",
+                }
+            )
+    return clock, rejected
 
 
 def align_treadmill_speed(parsed: pd.DataFrame) -> TreadmillSpeed:
@@ -76,11 +135,13 @@ def align_treadmill_speed(parsed: pd.DataFrame) -> TreadmillSpeed:
     parsed follows reconstruct_treadmill_clock's contract; time_value is seconds
     and runSpeed values are mm/s strings/numbers. Return UTC/value/source-row
     arrays (S,) and frame anchors (A,), preserving zeros, negatives, duplicates,
-    and leading samples. At least two increasing frame anchors are required.
+    and leading samples. Only the documented short-gap ambiguous speed records
+    are omitted, with their original positions/values recorded in meta.
+    At least two increasing frame anchors are required.
     Mapping extrapolates only to actual logged samples at the boundaries.
     PC receipt timestamps, choice windows, and neural bin widths are unused.
     """
-    clock = reconstruct_treadmill_clock(parsed)
+    clock, rejected = _clock_and_rejections(parsed)
     labels = parsed.label.to_numpy()
     sync_rows = np.flatnonzero(labels == "syncPinState")
     states = parsed.value.to_numpy()[sync_rows]
@@ -125,7 +186,18 @@ def align_treadmill_speed(parsed: pd.DataFrame) -> TreadmillSpeed:
     )
     if len(speeds) == 0 or not np.isfinite(speeds).all():
         raise ValueError("Treadmill log needs finite signed runSpeed values.")
+    valid = np.isfinite(clock[speed_rows])
+    speed_rows, speeds = speed_rows[valid], speeds[valid]
     mapper = make_timebase_mapper(frame_clock, frame_utc)
+    for record in rejected:
+        bounds = mapper(
+            clock[[record["previous_retained_row"], record["next_retained_row"]]]
+        )
+        record["retained_interval_utc_s"] = float(bounds[1] - bounds[0])
+        if not 0 <= record["retained_interval_utc_s"] < MAX_REJECTED_INTERVAL_S:
+            raise ValueError(
+                "Aligned speed rejection interval must be less than 50 ms."
+            )
     utc = mapper(clock[speed_rows])
     if not np.isfinite(utc).all() or (np.diff(utc) < 0).any():
         raise ValueError("Aligned speed timestamps must be finite and nondecreasing.")
@@ -148,6 +220,9 @@ def align_treadmill_speed(parsed: pd.DataFrame) -> TreadmillSpeed:
         "sampling": "irregular logged updates; no resampling",
         "parsed_records": len(parsed),
         "speed_samples": len(speeds),
+        "rejected_speed_rows": [record["source_row"] for record in rejected],
+        "rejected_speed_records": rejected,
+        "ambiguous_source_rows": np.flatnonzero(~np.isfinite(clock)).tolist(),
         "frame_anchors": len(frames),
         "incomplete_boundary_pulses": start + (len(states) - stop),
         "invalid_pulse_indices": decoded.invalid_pulse_ix.tolist(),
