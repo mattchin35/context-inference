@@ -150,3 +150,16 @@ def test_stage2_preparation_is_disabled_without_stage1(synthetic_timeline_sessio
         widget for widget in at.button if widget.label == "Prepare window summary"
     )
     assert button.disabled
+
+
+def test_twenty_ms_view_defaults_to_bounded_neural_payload(synthetic_timeline_session):
+    """Measured CT026 full-session JSON exceeds transport limits at 20 ms; default to bounded loading."""
+    session = synthetic_timeline_session
+    run_session_timeline(session.metadata_path, {"PFC": "A"}, .02)
+    at = AppTest.from_function(_render_timeline_for_test, args=(str(session.metadata_path),)).run()
+    next(widget for widget in at.selectbox if widget.label == "PFC probe").select("A").run()
+    next(widget for widget in at.selectbox if widget.label == "Timeline bin width (ms)").select(20).run()
+    assert not at.exception
+    bounded = next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval")
+    assert bounded.value is True
+    assert "minallowed" in _timeline_figure_spec(at)["layout"]["xaxis"]
