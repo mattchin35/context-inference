@@ -1,8 +1,8 @@
 # Session Timeline and PCA Viewer Implementation Plan
 
-Status: Stage 1 code implemented and verified on synthetic data on 2026-10-30.
-The designated real-session inspection remains pending. Stage 2 has not
-started and still follows the Stage 1 inspection gate.
+Status: Stage 1 inspected and accepted by the user on 2026-10-30, including
+the current viewer refinements. The designated session is CT026 2026-08-04.
+Stage 2 implementation has not started; the Stage 1 inspection gate is met.
 
 Scientific specification: `docs/session_timeline_pca_spec_v1.md`.
 Design guidance: `docs/SoftwareDesign.md` and repository `AGENTS.md`.
@@ -77,9 +77,65 @@ These are measured smoke checks, not representative-session benchmarks or
 latency guarantees. Filesystem cache state is unspecified; import/warmup
 effects can dominate small fixtures. Generated benchmark JSON additionally
 records preparation timings, dimensions, available memory, machine/CPU, and
-process-lifetime peak RSS. No experimental session or experimental batch has
-been run. Supply the first designated metadata path for the scientific
-inspection and representative-session performance check.
+process-lifetime peak RSS. The user has now accepted Stage 1 on the designated
+real session below. No Stage 2 experimental computation or batch has run.
+
+## Stage 2 readiness review (2026-10-30)
+
+The existing scientific specification and Section 7 below are sufficient to
+implement Stage 2. The user's Stage 1 inspection is accepted; do not request
+that approval again.
+
+Designated metadata:
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260804_latent_inference/neural_session.json`
+
+Existing Stage 1 result, inspected through metadata and array headers only:
+`analysis_runs/session_timeline_pca_20261030_115229_118901_269a76fce972be62/results.npz`
+
+- Session ID: `CT026_2026-08-04_120843`; metadata roles PFC=`ProbeA`, HPC=`ProbeB`.
+- 500-ms bins, 715 choices, 715 complete windows per region, eight bins/window.
+- PFC: 174 retained units, scores `(715, 8, 174)`, loadings `(174, 174)`.
+- HPC: 316 retained units, scores `(715, 8, 316)`, loadings `(316, 316)`.
+- Both regions retain the full unit-space basis and `(715,)` direct
+  within-window standardized-unit variance totals. Stage 2 can use these
+  products without raw-spike access, rebinning, or PCA refitting.
+- Only a 500-ms prepared result was found. The 20-ms benchmark needs a
+  separate Stage 1 configuration before measuring incremental Stage 2 work;
+  retain the accepted 500-ms result unchanged. No larger session is designated.
+
+Record these implementation conventions before coding, alongside the
+already-defined scientific calculation:
+
+1. Use original saved PC scores for metrics, regardless of heatmap z-scoring
+   or selected ranks. Consider all saved axes; null axes contribute zero.
+   Do not introduce a scientific variance cutoff or drop axes per window.
+2. For this Stage 1 generator, a full retained basis has
+   `K == min(n_training_observations, retained_unit_count)`. A smaller basis
+   stays conservatively labeled restricted. Check per-window variance
+   conservation separately; a full-basis inconsistency is unavailable, not
+   repaired by renormalizing contributions.
+3. Use float64. For positive-variance complete windows, compare the summed
+   PC/unit variance ratio with one using absolute tolerance `1e-10` on that
+   dimensionless ratio. Threshold comparisons allow only `1e-12` absolute
+   roundoff in cumulative fractions. Save both tolerances as parameters.
+   Zero-total-variance windows remain unavailable; fully constant score
+   windows in a complete basis must not gain variance from mean roundoff.
+4. Use stable descending contribution sorting, breaking exact ties by
+   original session-PC rank. Preserve the original axis order in heatmaps
+   and the ranked order in contribution tables. No `B - 1` ceiling applies.
+5. Prepare metrics through an explicit action, then reuse the separately
+   versioned saved summary bound to the exact Stage 1 archive. Display updates
+   never prepare or write summaries. Existing Stage 1 files remain compatible.
+6. Show per-choice points in one compact row per region and use the existing
+   Jump-to-trial selection for the contribution readout. Missing/invalid
+   counts have an explicit reason in the readout and are never plotted as zero
+   or connected across gaps. Preserve the current time viewport when these
+   rows are shown or hidden.
+
+No additional scientific choices or new dependencies are needed. The remaining
+work is tests-first implementation, synthetic checks, and designated-session
+validation and local performance measurements. The 20-ms preparation cost
+must be reported separately from the incremental Stage 2 calculation.
 
 ## 1. Agreed behavior
 
@@ -683,7 +739,8 @@ saved products can be reloaded without recomputation, actual browser behavior
 has been inspected, and local performance evidence is recorded. Report any
 measured rendering limits or incomplete data explicitly.
 
-Remaining practical input: designate the first real session's metadata path
-before Step 5. The scientific input conventions are settled; do not reopen
-them through artifact-mask requirements, event reclassification, or additional
-population-selection machinery.
+The first real session is now designated above and its Stage 1 inspection is
+accepted. The scientific input conventions are settled; do not reopen them
+through artifact-mask requirements, event reclassification, or additional
+population-selection machinery. A larger session or experimental batch still
+requires designation before execution.
