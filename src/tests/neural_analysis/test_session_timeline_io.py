@@ -50,9 +50,9 @@ def synthetic_timeline_session(tmp_path):
         pd.DataFrame({"channel_id": ["CH0", "CH1", "CH2", "CH3", "CH4"],
                       "label": ["good", "good", "bad", "good", "good"],
                       "inside_brain": [True, True, True, False, True],
-                      "x_um": [0.] * 5, "y_um": [0., 20., 40., 60., 80.]}).to_csv(folder / "quality.csv", index=False)
+                      "x_um": [0.] * 5, "y_um": [0., 20., 40., 60., 80.]}).to_csv(folder / "channel_quality.csv", index=False)
         probes[probe_id] = {"lfp": "", "alignment": f"{probe_id}/aligned.npz",
-                            "sorter": probe_id, "quality": f"{probe_id}/quality.csv",
+                            "sorter": probe_id, "quality": f"{probe_id}/channel_quality.csv",
                             "sites": {f"{probe_id}-site1": 0, f"{probe_id}-site2": 1}}
     metadata = {"schema_version": "2", "session": "synthetic-timeline", "acquisition": "open_ephys",
                 "behavior": {"trials": "trials.csv", "events": "events.csv"},
@@ -100,7 +100,7 @@ def test_source_identity_changes_when_quality_file_changes(synthetic_timeline_se
     """File content/mtime changes invalidate analysis reuse, while display settings are absent."""
     session = synthetic_timeline_session
     first = timeline_io.timeline_configuration(session, {"PFC": "A", "HPC": "B"}, .5)
-    quality = session.session_root / "A/quality.csv"
+    quality = session.session_root / "A/channel_quality.csv"
     quality.write_text(quality.read_text() + "\n")
     second = timeline_io.timeline_configuration(session, {"PFC": "A", "HPC": "B"}, .5)
     assert first != second
