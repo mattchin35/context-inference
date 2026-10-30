@@ -26,6 +26,7 @@ from src.neural_analysis.population.timeline_plotting import (
     session_time_bounds,
 )
 from src.neural_analysis.session_metadata import ResolvedSession
+from src.neural_analysis.webapp.timeline_chart import render_timeline_chart
 
 
 def render_session_timeline_view(st_module: object, session: ResolvedSession) -> None:
@@ -156,18 +157,13 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         zscore_pcs=zscore_pcs,
     )
     construction_elapsed = perf_counter() - started
-    st_module.plotly_chart(
-        figure,
-        key=f"{scope}_chart",
-        width="stretch",
-        theme=None,
-        config={"scrollZoom": False, "displaylogo": False},
-    )
+    render_timeline_chart(figure, key=f"{scope}_chart")
     st_module.caption(
         "Completed choices and unsmoothed activity within [-2, +2) s windows. "
         "Blank intervals contain no displayed neural measurements. "
         "Drag horizontally to pan; the mouse wheel scrolls the page. "
-        "Display-control changes restore the Window start/duration viewport."
+        "PC and display changes preserve the current time range; "
+        "Window start/duration and Jump request a new range."
     )
     _render_variance_footer(st_module, result, zscore_pcs)
     with st_module.expander("Display timing"):
@@ -296,11 +292,12 @@ def _navigation_controls(
         disabled=max_start == bounds[0],
     )
     visible = resolve_time_range(start, duration, bounds)
-    previous_key = f"{key}_previous_view"
+    previous_key = f"{key}_previous_navigation"
     revision_key = f"{key}_revision"
-    if state.get(previous_key) != visible:
+    navigation = (float(start), float(duration))
+    if do_jump or state.get(previous_key) != navigation:
         state[revision_key] = state.get(revision_key, 0) + 1
-        state[previous_key] = visible
+        state[previous_key] = navigation
     return visible, state.get(revision_key, 0)
 
 

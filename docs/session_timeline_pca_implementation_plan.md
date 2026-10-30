@@ -30,10 +30,11 @@ during review. They take precedence over the earlier review's suggestions.
   beyond the initial ten rows. A separate synthetic case used 18 units per
   population; 95-percent coverage required 12 PFC PCs and 13 HPC PCs while the
   initial heatmaps displayed ten, confirming independent footer coverage.
-- Actual Streamlit 1.58 browser behavior: sidebar display changes restore the
+- Initial Streamlit 1.58 browser behavior: sidebar display changes restored the
   explicit Window start/duration viewport after native panning. Numerical
   products are reused. This limitation is stated in the app and usage guide;
-  no custom JavaScript component was added.
+  no custom JavaScript component was added initially. The approved viewport
+  follow-up below supersedes this limitation.
 - Usage documentation: `src/neural_analysis/SESSION_TIMELINE.md`, linked from
   the neural-analysis README.
 - Approved follow-up: choices-row context overlay from logged patch/dark entry
@@ -51,6 +52,19 @@ during review. They take precedence over the earlier review's suggestions.
   Synthetic normalization timings for 200,000 bins: median 37.7 ms for 10 PCs
   and 669.7 ms for 100 PCs across three calls, excluding figure/browser work.
   The option requires no archive, preparation, or dependency changes.
+- Approved viewport follow-up: keep a stable Streamlit v2 component and update
+  its Plotly element with `Plotly.react`. PC-rank, z-score, and display changes
+  preserve mouse-pan and range-slider time windows. Explicit time controls and
+  Jump change the navigation revision, including repeated/clamped requests.
+  Vertical-axis revisions are separate so PC/track changes reset row ranges.
+  The wrapper preserves the existing toolbar, including fullscreen, and uses
+  the installed Plotly JS locally without new dependencies or archive changes.
+  Tests-first commit `0e3ee29` observed seven RED failures; additional frontend
+  and axis regressions were tested before their fixes. Browser checks covered
+  pan/range-slider then rank changes, z-scoring, PC order, fullscreen, Jump,
+  and repeated Jump after panning away. Panning remains entirely browser-local.
+  Final combined regression: 230 passed, with the same four existing Pynapple
+  warnings; Ruff and the offline dependency-lock check passed.
 
 Small synthetic benchmark examples (three choices, two units/PCs per region):
 

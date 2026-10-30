@@ -377,6 +377,10 @@ def plot_session_timeline(
     if loaded_range_s is not None:
         figure.update_xaxes(minallowed=loaded_range_s[0], maxallowed=loaded_range_s[1])
     identity = result.meta.get("configuration_id", result.session_id)
+    # Only time navigation persists; PC/track changes must recalculate vertical ranges.
+    figure.update_yaxes(
+        uirevision=f"{identity}:rows:{tuple(tracks)}:{sorted(pc_ranges.items())}"
+    )
     figure.update_layout(
         height=max(600, int(sum(heights) * 90 + 180)),
         margin={"l": 85, "r": 135, "t": 50, "b": 90},

@@ -122,6 +122,8 @@ bins over `[-2, +2)` seconds around each choice.
 
 The optional **Z-score each PC** display uses each PC's own session mean and
 SD, updates heatmap units, and works live without changing prepared results.
+PC-rank and display changes preserve the current panned/navigator time window;
+the time controls and Jump move it explicitly.
 
 Prepare in advance, using version-3 metadata probe roles:
 

@@ -110,17 +110,27 @@ from chosen side, correctness, LEDs, or model estimates. Turning off shading
 keeps context in choice hover. Existing prepared results already contain the
 event stream, so enabling this overlay does not require PCA recomputation.
 
-The chart axes stay synchronized during native panning. In installed
-Streamlit 1.58, changing sidebar display controls restores the explicit
-Window start/duration viewport, including after a native mouse pan. Use those
-controls or Jump when you want that viewport to survive subsequent reruns.
-Numerical results and the variance footer remain unchanged.
+The chart axes stay synchronized during native panning. Changing PC ranks,
+z-scoring, colors, or event visibility preserves the current time window,
+including a window reached by mouse panning or the bottom session navigator.
+PC rows still update to the selected ranks in their original order.
+
+**Window start**, **Visible duration**, and **Jump** explicitly request a new
+time window. Clicking Jump again restores its target even if you have panned
+away since the previous click. Changing the session, probe assignment, or bin
+width starts a new configuration/view. Reloading the page also starts a new
+view; browser navigation is not written into the saved analysis.
+
+The sidebar time fields retain the last explicit navigation request; mouse
+panning and the bottom navigator operate locally in the browser. They do not
+rerun Python or update those fields. Numerical results and variance coverage
+remain unchanged.
 
 For large figures, enable **Load only visible neural interval**. It loads the
-current viewport plus neighboring time on either side and retains a compact
-full-session navigator. Panning is confined to the loaded interval. Use Window
-start or Jump to load another part of the session; dragging the native range
-slider does not request new data from Python.
+window specified by the time controls plus neighboring time on either side
+and retains a compact full-session navigator. Panning is confined to the loaded
+interval. Use Window start or Jump to load another part of the session;
+dragging the native range slider does not request new data from Python.
 
 The chart defaults to a light background. Hover a choice for trial ID, side,
 time, and true active context from the logged transitions. Hover a heatmap
@@ -225,3 +235,10 @@ Python callers can use `run_session_timeline`,
 `timeline_plotting.plot_session_timeline` for the same separate preparation,
 load, and figure-building steps used by the app. Pass `zscore_pcs=True` to
 `plot_session_timeline` for the same optional display normalization.
+
+The webapp uses a small Streamlit v2 chart component to keep the same Plotly
+element alive during display updates. It uses Plotly's installed JavaScript
+bundle locally, with no CDN or additional dependency. The existing figure
+builder supplies the chart; no saved-result format changes are needed.
+Frontend lifecycle tests run through pytest when Node is on PATH;
+alternatively set `NODE_BINARY` to its executable.
