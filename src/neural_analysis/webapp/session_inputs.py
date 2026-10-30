@@ -59,6 +59,8 @@ PLOT_VIEW_CONDITION_GENERALIZATION = "Condition generalization results"
 
 PLOT_VIEW_INTERREGIONAL = "Inter-regional regression results"
 
+PLOT_VIEW_SESSION_TIMELINE = "Session timeline and PCA"
+
 PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_UNIT_RASTER,
     PLOT_VIEW_TRIAL_SPIKES,
@@ -72,6 +74,7 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_TASK_DECODING,
     PLOT_VIEW_CONDITION_GENERALIZATION,
     PLOT_VIEW_INTERREGIONAL,
+    PLOT_VIEW_SESSION_TIMELINE,
 ]
 
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
@@ -216,6 +219,9 @@ def metadata_view_availability(
             availability[view] = MetadataViewAvailability(True, "available")
         elif not behavior_ready:
             availability[view] = MetadataViewAvailability(False, behavior_reason)
+        elif view == PLOT_VIEW_SESSION_TIMELINE:
+            # This view loads probes independently and also supports behavior only.
+            availability[view] = MetadataViewAvailability(True, "available")
         elif view in lfp_only and not lfp_ready:
             availability[view] = MetadataViewAvailability(False, lfp_reason)
         elif view in combined and (not lfp_ready or not spike_ready):
