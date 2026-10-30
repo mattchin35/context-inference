@@ -138,3 +138,90 @@ def test_context_checkbox_changes_overlay_without_another_preparation(
     assert (
         len(list((session.session_root / "analysis_runs").glob("*/results.npz"))) == 1
     )
+
+
+def test_zscore_checkbox_reuses_saved_result_and_keeps_manual_limit_units_separate(
+    synthetic_timeline_session, monkeypatch
+):
+    """Live display normalization updates units without fitting PCA or rewriting an archive."""
+    from src.neural_analysis.population.run_session_timeline import run_session_timeline
+
+    session = synthetic_timeline_session
+    report = run_session_timeline(session.metadata_path, {"PFC": "A"})
+    before = report.result_path.read_bytes()
+    modified_at = report.result_path.stat().st_mtime_ns
+    monkeypatch.setattr(
+        timeline_view,
+        "run_session_timeline",
+        Mock(side_effect=AssertionError("Display must not prepare PCA")),
+    )
+    at = AppTest.from_function(
+        _render_timeline_for_test, args=(str(session.metadata_path),)
+    ).run()
+    next(widget for widget in at.selectbox if widget.label == "PFC probe").select(
+        "A"
+    ).run()
+    assert not at.exception
+    checkbox = next(
+        widget for widget in at.checkbox if widget.label == "Z-score each PC"
+    )
+    assert checkbox.value is False
+    raw = json.loads(at.get("plotly_chart")[0].proto.spec)
+    raw_heatmap = next(trace for trace in raw["data"] if trace["type"] == "heatmap")
+    assert raw_heatmap["colorbar"]["title"]["text"] == "PFC score"
+    raw_variance = [item.value for item in at.markdown if "80% =" in item.value]
+    checkbox.check().run()
+    assert not at.exception
+    standardized = json.loads(at.get("plotly_chart")[0].proto.spec)
+    z_heatmap = next(
+        trace for trace in standardized["data"] if trace["type"] == "heatmap"
+    )
+    assert "z-score" in z_heatmap["colorbar"]["title"]["text"]
+    assert "SD" in z_heatmap["colorbar"]["title"]["text"]
+    assert z_heatmap["z"] != raw_heatmap["z"]
+    assert [item.value for item in at.markdown if "80% =" in item.value] == raw_variance
+    assert not any("no score rescaling" in item.value for item in at.caption)
+    next(
+        widget for widget in at.checkbox if widget.label == "PFC manual color range"
+    ).check().run()
+    z_limit = next(
+        widget
+        for widget in at.number_input
+        if widget.label == "PFC symmetric z-score limit (SD)"
+    )
+    z_limit.set_value(0.5).run()
+    assert not at.exception
+    manual = json.loads(at.get("plotly_chart")[0].proto.spec)
+    manual_heatmap = next(
+        trace for trace in manual["data"] if trace["type"] == "heatmap"
+    )
+    assert (manual_heatmap["zmin"], manual_heatmap["zmax"]) == (-0.5, 0.5)
+    next(
+        widget for widget in at.checkbox if widget.label == "Z-score each PC"
+    ).uncheck().run()
+    assert not at.exception
+    raw_limit = next(
+        widget
+        for widget in at.number_input
+        if widget.label == "PFC symmetric score limit"
+    )
+    assert raw_limit.value == raw_heatmap["zmax"]
+    assert report.result_path.read_bytes() == before
+    assert report.result_path.stat().st_mtime_ns == modified_at
+    assert (
+        len(list((session.session_root / "analysis_runs").glob("*/results.npz"))) == 1
+    )
+
+
+def test_zscore_option_is_disabled_without_prepared_pc_scores(
+    synthetic_timeline_session,
+):
+    """A behavior-only session cannot enable a neural normalization display."""
+    at = AppTest.from_function(
+        _render_timeline_for_test, args=(str(synthetic_timeline_session.metadata_path),)
+    ).run()
+    assert not at.exception
+    checkbox = next(
+        widget for widget in at.checkbox if widget.label == "Z-score each PC"
+    )
+    assert checkbox.disabled and checkbox.value is False
