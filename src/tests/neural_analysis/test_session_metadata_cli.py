@@ -124,7 +124,7 @@ def test_create_skeleton_is_compact_and_keeps_optional_fields_visible(tmp_path: 
         "schema_version": "2",
         "session": "",
         "acquisition": "open_ephys",
-        "behavior": {"trials": "", "events": None},
+        "behavior": {"trials": "", "events": None, "treadmill": None},
         "probes": {},
         "site_pairs": [],
         "cache": None,

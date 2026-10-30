@@ -6,6 +6,27 @@ import pytest
 from src.irig_tools import irig_serial_io
 
 
+@pytest.mark.parametrize("prefix", ["", "12:34:56.789\t", "1999-01-01 01:00:00.000\t"])
+def test_ignore_pc_prefix_needs_no_date_and_converts_microseconds_once(prefix):
+    """The IRIG-only path parses payloads without treating receipt time as a clock."""
+    parsed = irig_serial_io.parse_coolterm_serial_lines(
+        ["", prefix + "runSpeed:-12.50;timeSincePinChangeUs:250000;"],
+        pc_timestamp_format="ignore",
+    )
+    assert parsed.pc_date.tolist() == [""] and parsed.pc_time.tolist() == [""]
+    assert parsed.value.tolist() == ["-12.50"]
+    assert parsed.time_value.tolist() == [.25]
+
+
+def test_ignore_pc_prefix_reports_original_bad_line_number():
+    """Do not silently discard malformed records needed for time reconstruction."""
+    with pytest.raises(ValueError, match="line 3"):
+        irig_serial_io.parse_coolterm_serial_lines(
+            ["", "runSpeed:0;timeSincePinChangeUs:0;", "broken"],
+            pc_timestamp_format="ignore",
+        )
+
+
 def test_parse_datetime_timestamp_format_preserves_existing_behavior():
     text = "\n".join(
         [

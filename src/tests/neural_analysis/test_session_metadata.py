@@ -10,12 +10,42 @@ import numpy as np
 import pytest
 
 from src.neural_analysis.session_metadata import (
+    BehaviorSources,
+    ResolvedBehaviorSources,
     SessionMetadata,
     load_session_metadata,
     resolve_probe_sources,
     resolve_session_metadata,
     validate_session_for_action,
 )
+
+
+@pytest.mark.parametrize("version", ["2", "3"])
+@pytest.mark.parametrize("source", [None, "", "teensy/speed.txt"])
+def test_optional_treadmill_path_preserves_existing_action_availability(tmp_path, version, source):
+    """The optional contained text path never becomes a required neural input."""
+    payload = _metadata_payload() if version == "2" else _version_three_payload()
+    payload["behavior"]["treadmill"] = source
+    _make_sources(tmp_path, payload)
+    path = _write_metadata(tmp_path, payload)
+    metadata = load_session_metadata(path)
+    resolved = resolve_session_metadata(metadata, path)
+    assert metadata.behavior.treadmill == source
+    assert resolved.behavior.treadmill_file == (tmp_path / source if source else None)
+    assert validate_session_for_action(resolved, "webapp").available
+    assert BehaviorSources("trials.csv", None).treadmill is None
+    assert ResolvedBehaviorSources(None, None).treadmill_file is None
+
+
+@pytest.mark.parametrize("source", ["/tmp/speed.txt", "../speed.txt", "teensy"])
+def test_treadmill_source_must_be_a_contained_file(tmp_path, source):
+    """Reuse the existing path rules for the new optional input."""
+    payload = _metadata_payload()
+    payload["behavior"]["treadmill"] = source
+    (tmp_path / "teensy").mkdir()
+    path = _write_metadata(tmp_path, payload)
+    with pytest.raises(ValueError, match="behavior.treadmill"):
+        resolve_session_metadata(load_session_metadata(path), path)
 
 
 def _metadata_payload(
