@@ -23,7 +23,7 @@ def _legacy_result(session, width):
     config = {key: current[key] for key in fields}
     path = session.metadata_path
     stat = path.stat()
-    config["sources"] = [{"path": str(path.resolve()), "bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}] + [entry for entry in config["sources"] if entry["path"] != str(path.resolve())]
+    config["sources"] = [{"path": str(path.resolve()), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}] + [entry for entry in config["sources"] if entry["path"] != str(path.resolve())]
     encoded = json.dumps(config, sort_keys=True, separators=(",", ":"))
     config["configuration_id"] = hashlib.sha256(encoded.encode()).hexdigest()[:16]
     origin, choices, events = storage.load_timeline_behavior(session)
