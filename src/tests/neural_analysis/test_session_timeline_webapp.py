@@ -310,3 +310,77 @@ def test_repeated_jump_and_clamped_duration_changes_still_request_navigation(
     repeated = _timeline_figure_spec(at)["layout"]
     assert jumped["xaxis"]["range"] == repeated["xaxis"]["range"]
     assert jumped["uirevision"] != repeated["uirevision"]
+
+
+def test_old_archives_gain_reward_markers_without_rewriting_or_refitting(
+    synthetic_timeline_session, monkeypatch
+):
+    """A cached behavior read enriches legacy choices without changing saved neural products."""
+    import pandas as pd
+    from src.neural_analysis.population import session_timeline, session_timeline_io
+    from src.neural_analysis.population.run_session_timeline import run_session_timeline
+
+    session = synthetic_timeline_session
+    trials = pd.read_csv(session.behavior.trial_table_file)
+    origin, choices = session_timeline.prepare_timeline_choices(trials)
+    legacy_choices = choices.drop(columns="reward", errors="ignore")
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            session_timeline_io,
+            "prepare_timeline_choices",
+            Mock(return_value=(origin, legacy_choices)),
+        )
+        report = run_session_timeline(session.metadata_path, {"PFC": "A"})
+    before = report.result_path.read_bytes()
+    modified_at = report.result_path.stat().st_mtime_ns
+    assert (
+        "reward"
+        not in session_timeline_io.load_timeline_result(report.result_path).choices
+    )
+    monkeypatch.setattr(
+        timeline_view,
+        "run_session_timeline",
+        Mock(side_effect=AssertionError("Display must not prepare PCA")),
+    )
+    monkeypatch.setattr(
+        session_timeline_io,
+        "load_timeline_population",
+        Mock(side_effect=AssertionError("Display must not load spikes")),
+    )
+    behavior_reads = Mock(wraps=session_timeline_io.load_timeline_behavior)
+    monkeypatch.setattr(session_timeline_io, "load_timeline_behavior", behavior_reads)
+    at = AppTest.from_function(
+        _render_timeline_for_test, args=(str(session.metadata_path),)
+    ).run()
+    next(widget for widget in at.selectbox if widget.label == "PFC probe").select(
+        "A"
+    ).run()
+    assert not at.exception
+    before_spec = _timeline_figure_spec(at)
+    left = next(
+        trace for trace in before_spec["data"] if trace["name"] == "Left choices"
+    )
+    right = next(
+        trace for trace in before_spec["data"] if trace["name"] == "Right choices"
+    )
+    assert left["marker"]["symbol"] == ["triangle-up", "triangle-up-open"]
+    assert left["marker"]["size"] == [12, 7]
+    assert right["marker"]["symbol"] == ["triangle-down-open"]
+    assert right["customdata"][0][3] == "Unrewarded"
+    reads_before_rerun = behavior_reads.call_count
+    component_id = at.get("bidi_component")[0].proto.id
+    next(widget for widget in at.slider if widget.label == "PFC PC ranks").set_value(
+        (2, 2)
+    ).run()
+    assert not at.exception
+    assert at.get("bidi_component")[0].proto.id == component_id
+    assert (
+        _timeline_figure_spec(at)["layout"]["uirevision"]
+        == before_spec["layout"]["uirevision"]
+    )
+    assert behavior_reads.call_count == reads_before_rerun
+    assert report.result_path.read_bytes() == before
+    assert report.result_path.stat().st_mtime_ns == modified_at
+    assert (
+        len(list((session.session_root / "analysis_runs").glob("*/results.npz"))) == 1
+    )

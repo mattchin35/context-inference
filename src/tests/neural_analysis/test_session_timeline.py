@@ -47,6 +47,42 @@ def test_legacy_manual_reward_flags_use_existing_convention():
     assert choices.trial_id.tolist() == [1]
 
 
+def test_choice_rewards_use_actual_outcomes_without_changing_choice_selection():
+    """Reward flags stay aligned to source rows, including correct unrewarded choices."""
+    trials = pd.DataFrame(
+        {
+            "cur_trial": [10, 11, 12, 13, 14, 15],
+            "start_time": np.arange(6, dtype=float) * 10,
+            "choice_time": [2.0, 12.0, 22.0, 32.0, 42.0, np.nan],
+            "action": [1, 1, 0, 1, 0, "no_choice"],
+            "reward": [1, "0", "1", 2, np.nan, 1],
+            "correct": [1, 1, 1, 0, 0, 1],
+            "experimenter_reward_given": [1, 0, 0, 0, 0, 1],
+        },
+        index=[20, 30, 40, 50, 60, 70],
+    )
+    before = trials.copy(deep=True)
+    _, choices = timeline.prepare_timeline_choices(trials)
+    assert choices.trial_id.tolist() == [11, 12, 13, 14]
+    np.testing.assert_array_equal(choices.reward, [0.0, 1.0, np.nan, np.nan])
+    pd.testing.assert_frame_equal(trials, before)
+
+
+def test_missing_reward_column_stays_unknown_instead_of_using_correctness():
+    """Behavior-only/legacy inputs with no reward information remain usable."""
+    trials = pd.DataFrame(
+        {
+            "cur_trial": [1, 2],
+            "start_time": [0.0, 10.0],
+            "choice_time": [2.0, 12.0],
+            "action": [1, 0],
+            "correct": [1, 0],
+        }
+    )
+    _, choices = timeline.prepare_timeline_choices(trials)
+    assert choices.reward.isna().all()
+
+
 def test_nonchronological_choices_are_rejected_before_tensor_reordering():
     """An invalid source ordering must not silently change the trial axis in Pynapple."""
     trials = pd.DataFrame(

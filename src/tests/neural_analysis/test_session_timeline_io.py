@@ -28,6 +28,7 @@ def synthetic_timeline_session(tmp_path):
             "start_time": origin + np.array([0.0, 14.0, 28.0]),
             "choice_time": origin + np.array([4.123, 18.123, 32.123]),
             "action": [1, 0, 1],
+            "reward": [1, 0, 0],
             "experimenter_reward_given": [0, 0, 0],
         }
     )
@@ -179,6 +180,7 @@ def test_result_round_trip_keeps_basis_units_counts_and_origin(
     assert loaded.time_origin_s == origin
     assert loaded.unavailable == result.unavailable
     pd.testing.assert_frame_equal(loaded.choices, choices)
+    np.testing.assert_array_equal(loaded.choices.reward, [1.0, 0.0, 0.0])
     np.testing.assert_array_equal(loaded.regions["PFC"].scores, regional.scores)
     np.testing.assert_array_equal(
         loaded.regions["PFC"].transform.components, regional.transform.components

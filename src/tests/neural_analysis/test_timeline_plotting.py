@@ -409,3 +409,63 @@ def test_pc_and_track_row_changes_reset_y_axes_without_resetting_session_time(
     assert (
         first.layout.yaxis2.autorange == selected.layout.yaxis2.autorange == "reversed"
     )
+
+
+def test_rewarded_choices_are_large_filled_and_unrewarded_choices_small_open(
+    timeline_result, monkeypatch
+):
+    """Outcome styling preserves lanes, context, PC data, and time-navigation state."""
+    from dataclasses import replace
+
+    choices = timeline_result.choices.assign(reward=[1.0, 0.0])
+    extra = pd.DataFrame(
+        {
+            "row_position": [8, 9, 10, 11],
+            "trial_id": [109, 110, 111, 112],
+            "choice_time": [118.0, 122.0, 126.0, 130.0],
+            "elapsed_s": [118.0, 122.0, 126.0, 130.0],
+            "action": [1, 0, 1, 0],
+            "reward": [0.0, 1.0, np.nan, 2.0],
+        }
+    )
+    result = replace(
+        timeline_result, choices=pd.concat([choices, extra], ignore_index=True)
+    )
+    result.events.loc[len(result.events)] = [95.0, 95.0, "enter_left_patch"]
+    before_scores = result.regions["PFC"].scores.copy()
+    before_choices = result.choices.copy(deep=True)
+    monkeypatch.setattr(timeline, "fit_regional_pca", _forbid_fit)
+    figure = plotting.plot_session_timeline(result, time_range_s=(98.0, 116.0))
+    left, right = (
+        next(trace for trace in figure.data if trace.name == name)
+        for name in ("Left choices", "Right choices")
+    )
+    assert list(left.marker.size) == [12, 7, 9]
+    assert list(left.marker.symbol) == ["triangle-up", "triangle-up-open", "x"]
+    assert list(right.marker.size) == [7, 12, 9]
+    assert list(right.marker.symbol) == ["triangle-down-open", "triangle-down", "x"]
+    assert left.marker.line.width >= 1 and right.marker.line.width >= 1
+    assert left.marker.color[0] == left.marker.color[1]
+    assert right.marker.color[0] == right.marker.color[1]
+    assert list(left.customdata[:, 3]) == ["Rewarded", "Unrewarded", "Unknown"]
+    assert list(right.customdata[:, 3]) == ["Unrewarded", "Rewarded", "Unknown"]
+    assert all(value == "Left active" for value in left.customdata[:, 2])
+    assert "Reward: %{customdata[3]}" in left.hovertemplate
+    np.testing.assert_array_equal(left.x, [100.0, 118.0, 126.0])
+    np.testing.assert_array_equal(right.y, [0, 0, 0])
+    assert figure.layout.shapes and figure.layout.xaxis.range == (98.0, 116.0)
+    again = plotting.plot_session_timeline(result, pc_ranges={"PFC": (2, 2)})
+    assert again.layout.uirevision == figure.layout.uirevision
+    np.testing.assert_array_equal(result.regions["PFC"].scores, before_scores)
+    pd.testing.assert_frame_equal(result.choices, before_choices)
+
+
+def test_choices_without_saved_reward_information_are_explicitly_unknown(
+    timeline_result,
+):
+    """Standalone old archives do not silently label missing rewards as unrewarded."""
+    figure = plotting.plot_session_timeline(timeline_result)
+    for trace in figure.data:
+        if trace.name in ("Left choices", "Right choices"):
+            assert list(trace.marker.symbol) == ["x"]
+            assert trace.customdata[0, 3] == "Unknown"
