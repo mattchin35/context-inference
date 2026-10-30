@@ -282,9 +282,10 @@ def test_pc_zscores_use_each_components_own_session_mean_and_population_sd():
     np.testing.assert_array_equal(scores, before)
 
 
-def test_pc_zscores_keep_constant_components_at_zero():
+@pytest.mark.parametrize("constant", [0.0, 0.1, 5.0])
+def test_pc_zscores_keep_constant_components_at_zero(constant):
     """A constant PC, including a one-observation PC, never divides by zero."""
-    scores = np.stack([np.full((2, 8), 5.0), np.arange(16).reshape(2, 8)], axis=-1)
+    scores = np.stack([np.full((2, 8), constant), np.arange(16).reshape(2, 8)], axis=-1)
     actual = plotting.zscore_pc_scores(scores)
     np.testing.assert_array_equal(actual[..., 0], 0)
     assert np.isfinite(actual).all()
