@@ -57,7 +57,12 @@ const parent = {
     appendChild(child) { children.push(child); },
     querySelector() { return children[0] ?? null; },
 };
-globalThis.document = {createElement() { return {style: {}, dataset: {}, setAttribute() {}}; }};
+let fullscreenRequests = 0;
+globalThis.document = {createElement() { return {
+    style: {}, dataset: {}, setAttribute() {},
+    addEventListener() {}, removeEventListener() {},
+    requestFullscreen() { fullscreenRequests += 1; return Promise.resolve(); },
+}; }};
 const observers = [];
 globalThis.ResizeObserver = class {
     constructor(callback) { this.callback = callback; observers.push(this); }
@@ -80,6 +85,15 @@ assert.equal(calls.length, 2);
 assert.equal(calls[0].element, calls[1].element);
 assert.equal(calls[0].layout.uirevision, calls[1].layout.uirevision);
 assert.equal(calls[1].config.scrollZoom, false);
+assert.equal(calls[1].config.showSendToCloud, false);
+assert.deepEqual(calls[1].config.modeBarButtons.slice(0, 3), [
+    ['toImage'], ['zoom2d', 'pan2d'],
+    ['zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'],
+]);
+const fullscreen = calls[1].config.modeBarButtons[3][0];
+assert.equal(fullscreen.name, 'Fullscreen');
+fullscreen.click(calls[1].element);
+assert.equal(fullscreenRequests, 1);
 assert.equal(purges, 0);
 assert.equal(observers.length, 1);
 figure.layout.uirevision = 'session:2';
