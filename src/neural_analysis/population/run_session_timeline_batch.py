@@ -62,6 +62,7 @@ def run_batch(
     rerun: bool = False,
     dry_run: bool = False,
     window_summary: bool = False,
+    speed: bool = False,
 ) -> list[TimelineRunReport]:
     """Run session-level preparation and return reports in input order.
 
@@ -72,21 +73,28 @@ def run_batch(
     missing Stage 1 configurations raise rather than fitting implicitly.
     """
     count = choose_worker_count(len(metadata_paths), workers)
+    if speed and window_summary:
+        raise ValueError("Speed and window-summary actions are mutually exclusive.")
     action = run_session_timeline
+    analysis_arguments = (probe_roles, bin_width_s)
     if window_summary:
         from src.neural_analysis.population.run_window_variance import (
             run_session_window_variance,
         )
 
         action = run_session_window_variance
+    elif speed:
+        from src.neural_analysis.session_speed import run_session_speed
+
+        action = run_session_speed
+        analysis_arguments = ()
     if dry_run:
         return [
-            action(path, probe_roles, bin_width_s, dry_run=True)
-            for path in metadata_paths
+            action(path, *analysis_arguments, dry_run=True) for path in metadata_paths
         ]
     with ProcessPoolExecutor(max_workers=count) as executor:
         futures = [
-            executor.submit(action, path, probe_roles, bin_width_s, rerun=rerun)
+            executor.submit(action, path, *analysis_arguments, rerun=rerun)
             for path in metadata_paths
         ]
         return [future.result() for future in futures]
@@ -104,7 +112,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int)
     parser.add_argument("--rerun", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--window-summary", action="store_true")
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("--window-summary", action="store_true")
+    actions.add_argument(
+        "--speed",
+        action="store_true",
+        help="Prepare optional signed speed only; probe/bin options do not configure speed.",
+    )
     args = parser.parse_args(argv)
     try:
         paths = read_session_list(args.session_list)
@@ -117,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             rerun=args.rerun,
             dry_run=args.dry_run,
             window_summary=args.window_summary,
+            speed=args.speed,
         )
     except (OSError, ValueError) as error:
         print(f"Timeline batch failed: {error}", file=sys.stderr)

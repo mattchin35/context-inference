@@ -25,6 +25,7 @@ class BehaviorSources:
 
     trials: str
     events: str | None
+    treadmill: str | None = None
 
 
 @dataclass(frozen=True)
@@ -154,16 +155,12 @@ class ResolvedBehaviorSources:
 
     trial_table_file: Path | None
     event_table_file: Path | None
+    treadmill_file: Path | None = None
 
     @property
     def session_directory(self) -> Path | None:
         """Return the trial-table parent used by existing behavior loaders."""
         return None if self.trial_table_file is None else self.trial_table_file.parent
-
-    @property
-    def treadmill_file(self) -> None:
-        """Return no treadmill source; schema version 2 does not declare one."""
-        return None
 
 
 @dataclass(frozen=True)
@@ -316,7 +313,7 @@ _PPC_REQUIRED = frozenset(
     }
 )
 _BEHAVIOR_REQUIRED = frozenset({"trials"})
-_BEHAVIOR_OPTIONAL = frozenset({"events"})
+_BEHAVIOR_OPTIONAL = frozenset({"events", "treadmill"})
 _PROBE_REQUIRED = frozenset({"lfp", "alignment", "sorter", "quality", "sites"})
 _PROBE_OPTIONAL = frozenset({"unit_channels"})
 
@@ -522,6 +519,7 @@ def load_session_metadata(path: Path | str) -> SessionMetadata:
         behavior=BehaviorSources(
             trials=_string(behavior_record["trials"], "behavior.trials"),
             events=_optional_string(behavior_record.get("events"), "behavior.events"),
+            treadmill=_optional_string(behavior_record.get("treadmill"), "behavior.treadmill"),
         ),
         probes=probes,
         site_pairs=tuple(pairs),
@@ -644,6 +642,9 @@ def resolve_session_metadata(
             ),
             event_table_file=_resolve_path(
                 session_root, metadata.behavior.events, "behavior.events", expected_kind="file"
+            ),
+            treadmill_file=_resolve_path(
+                session_root, metadata.behavior.treadmill, "behavior.treadmill", expected_kind="file"
             ),
         ),
         probes=tuple(probes),

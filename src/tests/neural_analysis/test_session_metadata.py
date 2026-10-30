@@ -22,7 +22,9 @@ from src.neural_analysis.session_metadata import (
 
 @pytest.mark.parametrize("version", ["2", "3"])
 @pytest.mark.parametrize("source", [None, "", "teensy/speed.txt"])
-def test_optional_treadmill_path_preserves_existing_action_availability(tmp_path, version, source):
+def test_optional_treadmill_path_preserves_existing_action_availability(
+    tmp_path, version, source
+):
     """The optional contained text path never becomes a required neural input."""
     payload = _metadata_payload() if version == "2" else _version_three_payload()
     payload["behavior"]["treadmill"] = source
@@ -149,7 +151,9 @@ def _make_sources(session_root: Path, payload: dict[str, Any]) -> None:
         (session_root / cache).mkdir(parents=True, exist_ok=True)
 
 
-def test_compact_metadata_resolves_each_probe_as_one_complete_unit(tmp_path: Path) -> None:
+def test_compact_metadata_resolves_each_probe_as_one_complete_unit(
+    tmp_path: Path,
+) -> None:
     """Probe paths, sites, and optional channel restriction stay together."""
     payload = _metadata_payload()
     session_root = tmp_path / "session"
@@ -199,15 +203,18 @@ def test_version_three_resolves_probe_roles_and_ppc_workflow(tmp_path: Path) -> 
     assert metadata.analysis.probe_roles.ppc == "ProbeB"
     assert resolved.analysis is not None
     assert resolved.analysis.probe_roles.pfc == "ProbeA"
-    assert resolved.analysis.ppc.prerequisite_cache == (
-        session_root / "processed" / "ppc_source"
-    ).resolve()
-    assert resolved.analysis.ppc.preview_cache == (
-        session_root / "processed" / "ppc_preview"
-    ).resolve()
-    assert resolved.analysis.ppc.final_cache == (
-        session_root / "processed" / "ppc_final"
-    ).resolve()
+    assert (
+        resolved.analysis.ppc.prerequisite_cache
+        == (session_root / "processed" / "ppc_source").resolve()
+    )
+    assert (
+        resolved.analysis.ppc.preview_cache
+        == (session_root / "processed" / "ppc_preview").resolve()
+    )
+    assert (
+        resolved.analysis.ppc.final_cache
+        == (session_root / "processed" / "ppc_final").resolve()
+    )
     assert resolved.analysis.ppc.preview_shuffles == 100
     assert resolved.analysis.ppc.final_shuffles == 1000
 
@@ -230,9 +237,7 @@ def test_version_three_resolves_probe_roles_and_ppc_workflow(tmp_path: Path) -> 
             "distinct",
         ),
         (
-            lambda value: value["analysis"]["ppc"].update(
-                final_cache="../outside"
-            ),
+            lambda value: value["analysis"]["ppc"].update(final_cache="../outside"),
             "processed|relative|contained",
         ),
         (
@@ -294,7 +299,9 @@ def test_optional_fields_can_be_omitted(tmp_path: Path) -> None:
     del payload["cache"]
     metadata_path = _write_metadata(tmp_path, payload)
 
-    resolved = resolve_session_metadata(load_session_metadata(metadata_path), metadata_path)
+    resolved = resolve_session_metadata(
+        load_session_metadata(metadata_path), metadata_path
+    )
 
     assert resolved.behavior.event_table_file is None
     assert resolved.cache_directory is None
@@ -333,7 +340,8 @@ def test_unknown_fields_and_inconsistent_identifiers_are_rejected(
 
 
 @pytest.mark.parametrize(
-    "relative_path", ["/absolute/lfp.dat", "../outside/lfp.dat", "ephys/../../outside.dat"]
+    "relative_path",
+    ["/absolute/lfp.dat", "../outside/lfp.dat", "ephys/../../outside.dat"],
 )
 def test_source_paths_must_remain_inside_the_session(
     tmp_path: Path, relative_path: str
@@ -352,7 +360,9 @@ def test_complete_sources_make_all_actions_available(tmp_path: Path) -> None:
     session_root = tmp_path / "session"
     _make_sources(session_root, payload)
     metadata_path = _write_metadata(session_root, payload)
-    resolved = resolve_session_metadata(load_session_metadata(metadata_path), metadata_path)
+    resolved = resolve_session_metadata(
+        load_session_metadata(metadata_path), metadata_path
+    )
 
     results = [
         validate_session_for_action(resolved, action)
@@ -375,7 +385,9 @@ def test_validation_does_not_load_scientific_arrays(
         raise AssertionError("metadata validation must not call numpy.load")
 
     monkeypatch.setattr(np, "load", forbidden_array_load)
-    resolved = resolve_session_metadata(load_session_metadata(metadata_path), metadata_path)
+    resolved = resolve_session_metadata(
+        load_session_metadata(metadata_path), metadata_path
+    )
     assert validate_session_for_action(resolved, "spike-phase").available
 
 

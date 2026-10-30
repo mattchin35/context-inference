@@ -15,7 +15,7 @@ def test_ignore_pc_prefix_needs_no_date_and_converts_microseconds_once(prefix):
     )
     assert parsed.pc_date.tolist() == [""] and parsed.pc_time.tolist() == [""]
     assert parsed.value.tolist() == ["-12.50"]
-    assert parsed.time_value.tolist() == [.25]
+    assert parsed.time_value.tolist() == [0.25]
 
 
 def test_ignore_pc_prefix_reports_original_bad_line_number():
@@ -65,7 +65,9 @@ def test_parse_millisecondtime_uses_hardcoded_local_date_and_trailing_semicolon(
     assert parsed_df["label"].tolist() == ["syncPinState", "syncPinState"]
     assert parsed_df["value"].tolist() == ["LOW", "HIGH"]
     assert parsed_df["time_label"].tolist() == ["syncIntervalUs", "syncIntervalUs"]
-    assert np.allclose(parsed_df["time_value"].to_numpy(dtype=float), np.array([0.499991, 0.799985]))
+    assert np.allclose(
+        parsed_df["time_value"].to_numpy(dtype=float), np.array([0.499991, 0.799985])
+    )
 
 
 def test_parse_millisecondtime_requires_reference_date():
@@ -109,7 +111,11 @@ def test_parse_no_pc_timestamp_with_reference_start_time_synthesizes_pc_times():
     )
 
     assert parsed_df["pc_date"].tolist() == ["2026-07-09", "2026-07-09", "2026-07-09"]
-    assert parsed_df["pc_time"].tolist() == ["15:08:52.532", "15:08:52.732", "15:08:53.532"]
+    assert parsed_df["pc_time"].tolist() == [
+        "15:08:52.532",
+        "15:08:52.732",
+        "15:08:53.532",
+    ]
 
 
 def test_parse_no_pc_timestamp_without_start_time_leaves_empty_pc_time_and_transition_raises():

@@ -168,7 +168,7 @@ def find_saved_timeline(session_root: Path, configuration_id: str) -> Path | Non
                     return path
         except (OSError, ValueError, KeyError, EOFError, BadZipFile):
             continue
-    return None
+    return timeline_io.find_registered_timeline(session_root, configuration_id)
 
 
 def benchmark_timeline_result(result_path: Path | str) -> dict:
@@ -243,10 +243,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hpc-probe")
     parser.add_argument("--rerun", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument(
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument(
         "--window-summary",
         action="store_true",
         help="Prepare Stage 2 from an existing Stage 1 result, without refitting.",
+    )
+    actions.add_argument(
+        "--speed",
+        action="store_true",
+        help="Prepare optional signed speed only; probe/bin options do not configure speed.",
     )
     parser.add_argument(
         "--benchmark",
@@ -263,13 +269,20 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             action = run_session_window_variance
-        report = action(
-            args.session_metadata,
-            roles,
-            args.bin_width_ms / 1000.0,
-            rerun=args.rerun,
-            dry_run=args.dry_run,
-        )
+        if args.speed:
+            from src.neural_analysis.session_speed import run_session_speed
+
+            report = run_session_speed(
+                args.session_metadata, rerun=args.rerun, dry_run=args.dry_run
+            )
+        else:
+            report = action(
+                args.session_metadata,
+                roles,
+                args.bin_width_ms / 1000.0,
+                rerun=args.rerun,
+                dry_run=args.dry_run,
+            )
     except (OSError, ValueError) as error:
         print(f"Timeline preparation failed: {error}", file=sys.stderr)
         return 1
@@ -277,7 +290,11 @@ def main(argv: list[str] | None = None) -> int:
         f"{report.status}: {report.result_path or report.configuration_id} ({report.elapsed_s:.3f} s)"
     )
     if args.benchmark and report.result_path is not None:
-        if args.window_summary:
+        if args.speed:
+            from src.neural_analysis.session_speed import benchmark_speed_result
+
+            measured = benchmark_speed_result(report.result_path)
+        elif args.window_summary:
             from src.neural_analysis.population.run_window_variance import (
                 benchmark_window_variance,
             )
@@ -313,6 +330,12 @@ def _prepare_session(
     start = perf_counter()
     origin, choices, events = timeline_io.load_timeline_behavior(session)
     meta = dict(config)
+    metadata_stat = session.metadata_path.stat()
+    meta["metadata_source"] = {
+        "path": str(session.metadata_path),
+        "bytes": metadata_stat.st_size,
+        "mtime_ns": metadata_stat.st_mtime_ns,
+    }
     meta.update(
         {
             "behavior_loading_s": perf_counter() - start,

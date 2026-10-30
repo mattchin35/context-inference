@@ -116,7 +116,6 @@ def timeline_configuration(
     if len(set(probe_roles.values())) != len(probe_roles):
         raise ValueError("PFC and HPC must use distinct probes.")
     paths = [
-        session.metadata_path,
         session.behavior.trial_table_file,
         session.behavior.event_table_file,
     ]
@@ -141,6 +140,11 @@ def timeline_configuration(
             selection[role] = {"unavailable": str(error)}
     config = {
         "analysis_version": ANALYSIS_VERSION,
+        "configuration_identity_version": 2,
+        "acquisition_families": {
+            role: resolve_probe_sources(session, probe).acquisition_family
+            for role, probe in sorted(probe_roles.items())
+        },
         "session_id": session.session_id,
         "probe_roles": dict(probe_roles),
         "bin_width_s": bin_width_s,
@@ -149,9 +153,115 @@ def timeline_configuration(
         "selection": selection,
         "sources": [_file_identity(path) for path in paths if path is not None],
     }
-    encoded = json.dumps(config, sort_keys=True, separators=(",", ":"))
-    config["configuration_id"] = hashlib.sha256(encoded.encode()).hexdigest()[:16]
+    config["configuration_id"] = _configuration_digest(config)
     return config
+
+
+def register_timeline_scientific_identity(
+    session: ResolvedSession, result_path: Path | str
+) -> Path:
+    """Register an exact legacy result BEFORE its original metadata is edited.
+
+    session is the unchanged resolved metadata; result_path is a completed v1
+    timeline NPZ under that session's analysis_runs. Read only archive metadata,
+    verify the original full configuration, and write a small new JSON record.
+    Return its path. Existing NPZ bytes/mtime and array axes/units are untouched.
+    A conflicting record or an edited original source raises ValueError.
+    """
+    path = Path(result_path).resolve(strict=True)
+    if path.name != "results.npz" or not path.is_relative_to(
+        session.session_root / "analysis_runs"
+    ):
+        raise ValueError("Legacy result must be in this session's analysis_runs.")
+    with np.load(path, allow_pickle=True) as archive:
+        meta = archive["meta"].item()
+    if (
+        meta.get("schema_version") != 1
+        or meta.get("analysis_version") != ANALYSIS_VERSION
+    ):
+        raise ValueError("Unsupported legacy timeline version.")
+    current = timeline_configuration(session, meta["probe_roles"], meta["bin_width_s"])
+    legacy = {
+        key: current[key]
+        for key in (
+            "analysis_version",
+            "session_id",
+            "probe_roles",
+            "bin_width_s",
+            "window_s",
+            "quality_rules",
+            "selection",
+            "sources",
+        )
+    }
+    legacy["sources"] = [_file_identity(session.metadata_path)] + current["sources"]
+    legacy["configuration_id"] = _configuration_digest(legacy)
+    if any(meta.get(key) != value for key, value in legacy.items()):
+        raise ValueError(
+            "Legacy configuration does not match the original metadata and sources."
+        )
+    record = {
+        "schema_version": 1,
+        "analysis_version": ANALYSIS_VERSION,
+        "configuration": current,
+        "legacy_configuration_id": meta["configuration_id"],
+        "result_identity": _file_identity(path),
+    }
+    target = path.parent / "scientific_identity.json"
+    if target.exists():
+        if json.loads(target.read_text()) != record:
+            raise ValueError("Conflicting existing scientific identity record.")
+    else:
+        with target.open("x", encoding="ascii") as stream:
+            stream.write(json.dumps(record, indent=2) + "\n")
+    return target
+
+
+def find_registered_timeline(session_root: Path, configuration_id: str) -> Path | None:
+    """Find a registered immutable legacy result by its new scientific ID.
+
+    Only JSON and NPZ metadata are read. Require the recorded result to remain
+    in that same run with unchanged path/bytes/mtime and supported versions.
+    Invalid or stale records are ignored; no files are written.
+    """
+    for record_path in sorted(
+        (Path(session_root) / "analysis_runs").glob(
+            "session_timeline_pca_*/scientific_identity.json"
+        ),
+        reverse=True,
+    ):
+        try:
+            record = json.loads(record_path.read_text())
+            config = record["configuration"]
+            if (
+                record["schema_version"] != 1
+                or record["analysis_version"] != ANALYSIS_VERSION
+                or config["configuration_id"] != configuration_id
+                or _configuration_digest(config) != configuration_id
+            ):
+                continue
+            path = record_path.parent / "results.npz"
+            if record["result_identity"] != _file_identity(path):
+                continue
+            with np.load(path, allow_pickle=True) as archive:
+                meta = archive["meta"].item()
+                if (
+                    meta.get("schema_version") == 1
+                    and meta.get("analysis_version") == ANALYSIS_VERSION
+                    and meta.get("configuration_id")
+                    == record["legacy_configuration_id"]
+                ):
+                    return path
+        except (OSError, ValueError, KeyError, EOFError):
+            continue
+    return None
+
+
+def _configuration_digest(config: dict) -> str:
+    """Return a stable 16-character scientific digest, excluding its own ID field."""
+    values = {key: value for key, value in config.items() if key != "configuration_id"}
+    encoded = json.dumps(values, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()[:16]
 
 
 def save_timeline_result(

@@ -23,7 +23,7 @@ def _skeleton() -> dict[str, object]:
         "schema_version": "2",
         "session": "",
         "acquisition": "open_ephys",
-        "behavior": {"trials": "", "events": None},
+        "behavior": {"trials": "", "events": None, "treadmill": None},
         "probes": {},
         "site_pairs": [],
         "cache": None,
@@ -34,7 +34,9 @@ def _parser() -> argparse.ArgumentParser:
     """Return the two-command argument parser for metadata users."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    create_parser = commands.add_parser("create", help="write an editable metadata skeleton")
+    create_parser = commands.add_parser(
+        "create", help="write an editable metadata skeleton"
+    )
     create_parser.add_argument("--session-root", type=Path, required=True)
     validate_parser = commands.add_parser("validate", help="validate one metadata file")
     validate_parser.add_argument("--metadata", type=Path, required=True)

@@ -10,7 +10,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-PCTimestampFormat = Literal["datetime", "millisecondtime"] | None
+PCTimestampFormat = Literal["datetime", "millisecondtime", "ignore"] | None
 
 
 def _require_reference_date(
@@ -48,7 +48,9 @@ def _parse_serial_message(serial_msg: str) -> dict[str, object]:
     """
     fields = [field for field in serial_msg.split(";") if field]
     if len(fields) < 2:
-        raise ValueError(f"Serial message must contain label and interval fields: {serial_msg!r}")
+        raise ValueError(
+            f"Serial message must contain label and interval fields: {serial_msg!r}"
+        )
 
     label, value = fields[0].split(":", maxsplit=1)
     time_label, time_value = fields[1].split(":", maxsplit=1)
@@ -102,6 +104,8 @@ def parse_coolterm_serial_lines(
         pc_timestamp_format: ``"datetime"`` for full local date/time prefixes,
             ``"millisecondtime"`` for local time-only prefixes, or ``None`` for
             serial-message-only lines.
+            "ignore" strips an optional PC prefix without requiring a date;
+            only the serial payload is used for IRIG-based timing.
         pc_reference_date: Local date string, ``YYYY-MM-DD``. Required for
             ``"millisecondtime"`` and ``None``.
         pc_reference_start_time: Optional local time string, ``HH:MM:SS.mmm``.
@@ -114,13 +118,15 @@ def parse_coolterm_serial_lines(
         ``time_value``. ``time_value`` has units seconds.
     """
 
-    if pc_timestamp_format not in ("datetime", "millisecondtime", None):
-        raise ValueError("pc_timestamp_format must be None, 'datetime', or 'millisecondtime'.")
+    if pc_timestamp_format not in ("datetime", "millisecondtime", "ignore", None):
+        raise ValueError(
+            "pc_timestamp_format must be None, 'datetime', 'millisecondtime', or 'ignore'."
+        )
     reference_date = _require_reference_date(pc_timestamp_format, pc_reference_date)
 
     log_rows: list[dict[str, object]] = []
     previous_pc_datetime: datetime | None = None
-    for line in lines:
+    for line_number, line in enumerate(lines, 1):
         stripped_line = line.strip()
         if not stripped_line:
             continue
@@ -131,18 +137,29 @@ def parse_coolterm_serial_lines(
         elif pc_timestamp_format == "millisecondtime":
             pc_time, serial_msg = stripped_line.split("\t", maxsplit=1)
             pc_date = reference_date
-            pc_datetime = datetime.strptime(f"{pc_date} {pc_time}", "%Y-%m-%d %H:%M:%S.%f")
+            pc_datetime = datetime.strptime(
+                f"{pc_date} {pc_time}", "%Y-%m-%d %H:%M:%S.%f"
+            )
             if previous_pc_datetime is not None and pc_datetime < previous_pc_datetime:
                 raise ValueError(
                     "PC timestamp decreased in millisecondtime log; midnight rollover is not supported yet."
                 )
             previous_pc_datetime = pc_datetime
+        elif pc_timestamp_format == "ignore":
+            serial_msg = stripped_line.rsplit("\t", maxsplit=1)[-1]
+            pc_date = ""
+            pc_time = ""
         else:
             serial_msg = stripped_line
             pc_date = reference_date
             pc_time = ""
 
-        parsed_msg = _parse_serial_message(serial_msg)
+        try:
+            parsed_msg = _parse_serial_message(serial_msg)
+        except ValueError as error:
+            raise ValueError(
+                f"Invalid serial record at line {line_number}: {error}"
+            ) from error
         log_rows.append({"pc_date": pc_date, "pc_time": pc_time, **parsed_msg})
 
     if pc_timestamp_format is None and pc_reference_start_time is not None:
@@ -167,7 +184,7 @@ def parse_coolterm_serial_text(
     Args:
         text: Complete serial log text.
         pc_timestamp_format: ``"datetime"``, ``"millisecondtime"``, or
-            ``None``.
+            ``"ignore"`` (no reference date/PC clock), or ``None``.
         pc_reference_date: Local date string, ``YYYY-MM-DD``. Required for
             ``"millisecondtime"`` and ``None``.
         pc_reference_start_time: Optional local time string, ``HH:MM:SS.mmm``.
@@ -196,7 +213,7 @@ def load_coolterm_serial_txt(
     Args:
         txt_path: Path to a CoolTerm serial capture text file.
         pc_timestamp_format: ``"datetime"``, ``"millisecondtime"``, or
-            ``None``.
+            ``"ignore"`` (no reference date/PC clock), or ``None``.
         pc_reference_date: Local date string, ``YYYY-MM-DD``. Required for
             ``"millisecondtime"`` and ``None``.
         pc_reference_start_time: Optional local time string, ``HH:MM:SS.mmm``.
@@ -240,9 +257,13 @@ def treadmill_log_to_transition_df(
     required_columns = {"label", "value", "time_value", "pc_date", "pc_time"}
     missing_columns = required_columns - set(parsed_df.columns)
     if missing_columns:
-        raise ValueError(f"parsed_df is missing required columns: {sorted(missing_columns)}")
+        raise ValueError(
+            f"parsed_df is missing required columns: {sorted(missing_columns)}"
+        )
     if parsed_df["pc_time"].astype(str).str.len().eq(0).any():
-        raise ValueError("pc_time is required to convert treadmill log rows into UTC transition times.")
+        raise ValueError(
+            "pc_time is required to convert treadmill log rows into UTC transition times."
+        )
 
     sync_df = parsed_df.loc[parsed_df["label"] == "syncPinState"].copy()
     if sync_df.empty:
@@ -262,10 +283,9 @@ def treadmill_log_to_transition_df(
         for repeated_position in repeated_positions:
             next_position = repeated_position + 1
             if next_position < sync_df.shape[0]:
-                sync_df.iat[next_position, time_value_col] = (
-                    float(sync_df.iat[next_position, time_value_col])
-                    + float(sync_df.iat[repeated_position, time_value_col])
-                )
+                sync_df.iat[next_position, time_value_col] = float(
+                    sync_df.iat[next_position, time_value_col]
+                ) + float(sync_df.iat[repeated_position, time_value_col])
         warnings.warn(
             "Repeated syncPinState values found at parsed rows "
             f"{repeated_rows}; dropping repeated rows and keeping the first state occurrence.",
@@ -276,7 +296,9 @@ def treadmill_log_to_transition_df(
         while not sync_df.empty and sync_df.iloc[-1]["value"] != "LOW":
             sync_df = sync_df.iloc[:-1].copy()
         if sync_df.empty:
-            raise ValueError("No complete HIGH/LOW transition sequence found after dropping repeats.")
+            raise ValueError(
+                "No complete HIGH/LOW transition sequence found after dropping repeats."
+            )
 
     pc_local_datetime = pd.to_datetime(sync_df["pc_date"] + " " + sync_df["pc_time"])
     pc_local_datetime = pc_local_datetime.dt.tz_localize(local_timezone)

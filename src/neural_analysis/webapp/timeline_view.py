@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from src.neural_analysis import session_speed
+from src.mouse_behavior_preprocessing.treadmill_speed import TreadmillSpeed
 from src.neural_analysis.population.run_session_timeline import (
     find_saved_timeline,
     resolve_timeline_probe_roles,
@@ -116,6 +118,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
     load_elapsed = perf_counter() - started
     state_key = f"{scope}_{config['configuration_id']}"
     summary = _window_summary_controls(st_module, saved, state_key)
+    speed = _speed_controls(st_module, session, scope)
     visible, revision = _navigation_controls(st_module, result, state_key)
     zscore_pcs = st_module.sidebar.checkbox(
         "Z-score each PC",
@@ -186,6 +189,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         show_context=show_context,
         zscore_pcs=zscore_pcs,
         window_variance=summary.regions if summary is not None else None,
+        speed=speed,
     )
     construction_elapsed = perf_counter() - started
     render_timeline_chart(figure, key=f"{scope}_chart")
@@ -260,6 +264,75 @@ def load_timeline_behavior_cached(metadata_path: str, configuration_id: str) -> 
 
 
 # UI helpers keep widget and navigation state outside numerical functions.
+@st.cache_data(show_spinner=False, max_entries=4)
+def load_speed_result_cached(
+    path: str, size_bytes: int, mtime_ns: int
+) -> TreadmillSpeed:
+    """Load signed-mm/s/UTC arrays once per exact NPZ path/stat; no raw reads or decoding."""
+    return session_speed.load_speed_result(path)
+
+
+def _speed_controls(
+    st_module: object, session: ResolvedSession, scope: str
+) -> TreadmillSpeed | None:
+    """Return saved speed only when shown; decode solely on explicit prepare clicks.
+
+    session supplies the optional log path. scope keys speed controls independently
+    of neural probes/bins. A fixed status slot prevents chart remounts on toggles.
+    Missing, stale, or invalid speed affects only this optional row.
+    """
+    status = st_module.empty()
+    saved = None
+    error = None
+    try:
+        config = session_speed.speed_configuration(session)
+        saved = session_speed.find_saved_speed(
+            session.session_root, config["configuration_id"]
+        )
+    except (OSError, ValueError) as failure:
+        error = str(failure)
+    prepare = st_module.sidebar.button(
+        "Prepare speed", key=f"{scope}_prepare_speed", disabled=error is not None
+    )
+    rerun = st_module.sidebar.button(
+        "Recompute speed", key=f"{scope}_recompute_speed", disabled=saved is None
+    )
+    show_key = f"{scope}_show_speed"
+    if prepare or rerun:
+        try:
+            with st_module.spinner("Preparing IRIG-aligned signed speed..."):
+                saved = session_speed.run_session_speed(
+                    session.metadata_path, rerun=rerun
+                ).result_path
+            st_module.session_state[show_key] = True
+        except (OSError, ValueError) as failure:
+            error = f"Could not prepare speed: {failure}"
+    if saved is None:
+        st_module.session_state[show_key] = False
+    show = st_module.sidebar.checkbox(
+        "Show speed", value=saved is not None, disabled=saved is None, key=show_key
+    )
+    if error is not None:
+        status.caption(f"Speed unavailable: {error}")
+        return None
+    if saved is None:
+        status.caption(
+            "Speed not prepared for this source/version. Click Prepare speed; neural preparation is independent."
+        )
+        return None
+    status.caption(
+        "Speed: signed logged mm/s, aligned by Teensy timing and IRIG; each value is held until the next update. Speed between choices is measured behavior."
+    )
+    if not show:
+        return None
+    try:
+        stat = saved.stat()
+        return load_speed_result_cached(str(saved), stat.st_size, stat.st_mtime_ns)
+    except (OSError, ValueError, KeyError) as failure:
+        status.caption(f"Speed unavailable: {failure}")
+        return None
+
+
 @st.cache_data(show_spinner=False, max_entries=4)
 def load_window_summary_cached(
     path: str, size_bytes: int, mtime_ns: int

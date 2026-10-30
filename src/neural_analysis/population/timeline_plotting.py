@@ -14,6 +14,7 @@ from src.neural_analysis.population.session_timeline import (
     SessionTimelineResult,
 )
 from src.neural_analysis.population.window_variance import WindowVarianceSummary
+from src.mouse_behavior_preprocessing.treadmill_speed import TreadmillSpeed
 
 
 EVENT_TRACKS = ("trial_start", "left_entry", "right_entry", "LED")
@@ -244,6 +245,7 @@ def plot_session_timeline(
     show_context: bool = True,
     zscore_pcs: bool = False,
     window_variance: dict[str, WindowVarianceSummary] | None = None,
+    speed: TreadmillSpeed | None = None,
 ) -> go.Figure:
     """Build synchronized tracks from a prepared result, without modifying its arrays.
 
@@ -257,6 +259,9 @@ def plot_session_timeline(
     session z-score range. Saved scores and variance percentages are unchanged.
     window_variance optionally adds saved fixed-axis count points after each
     regional heatmap; it is independent of PC selection and display scaling.
+    speed optionally adds a signed-mm/s post-step row below events. Its entire
+    UTC series is converted to the common elapsed origin, without neural-window
+    filtering or changing the established session/navigator bounds.
     Return a Plotly figure;
     native chart navigation does not send arbitrary range events to Python.
     """
@@ -275,6 +280,9 @@ def plot_session_timeline(
     if show_context and not contexts.empty:
         titles[0] = "Choices - context: blue=left, red=right, gray=dark"
     heights = [1.0] + [0.65] * len(tracks)
+    if speed is not None:
+        titles.append("Signed speed (mm/s)")
+        heights.append(1.1)
     for role, regional in result.regions.items():
         first, last = pc_ranges.get(role, (1, min(10, regional.scores.shape[2])))
         titles.append(f"{role} ({regional.probe_id}) - session PCs {first}-{last}")
@@ -298,6 +306,11 @@ def plot_session_timeline(
     row = 2
     for track in tracks:
         _add_event_track(figure, result.events, track, row)
+        row += 1
+    speed_row = None
+    if speed is not None:
+        speed_row = row
+        _add_speed_track(figure, speed, result.time_origin_s, row)
         row += 1
     for role, regional in result.regions.items():
         display_scores = None
@@ -379,6 +392,10 @@ def plot_session_timeline(
     figure.update_yaxes(visible=False, row=row, col=1)
     figure.update_xaxes(range=visible, showgrid=False)
     figure.update_yaxes(fixedrange=True, showgrid=False, zeroline=False)
+    if speed_row is not None:
+        figure.update_yaxes(
+            zeroline=True, zerolinecolor="#9ca3af", row=speed_row, col=1
+        )
     figure.update_xaxes(
         title_text="Elapsed session time (s; zero = first trial start)",
         row=row,
@@ -390,7 +407,7 @@ def plot_session_timeline(
     identity = result.meta.get("configuration_id", result.session_id)
     # Only time navigation persists; PC/track changes must recalculate vertical ranges.
     figure.update_yaxes(
-        uirevision=f"{identity}:rows:{tuple(tracks)}:{sorted(pc_ranges.items())}:{tuple(window_variance)}"
+        uirevision=f"{identity}:rows:{tuple(tracks)}:{sorted(pc_ranges.items())}:{tuple(window_variance)}:speed:{speed is not None}"
     )
     figure.update_layout(
         height=max(600, int(sum(heights) * 90 + 180)),
@@ -407,6 +424,42 @@ def plot_session_timeline(
 
 
 # Plotting-only helpers. All x coordinates below are elapsed seconds.
+def _add_speed_track(
+    figure: go.Figure, speed: TreadmillSpeed, origin_s: float, row: int
+) -> None:
+    """Plot S actual speed updates as signed-mm/s steps in the indicated subplot.
+
+    utc_s/speed_mm_s/source_rows retain (S,) order, including equal timestamps.
+    Only x is transformed to elapsed seconds. Use a fixed full-series y range;
+    no smoothing, sign change, cropping, or synthetic endpoint is introduced.
+    """
+    low = min(0.0, float(speed.speed_mm_s.min()))
+    high = max(0.0, float(speed.speed_mm_s.max()))
+    margin = 0.05 * (high - low) if high > low else 1.0
+    figure.add_trace(
+        go.Scattergl(
+            x=speed.utc_s - origin_s,
+            y=speed.speed_mm_s,
+            mode="lines",
+            line={"shape": "hv", "width": 1.5, "color": "#047857"},
+            name="Signed speed (mm/s)",
+            connectgaps=False,
+            customdata=np.column_stack([speed.utc_s, speed.source_rows]),
+            hovertemplate="Signed speed %{y:.2f} mm/s<br>Elapsed %{x:.3f} s"
+            "<br>UTC %{customdata[0]:.6f} s<br>Parsed source row %{customdata[1]:.0f}<extra></extra>",
+        ),
+        row=row,
+        col=1,
+    )
+    figure.update_yaxes(
+        title_text="mm/s",
+        range=(low - margin, high + margin),
+        autorange=False,
+        row=row,
+        col=1,
+    )
+
+
 def _add_window_counts(
     figure: go.Figure,
     summary: WindowVarianceSummary,
