@@ -120,6 +120,9 @@ with an optional visibility toggle. Preparation uses all complete choice windows
 once; navigation and display changes reuse saved results. The default is 500-ms
 bins over `[-2, +2)` seconds around each choice.
 
+The optional **Z-score each PC** display uses each PC's own session mean and
+SD, updates heatmap units, and works live without changing prepared results.
+
 Prepare in advance, using version-3 metadata probe roles:
 
 ```bash

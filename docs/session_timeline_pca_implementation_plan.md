@@ -42,6 +42,15 @@ during review. They take precedence over the earlier review's suggestions.
   updated combined suite passes 215 tests with the same four existing warnings.
   This display-only addition reuses existing archives and requires no PCA
   recomputation or saved-result format change.
+- Approved follow-up: optional live per-PC z-scoring using each population's
+  full prepared choice-window/bin pool (population SD, `ddof=0`). Only selected
+  rows are transformed; saved scores, loadings, and variance summaries retain
+  their original meaning. Heatmap units and manual limits reflect the mode.
+  Tests-first commits `2d9683d` and `36f2d04` observed RED before implementation;
+  the combined regression suite passes 225 tests with four existing warnings.
+  Synthetic normalization timings for 200,000 bins: median 37.7 ms for 10 PCs
+  and 669.7 ms for 100 PCs across three calls, excluding figure/browser work.
+  The option requires no archive, preparation, or dependency changes.
 
 Small synthetic benchmark examples (three choices, two units/PCs per region):
 

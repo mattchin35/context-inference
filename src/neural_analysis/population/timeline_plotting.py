@@ -1,4 +1,4 @@
-"""Plotly session-time tracks from prepared data; never bin, standardize, or fit."""
+"""Plotly session-time tracks with optional score z-scoring; never bin or fit PCA."""
 
 from __future__ import annotations
 
@@ -39,12 +39,15 @@ def build_timeline_heatmap_data(
     choices: pd.DataFrame,
     pc_range: tuple[int, int] | None = None,
     loaded_range_s: tuple[float, float] | None = None,
+    display_scores: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Return explicit temporal edges, signed scores, and per-cell hover information.
 
     regional scores are (W,B,K); choices supplies elapsed_s, choice_time (UTC
     seconds), and original trial_id. pc_range is inclusive one-based ranks.
     loaded_range_s optionally selects intersecting windows in elapsed seconds.
+    display_scores optionally replaces selected PC values, shape (W,B,P), in
+    raw score or PC-SD units. It must retain the regional window/bin order.
     Return x (M+1,) edges, y (P,) ranks, z (P,M), customdata (P,M,8). Each actual
     inter-window gap is one NaN column, regardless of its elapsed duration.
     """
@@ -53,6 +56,15 @@ def build_timeline_heatmap_data(
     if first < 1 or last < first or last > component_count:
         raise ValueError("PC range must be within the available one-based ranks.")
     ranks = np.arange(first, last + 1)
+    scores = (
+        regional.scores[:, :, first - 1 : last]
+        if display_scores is None
+        else display_scores
+    )
+    if scores.shape != (*regional.scores.shape[:2], len(ranks)):
+        raise ValueError(
+            "Display scores must match the windows, bins, and selected PCs."
+        )
     edges = []
     columns = []
     custom = []
@@ -73,7 +85,7 @@ def build_timeline_heatmap_data(
             edges.extend(elapsed_edges.tolist())
         else:
             edges.extend(elapsed_edges[1:].tolist())
-        values = regional.scores[window_index, :, first - 1 : last].T
+        values = scores[window_index].T
         columns.append(values)
         bin_count = values.shape[1]
         info = np.empty((len(ranks), bin_count, 8), dtype=object)
@@ -96,6 +108,29 @@ def build_timeline_heatmap_data(
         if custom
         else np.empty((len(ranks), 0, 8), dtype=object),
     }
+
+
+def zscore_pc_scores(scores: np.ndarray) -> np.ndarray:
+    """Return display-only per-PC z-scores with unchanged (windows,bins,PCs) shape.
+
+    scores is a nonempty finite float array of saved PCA scores. Each PC uses
+    its own mean and population SD (ddof=0) across all window/bin observations.
+    Return a new float64 array in dimensionless PC-SD units. Constant PCs
+    become zero; no input is modified and no gaps are included in the pool.
+    """
+    values = np.asarray(scores, dtype=np.float64)
+    if values.ndim != 3 or not all(values.shape):
+        raise ValueError("PC scores must have nonempty (windows, bins, PCs) axes.")
+    means = values.mean(axis=(0, 1))
+    scales = values.std(axis=(0, 1), ddof=0)
+    # Explicitly detect constants even if floating-point mean rounding leaves a tiny SD.
+    variable = values.max(axis=(0, 1)) > values.min(axis=(0, 1))
+    return np.divide(
+        values - means,
+        scales,
+        out=np.zeros_like(values),
+        where=variable & (scales > 0),
+    )
 
 
 def verified_led_intervals(events: pd.DataFrame) -> pd.DataFrame:
@@ -206,13 +241,18 @@ def plot_session_timeline(
     color_limits: dict[str, float] | None = None,
     viewport_revision: int = 0,
     show_context: bool = True,
+    zscore_pcs: bool = False,
 ) -> go.Figure:
     """Build synchronized tracks from a prepared result, without modifying its arrays.
 
     Time ranges are elapsed seconds, PC ranges inclusive one-based ranks,
-    and color_limits are positive symmetric score limits keyed by region.
+    and color_limits are positive symmetric display limits keyed by region.
     loaded_range_s bounds the neural payload only. show_context toggles logged
     task-context shading on the choices row; context hover remains available.
+    zscore_pcs uses each displayed PC's mean/population SD over all prepared
+    window/bin observations, before loaded-range filtering. Color limits are
+    then in PC-SD units, with automatic limits spanning the selected PCs' full
+    session z-score range. Saved scores and variance percentages are unchanged.
     Return a Plotly figure;
     native chart navigation does not send arbitrary range events to Python.
     """
@@ -252,15 +292,29 @@ def plot_session_timeline(
         _add_event_track(figure, result.events, track, row)
         row += 1
     for role, regional in result.regions.items():
+        display_scores = None
+        default_limit = regional.color_limit
+        if zscore_pcs:
+            first, last = pc_ranges.get(role, (1, min(10, regional.scores.shape[2])))
+            display_scores = zscore_pc_scores(regional.scores[:, :, first - 1 : last])
+            default_limit = float(np.abs(display_scores).max())
+            if default_limit == 0.0:
+                default_limit = 1.0
         data = build_timeline_heatmap_data(
-            regional, result.choices, pc_ranges.get(role), loaded_range_s
+            regional,
+            result.choices,
+            pc_ranges.get(role),
+            loaded_range_s,
+            display_scores,
         )
-        limit = float(color_limits.get(role, regional.color_limit))
+        limit = float(color_limits.get(role, default_limit))
         if not np.isfinite(limit) or limit <= 0:
             raise ValueError(
                 "Manual color limits must be positive finite score values."
             )
         axis_domain = figure.layout[f"yaxis{row}"].domain
+        colorbar_title = f"{role} z-score<br>(PC SD)" if zscore_pcs else f"{role} score"
+        value_label = "Z-score (PC SD)" if zscore_pcs else "Score"
         figure.add_trace(
             go.Heatmap(
                 **data,
@@ -273,7 +327,7 @@ def plot_session_timeline(
                 connectgaps=False,
                 hoverongaps=False,
                 colorbar={
-                    "title": {"text": f"{role} score"},
+                    "title": {"text": colorbar_title},
                     "len": axis_domain[1] - axis_domain[0],
                     "y": sum(axis_domain) / 2,
                     "thickness": 12,
@@ -283,7 +337,7 @@ def plot_session_timeline(
                     "<br>Trial %{customdata[0]}<br>Elapsed [%{customdata[5]:.3f}, %{customdata[6]:.3f}) s"
                     "<br>UTC [%{customdata[1]:.6f}, %{customdata[2]:.6f}) s"
                     "<br>Choice-relative [%{customdata[3]:.3f}, %{customdata[4]:.3f}) s"
-                    "<br>Score %{z:.5g}<extra></extra>"
+                    f"<br>{value_label} %{{z:.5g}}<extra></extra>"
                 ),
             ),
             row=row,

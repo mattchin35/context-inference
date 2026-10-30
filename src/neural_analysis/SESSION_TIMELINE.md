@@ -8,8 +8,8 @@ remain visible without neural measurements from that probe.
 
 Preparation runs once for a session, bin size, and population selection. It
 saves the fitted basis and all scores. Viewing, panning, trial jumps, event
-toggles, and PC-row changes reuse those products. Changing bin size selects a
-different configuration and can change the PC axes.
+toggles, PC-row changes, and display-only PC z-scoring reuse those products.
+Changing bin size selects a different configuration and can change the PC axes.
 
 ## Inputs
 
@@ -93,6 +93,9 @@ uv run streamlit run src/neural_analysis/psth_webapp.py -- \
 5. Select a PC rank range independently for each population. The initial
    selection is the first ten available PCs. Change optional event checkboxes
    to show trial starts, licks, and LED intervals/transitions.
+6. Optionally enable **Z-score each PC** to inspect each PC's variability on
+   its own scale. This defaults off and works with existing prepared results;
+   no recomputation or archive update is needed.
 
 **Show active context** is on by default when logged context entries are
 available. Faint shading behind the choices indicates blue for left active,
@@ -122,22 +125,44 @@ slider does not request new data from Python.
 The chart defaults to a light background. Hover a choice for trial ID, side,
 time, and true active context from the logged transitions. Hover a heatmap
 cell for region/probe, PC identity and session variance percentage, original
-trial ID, elapsed/UTC/choice-relative bin
-intervals, and the signed score. LED intervals use verified on/off pairs;
+trial ID, elapsed/UTC/choice-relative bin intervals, and the signed score (or
+per-PC z-score when enabled). LED intervals use verified on/off pairs;
 unpaired transitions remain markers without invented endpoints.
 
 ## Read the PCA display
 
 Each population is fitted separately using all of its complete choice windows.
 Units are z-scored once across pooled window/bin observations. Constant units
-are omitted. PCA uses full SVD, no whitening, and no post-PCA score scaling.
-The PC rows stay in session explained-variance order.
+are omitted. Saved PCA uses full SVD, no whitening, and no post-PCA score
+scaling. The PC rows stay in session explained-variance order.
 
-Colors are signed and centered at zero, using fixed regional limits calculated
-from all scores in the configuration. Gray center-color cells are measured
-near-zero scores; blank gaps have no neural measurements. The optional manual
+By default, colors are signed and centered at zero, using fixed regional limits
+calculated from all scores in the configuration. Gray center-color cells are
+measured near-zero scores; blank gaps have no neural measurements. The optional manual
 color-range control changes display limits only and labels saturation. It
 does not change scores or normalize rows.
+
+With **Z-score each PC**, the display uses `(score - mean) / SD` separately
+for each PC in each population. The reference includes all that population's
+prepared choice-window bins across the session, with population SD (`ddof=0`).
+It excludes gaps. Constant PCs display zero. The same bin keeps the same
+z-score when you pan, change the selected PC rows, or load only the visible
+neural interval.
+
+Heatmap colorbars and hover values then use **PC SD** units. Automatic symmetric
+limits span all prepared z-scores for the selected PC rows, so they stay fixed
+while navigating; selecting different rows can change those limits. Manual
+limits use SD units, initially +/-3, and are separate from raw-score limits.
+The option changes only heatmap values, color limits, and their labels. It
+preserves timing, gaps, context, PC order, loadings, and the original variance
+percentages. Low-variance PCs become as visually prominent as leading PCs,
+including any noise they contain.
+
+Z-scoring runs live on only the selected PC rows, without new dependencies or
+saved arrays. A synthetic benchmark of 1,000 windows with 200 bins each measured
+about 38 ms for 10 PCs and 670 ms for 100 PCs (median of three calls). These
+measure normalization only, excluding result loading, figure construction, and
+browser rendering; they are not real-session latency guarantees.
 
 The footer shows the smallest leading-PC counts covering **80%, 90%, and
 95%** of total variance in each population's complete fitting dataset. It also
@@ -198,4 +223,5 @@ session before running an experimental batch.
 Python callers can use `run_session_timeline`,
 `session_timeline_io.load_timeline_result`, and
 `timeline_plotting.plot_session_timeline` for the same separate preparation,
-load, and figure-building steps used by the app.
+load, and figure-building steps used by the app. Pass `zscore_pcs=True` to
+`plot_session_timeline` for the same optional display normalization.

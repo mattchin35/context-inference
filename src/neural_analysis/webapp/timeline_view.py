@@ -32,8 +32,8 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
     """Render preparation, navigation, and signed-score tracks for one metadata session.
 
     st_module is the Streamlit interface; session contains resolved source paths.
-    Computation occurs only on an explicit Prepare/Recompute click. Other
-    interactions load matching saved products and construct a figure without PCA.
+    PCA occurs only on an explicit Prepare/Recompute click. Other interactions
+    load saved products; optional per-PC z-scoring affects the display only.
     """
     st_module.subheader("Session timeline and PCA")
     scope = (
@@ -89,7 +89,14 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
     load_elapsed = perf_counter() - started
     state_key = f"{scope}_{config['configuration_id']}"
     visible, revision = _navigation_controls(st_module, result, state_key)
-    pc_ranges, limits = _pc_controls(st_module, result, state_key)
+    zscore_pcs = st_module.sidebar.checkbox(
+        "Z-score each PC",
+        value=False,
+        disabled=not result.regions,
+        key=f"{state_key}_zscore_pcs",
+        help="Use each PC's mean and population SD across all prepared choice-window bins in this session.",
+    )
+    pc_ranges, limits = _pc_controls(st_module, result, state_key, zscore_pcs)
     context_available = not context_intervals(
         result.events, session_time_bounds(result)[1]
     ).empty
@@ -146,6 +153,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         limits,
         revision,
         show_context=show_context,
+        zscore_pcs=zscore_pcs,
     )
     construction_elapsed = perf_counter() - started
     st_module.plotly_chart(
@@ -161,7 +169,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         "Drag horizontally to pan; the mouse wheel scrolls the page. "
         "Display-control changes restore the Window start/duration viewport."
     )
-    _render_variance_footer(st_module, result)
+    _render_variance_footer(st_module, result, zscore_pcs)
     with st_module.expander("Display timing"):
         st_module.write(
             f"Result/behavior load: {load_elapsed:.3f} s; figure construction: {construction_elapsed:.3f} s."
@@ -297,9 +305,14 @@ def _navigation_controls(
 
 
 def _pc_controls(
-    st_module: object, result: SessionTimelineResult, key: str
+    st_module: object, result: SessionTimelineResult, key: str, zscore_pcs: bool = False
 ) -> tuple[dict, dict]:
-    """Return display-only inclusive rank ranges and optional symmetric score limits."""
+    """Return region/rank pairs and symmetric limits in raw-score or per-PC SD units.
+
+    result contains saved (window,bin,PC) scores; key scopes widget state.
+    zscore_pcs selects PC-SD units and keeps manual limits separate from raw
+    score limits. Neither returned dictionary changes the saved analysis.
+    """
     ranges = {}
     limits = {}
     for role, regional in result.regions.items():
@@ -319,21 +332,34 @@ def _pc_controls(
             f"{role} manual color range", value=False, key=f"{key}_{role}_manual"
         )
         if manual:
+            label = (
+                f"{role} symmetric z-score limit (SD)"
+                if zscore_pcs
+                else f"{role} symmetric score limit"
+            )
+            mode = "zscore" if zscore_pcs else "raw"
             limit = st_module.sidebar.number_input(
-                f"{role} symmetric score limit",
+                label,
                 min_value=1e-12,
-                value=regional.color_limit,
-                key=f"{key}_{role}_limit",
+                value=3.0 if zscore_pcs else regional.color_limit,
+                key=f"{key}_{role}_{mode}_limit",
             )
             limits[role] = limit
+            units = " PC SD" if zscore_pcs else ""
             st_module.caption(
-                f"{role} manual display limits: {-limit:g} to {limit:g}; scores beyond these limits saturate."
+                f"{role} manual display limits: {-limit:g} to {limit:g}{units}; values beyond these limits saturate."
             )
     return ranges, limits
 
 
-def _render_variance_footer(st_module: object, result: SessionTimelineResult) -> None:
-    """Render global leading-PC variance counts and population eligibility, never viewport metrics."""
+def _render_variance_footer(
+    st_module: object, result: SessionTimelineResult, zscore_pcs: bool = False
+) -> None:
+    """Render original PCA variance counts, with accurate display-scaling descriptions.
+
+    result is the saved session analysis; zscore_pcs describes displayed PC-SD
+    units only. Counts always use the original full-session variance spectrum.
+    """
     width = result.meta.get("bin_width_s", 0.5) * 1000
     st_module.markdown(
         f"**Variance coverage - all eligible +/-2 s choice windows, {width:g}-ms bins**"
@@ -355,14 +381,19 @@ def _render_variance_footer(st_module: object, result: SessionTimelineResult) ->
             for q, count in counts.items()
         ]
         st_module.write(f"{role} ({regional.probe_id}): " + " | ".join(labels))
+        scaling = (
+            "Heatmap values are per-PC session z-scores (PC SD)."
+            if zscore_pcs
+            else f"Default color limits +/-{regional.color_limit:g}; no score rescaling."
+        )
         st_module.caption(
             f"{len(regional.transform.retained_unit_ids)} usable units; "
             f"{len(regional.transform.omitted_unit_ids)} constant units omitted; "
             f"{len(regional.choice_positions)}/{len(result.choices)} complete choice windows. "
-            f"Default color limits +/-{regional.color_limit:g}; no score rescaling."
+            + scaling
         )
     st_module.caption(
-        "Separate session-wide regional bases; no whitening or post-PCA scaling. "
+        "Separate session-wide regional bases; saved PCA scores are unwhitened. "
         "PC signs and identities apply to this configuration; PCs describe pooled choice-window activity."
     )
 
