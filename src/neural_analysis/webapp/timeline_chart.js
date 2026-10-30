@@ -61,8 +61,23 @@ export default async function renderTimeline({parentElement, data}) {
 
     const figure = JSON.parse(data.figure_json);
     state.height = figure.layout.height;
+    // New matched axes must inherit the actual browser range, not older server fields.
+    const rangeUpdate = {};
+    const currentRange = state.chart._fullLayout?.xaxis?.range;
+    if (currentRange && state.revision === figure.layout.uirevision) {
+        for (const [name, axis] of Object.entries(figure.layout)) {
+            if (/^xaxis\d*$/.test(name)) {
+                axis.range = [...currentRange];
+                rangeUpdate[`${name}.range`] = [...currentRange];
+            }
+        }
+    }
+    state.revision = figure.layout.uirevision;
     // Plotly preserves UI ranges when uirevision stays fixed, including rank changes.
     await window.Plotly.react(state.chart, figure.data, figure.layout, chartConfig);
+    if (Object.keys(rangeUpdate).length) {
+        await window.Plotly.relayout(state.chart, rangeUpdate);
+    }
     state.observer.observe(parentElement);
 
     return () => {

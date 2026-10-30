@@ -197,7 +197,115 @@ windows and unit counts, so their summaries describe their own fitting data.
 These PCs describe pooled choice-window activity, not a decision-specific or
 noise-corrected latent dimensionality. Signs and identities apply to the
 saved configuration and need not match another session or bin width. Stage 2
-per-choice variance-participation counts are not part of this Stage 1 view.
+adds the separate per-choice summary described below.
+
+## Stage 2: fixed-axis variance within each choice
+
+With Stage 1 prepared, click **Prepare window summary**. This loads the saved
+scores and direct unit-variance totals; it does not load spikes, bin again,
+or fit another PCA. A matching saved summary is reused on later opens.
+**Recompute window summary** explicitly creates another timestamped sidecar.
+
+**Show fixed-axis window counts** adds a purple point row below each regional
+heatmap. Each point is the smallest number of original session axes needed
+to account for 95% of that choice window's variance. Points occur at actual
+choice times, with no connecting lines. Hover shows the count, original trial
+ID, time, status, total variance, bin count, unit count, and basis completeness.
+Showing/hiding these rows preserves the current panned time interval.
+
+Select an original trial in **Jump to trial** to show its contribution tables
+below the figure. Clicking **Jump** also centers the timeline; selecting alone
+updates the readout. Each region reports the count, total variance, bins,
+units, and completeness. The table lists the selected original **Session PC**
+identities in decreasing within-window contribution order, their fractions,
+and cumulative fractions through the 95% threshold. The heatmaps keep their
+original session PC order. Their rank ranges, z-scoring, and color settings
+do not change these summaries.
+
+For every PC, the numerator is sample variance across the window's time bins
+(`ddof=1`). The denominator is the saved sum of sample variances of all units
+after their original session-wide standardization. Scores are centered within
+each window by the variance calculation. Sustained mean displacement alone
+therefore contributes no variance. This is fixed-axis participation, not a
+new local PCA or a noise-corrected dimensionality estimate. Correlated session
+axes can all contribute, so the count can exceed `bins - 1`.
+
+Exactly constant score columns have zero variance, without an added variance
+cutoff. Sorting breaks ties by original session PC rank. Complete bases must
+conserve the direct unit total within `1e-10` on the PC/unit variance ratio;
+the 95% comparison allows `1e-12` fractional roundoff. Both tolerances are saved.
+Zero-total, nonfinite, insufficient-bin, and inconsistent windows have no
+count point; their reason is available in the trial readout. An incomplete
+basis is never renormalized: a threshold-reaching count is labeled
+**restricted**, and failure to reach 95% is reported explicitly. All saved axes
+are considered, including those outside the displayed range.
+
+The CLI uses the same explicit action on an already prepared configuration:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json \
+  --bin-width-ms 500 --window-summary
+```
+
+The existing probe arguments, `--dry-run`, `--rerun`, and `--benchmark` also
+apply. A missing Stage 1 configuration raises an error instead of implicitly
+fitting it. For an approved session list, the batch command accepts
+`--window-summary` and parallelizes across sessions using the existing workers.
+Inspect a single experimental session before running a batch.
+
+Python callers can use `run_window_variance.run_window_variance(stage1_path)`,
+load its result with `window_variance_io.load_window_variance`, and pass
+`window_variance=summary.regions` to `plot_session_timeline`.
+
+## Measured Stage 2 performance
+
+CT026 2026-08-04 was checked at 500 and 20 ms on an Intel i9-12900 workstation
+(24 logical CPUs, 62.5 GiB RAM, about 26 GiB available during measurement).
+Both regions had 715 complete windows: PFC 174 units/PCs, HPC 316 units/PCs.
+All windows passed variance conservation and the minimal-count threshold
+check; maximum conservation error was below `1.9e-15`. No experimental batch
+was run. User inspection of these new descriptive outputs remains appropriate.
+
+| Bin width / payload scope | Stage 1 load | Summary load | Stage 2 calculation | Figure | JSON | Payload |
+| --- | --- | --- | --- | --- | --- | --- |
+| 500 ms, full session | 0.090 s | 0.034 s | 0.026 s | 1.057 s | 0.698 s | 16.1 MB |
+| 20 ms, elapsed 0-125.757 s | 1.722 s | 0.034 s | 0.318 s | 1.046 s | 0.660 s | 14.6 MB |
+| 20 ms, full session | 1.637 s | 0.032 s | 0.313 s | 4.125 s | 16.506 s | 406.2 MB |
+
+Figures in this table use ten PCs per region and existing default event tracks.
+The complete Stage 2 calculation always uses all 715 windows and all axes,
+even with bounded heatmaps. Warm z-scored figure construction/serialization
+measured 0.935/0.688 s (500 ms full) and 1.001/0.594 s (20 ms bounded).
+These are individual measurements, with filesystem cache state unspecified,
+and exclude browser rendering. They are not latency guarantees.
+
+The accepted 500-ms Stage 1 preparation took 3.723 s including output writing;
+the separately prepared 20-ms configuration took 27.042 s. The recorded regional
+source loading/binning/PCA/projection sums were 1.791/0.299/0.850/0.152 s at
+500 ms and 2.219/2.894/6.571/2.044 s at 20 ms. Output compression and other
+orchestration account for the remaining preparation time. This work is shared
+Stage 1 preparation, separate from Stage 2.
+
+The complete score arrays occupy 22.4 MB at 500 ms and 560.6 MB at 20 ms.
+Saved summaries are about 8.5 MB at either width. Benchmark process peak RSS
+was 0.565 GB (500 ms full), 1.858 GB (20 ms bounded), and 4.562 GB (20 ms full);
+these are process-lifetime peaks including imports, score loads, and plotting,
+not incremental metric memory. The validation script deliberately loads a
+second copy while measuring the load operation. Stage 1 preparation peaks
+were separately recorded as 0.695 and 2.568 GB.
+
+These measurements support keeping Stage 2 local. The full 20-ms browser
+payload exceeds Streamlit's usual message limit, so **Load only visible neural
+interval defaults on at 20 ms**. Use Window start or Jump to load other intervals;
+native panning stays inside the loaded interval. Window-count points remain
+session-wide. Wider loaded intervals or many displayed PCs can still produce
+large payloads. A cluster would not reduce that browser payload.
+
+Browser inspection covered both count rows, contribution tables, point hover,
+shared panning, row visibility, rank/z-score changes, and 20-ms bounded loading.
+Detailed validation JSON, script copies, and logs remain beside each summary
+in the CT026 data directory.
 
 ## Outputs, measurements, and batch preparation
 
@@ -211,6 +319,13 @@ analysis_runs/session_timeline_pca_<date>_<time>_<configuration_id>/
   summary.md
   run_session.py
   run_batch.py
+  window_variance_<date>_<time>_<configuration_id>/
+    results.npz
+    config.json
+    run.log
+    summary.md
+    run_session.py
+    run_batch.py
 ```
 
 The named-array NPZ retains choices/events, origin, regional eligibility,
@@ -219,6 +334,14 @@ dictionary called `meta` with parameters, units, axes, source identities,
 versions, and timings. Script copies and the summary/log make the run easy to
 inspect. Experimental outputs are refused inside the source repository.
 Clearing the app's in-memory cache does not delete prepared results.
+
+Stage 2 sidecars contain named arrays for original-order sample variances,
+sorted original PC IDs/fractions/cumulative fractions, counts/statuses,
+direct totals, regional choice positions, bin edges, and unit IDs. Their
+`meta` dictionary records the metric version, generator, parameters, units,
+axis conventions, code revision, and exact Stage 1 path/size/mtime identity.
+Changing that source identity or the metric version invalidates reuse.
+No Stage 1 archive is modified.
 
 Add `--benchmark` to the preparation command to save a timestamped benchmark
 JSON beside the result. It separately measures NPZ loading, default figure

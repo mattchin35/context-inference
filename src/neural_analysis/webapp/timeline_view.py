@@ -160,7 +160,10 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
             "No optional events available for: " + ", ".join(missing_tracks)
         )
     bounded = st_module.sidebar.checkbox(
-        "Load only visible neural interval", value=False, key=f"{state_key}_bounded"
+        "Load only visible neural interval",
+        value=bin_width_s == 0.02,
+        key=f"{state_key}_bounded",
+        help="Defaults on at 20 ms because full-session heatmap payloads can exceed browser transport limits. Window counts still use the whole session.",
     )
     loaded = None
     if bounded:
@@ -297,6 +300,11 @@ def _window_summary_controls(
         enabled = st_module.sidebar.checkbox(
             "Show fixed-axis window counts", value=True, key=f"{key}_show_summary"
         )
+        # Keep the chart's Streamlit position stable when metric rows are hidden.
+        st_module.caption(
+            "Fixed-axis counts use original session scores and all retained axes. "
+            "They measure variation around each window's mean, not sustained mean displacement or local PCA dimensionality."
+        )
         if not enabled:
             return None
         info = saved.stat()
@@ -304,10 +312,6 @@ def _window_summary_controls(
     except (OSError, ValueError, KeyError) as error:
         st_module.error(f"Could not load window summary: {error}")
         return None
-    st_module.caption(
-        "Fixed-axis counts use original session scores and all retained axes. "
-        "They measure variation around each window's mean, not sustained mean displacement or local PCA dimensionality."
-    )
     return summary
 
 

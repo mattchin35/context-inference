@@ -1,4 +1,4 @@
-"""Prepare timeline PCA products across independent sessions, never within one."""
+"""Prepare timeline PCA or saved-score summaries across independent sessions."""
 
 from __future__ import annotations
 
@@ -68,6 +68,8 @@ def run_batch(
     metadata_paths are session JSON paths; bin_width_s is seconds and roles
     are explicit probe keys or metadata defaults. Dry-run is sequential and
     never launches workers. Real sessions run in independent processes.
+    window_summary selects Stage 2 reduction of existing Stage 1 products;
+    missing Stage 1 configurations raise rather than fitting implicitly.
     """
     count = choose_worker_count(len(metadata_paths), workers)
     action = run_session_timeline

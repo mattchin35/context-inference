@@ -1,4 +1,4 @@
-"""Prepare/reuse one session's fixed timeline PCA; no viewer or Stage 2 work."""
+"""Prepare/reuse session timeline PCA or explicitly summarize its saved window variance."""
 
 from __future__ import annotations
 

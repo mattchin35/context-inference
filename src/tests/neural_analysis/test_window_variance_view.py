@@ -100,7 +100,11 @@ def test_webapp_prepares_only_on_request_then_reuses_summary_and_selected_trial(
     assert not at.exception
     assert len(list(stage1.parent.glob("window_variance_*/results.npz"))) == 1
     figure = _timeline_figure_spec(at)
-    component_position = next(index for index, element in at.main.children.items() if element.type == "bidi_component")
+    component_position = next(
+        index
+        for index, element in at.main.children.items()
+        if element.type == "bidi_component"
+    )
     assert any(
         trace.get("name") == "PFC fixed-axis count (95%)" for trace in figure["data"]
     )
@@ -133,7 +137,14 @@ def test_webapp_prepares_only_on_request_then_reuses_summary_and_selected_trial(
     ).uncheck().run()
     assert not at.exception
     hidden = _timeline_figure_spec(at)
-    assert next(index for index, element in at.main.children.items() if element.type == "bidi_component") == component_position
+    assert (
+        next(
+            index
+            for index, element in at.main.children.items()
+            if element.type == "bidi_component"
+        )
+        == component_position
+    )
     assert hidden["layout"]["uirevision"] == figure["layout"]["uirevision"]
     assert not any(
         "fixed-axis count" in trace.get("name", "") for trace in hidden["data"]

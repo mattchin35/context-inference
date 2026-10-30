@@ -2,7 +2,8 @@
 
 Status: Stage 1 inspected and accepted by the user on 2026-10-30, including
 the current viewer refinements. The designated session is CT026 2026-08-04.
-Stage 2 implementation has not started; the Stage 1 inspection gate is met.
+Stage 2 is implemented and validated on that session at 500 and 20 ms;
+scientific inspection of the new descriptive output remains with the user.
 
 Scientific specification: `docs/session_timeline_pca_spec_v1.md`.
 Design guidance: `docs/SoftwareDesign.md` and repository `AGENTS.md`.
@@ -89,7 +90,58 @@ latency guarantees. Filesystem cache state is unspecified; import/warmup
 effects can dominate small fixtures. Generated benchmark JSON additionally
 records preparation timings, dimensions, available memory, machine/CPU, and
 process-lifetime peak RSS. The user has now accepted Stage 1 on the designated
-real session below. No Stage 2 experimental computation or batch has run.
+real session below. At Stage 1 acceptance, no Stage 2 experimental computation
+or batch had run.
+
+## Stage 2 implementation record (2026-10-30)
+
+- Tests-first commits `5315439` and `fe6d94d` observed RED for the scientific
+  reduction, exact-source persistence/reuse, CLI/batch boundary, point tracks,
+  display invariance, and selected-trial contributions before implementation
+  `28592c1`. Pure NumPy calculations live in `population/window_variance.py`;
+  named-array persistence and source identity in `window_variance_io.py`;
+  single-session orchestration and benchmarking in `run_window_variance.py`.
+  Existing main/batch entry points expose `--window-summary`; the viewer has
+  independent explicit Prepare/Recompute actions. No new dependencies.
+- Tests cover the PC2/PC7/PC12 example, stable ties, centering rather than mean
+  energy, counts exceeding local rank, full-basis conservation, incomplete
+  bases, invalid/constant/insufficient windows, threshold roundoff, and regional
+  identity. Display tests forbid raw loading/refitting/reducing during reruns.
+- The accepted 500-ms Stage 1 archive was reused. Its Stage 2 sidecar is
+  `window_variance_20261030_150512_583890_ab474cd4d004f33a/results.npz`
+  within the accepted Stage 1 run. A separate 20-ms Stage 1 run is
+  `session_timeline_pca_20261030_150521_872589_22d0803ac2b0a179`; its sidecar is
+  `window_variance_20261030_150641_306993_8858a7c7036b0170/results.npz`.
+  Each has logs, summary, parameters, script copies, and validation JSON.
+  Source archives were not rewritten; no experimental batch ran.
+- All 715 windows in each region passed conservation and the smallest-count
+  check at both widths. Largest PC/unit variance-ratio error was below
+  `1.9e-15`. PFC count min/median/max: 73/134/145 (500 ms), 143/157/160 (20 ms).
+  HPC: 188/241/260 and 260/280/288 respectively. These describe fixed-axis
+  participation, not local rank; all HPC 20-ms counts exceed 199.
+- Incremental Stage 2 reduction measured 0.026 s (500 ms) and 0.318 s (20 ms).
+  Saved-summary load was about 0.034 s at either width. The separate 20-ms
+  Stage 1 preparation took 27.042 s including compression/output writing.
+  Scores occupy 22.4/560.6 MB; each sidecar is about 8.5 MB. Measurements on
+  the i9-12900 workstation support local computation, without cluster support.
+- The full-session ten-PC 20-ms figure produced 406.2 MB JSON and took
+  16.506 s to serialize. Bounded elapsed 0-125.757 s produced 14.6 MB and took
+  0.660 s. The existing bounded-loading option therefore defaults on at 20 ms;
+  `d26e2f4` recorded the corresponding RED test. This bounds heatmaps only,
+  leaving the full-session metric unchanged.
+- Browser inspection identified two viewport problems when metric rows change:
+  a disappearing caption remounted the chart, and new matched axes inherited
+  the older server range. `ce43223` recorded the RED mount-position regression;
+  frontend regressions culminated in `236adb1`. Keep the caption position
+  stable and explicitly carry the existing browser range through the Plotly
+  update when the navigation revision is unchanged. Browser inspection then
+  confirmed pan preservation through hide/restore, rank and z-score changes.
+  A provisional gesture-listener workaround and its mistaken-premise test
+  additions were removed; the final fix needs no new pan event callback.
+- Final combined regression: 252 passed, including the Node frontend test,
+  with the same four existing Pynapple warnings. Changed source/tests pass
+  Ruff; changed-path whitespace checks pass. Usage and the detailed timing/
+  memory table are in `src/neural_analysis/SESSION_TIMELINE.md`.
 
 ## Stage 2 readiness review (2026-10-30)
 
@@ -187,8 +239,11 @@ All paths in this table are relative to `src/neural_analysis/`.
 
 | File | Responsibility and principal functions |
 | --- | --- |
-| `population/session_timeline.py` | Data-only result records and pure calculations: `prepare_timeline_choices`, `select_complete_choice_windows`, `compute_timeline_pca`, `summarize_session_variance`, and subsequently `summarize_window_variance`. |
-| `population/session_timeline_io.py` | Metadata-based source loading, existing channel/unit selection, source identity, and named-array persistence: `load_timeline_behavior`, `load_timeline_population`, `save_timeline_result`, `load_timeline_result`, and subsequently save/load of window summaries. |
+| `population/session_timeline.py` | Stage 1 data records and pure choice/window/PCA/session-variance calculations. |
+| `population/session_timeline_io.py` | Existing metadata/source conventions and Stage 1 named-array persistence. |
+| `population/window_variance.py` | Stage 2 data records and pure fixed-axis sample-variance/contribution/count reductions. |
+| `population/window_variance_io.py` | Exact Stage 1 source identity and separately versioned Stage 2 named-array persistence. |
+| `population/run_window_variance.py` | Explicit Stage 2 preparation/reuse and measured load/calculation/figure benchmarks. |
 | `population/timeline_plotting.py` | Pure Plotly figure construction: `build_timeline_heatmap_data` and `plot_session_timeline`. Accept computed results and explicit display settings. |
 | `population/run_session_timeline.py` | Single-session entry point and `run_session_timeline`: assemble inputs, reuse matching saved results, run preparation, save outputs, and write the run log/summary. |
 | `population/run_session_timeline_batch.py` | Small batch entry point: read a list of metadata paths and call the single-session function in session-level workers. |
@@ -557,6 +612,9 @@ Use pytest functions and fixtures. Put new tests in:
 - `src/tests/neural_analysis/test_timeline_plotting.py`;
 - `src/tests/neural_analysis/test_session_timeline_scripts.py`;
 - `src/tests/neural_analysis/test_session_timeline_webapp.py`.
+- Stage 2: `test_window_variance.py`, `test_window_variance_io.py`, and
+  `test_window_variance_view.py` in the same test directory; frontend lifecycle
+  coverage remains in `test_timeline_chart.py`.
 
 Do not create a new validation framework. Test observable scientific and UI
 contracts, rather than private helper names or source-text formatting.
