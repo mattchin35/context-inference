@@ -70,9 +70,11 @@ globalThis.ResizeObserver = class {
     disconnect() { this.disconnected = true; }
 };
 const calls = [];
+const relayouts = [];
 let purges = 0;
 globalThis.window = {Plotly: {
     async react(element, data, layout, config) { calls.push({element, data, layout, config}); },
+    async relayout(element, update) { relayouts.push({element, update}); },
     purge() { purges += 1; },
     Plots: {resize() {}},
 }};
@@ -104,13 +106,18 @@ figure.layout.xaxis2 = {range: [0, 60], matches: 'x'};
 await render({parentElement: parent, data: {figure_json: JSON.stringify(figure)}});
 assert.deepEqual(calls.at(-1).layout.xaxis.range, [35, 95]);
 assert.deepEqual(calls.at(-1).layout.xaxis2.range, [35, 95]);
+assert.deepEqual(relayouts.at(-1).update['xaxis.range'], [35, 95]);
+assert.deepEqual(relayouts.at(-1).update['xaxis2.range'], [35, 95]);
 figure.layout.xaxis3 = {range: [0, 60], matches: 'x'};
 await render({parentElement: parent, data: {figure_json: JSON.stringify(figure)}});
 assert.deepEqual(calls.at(-1).layout.xaxis3.range, [35, 95]);
+assert.deepEqual(relayouts.at(-1).update['xaxis3.range'], [35, 95]);
+const priorRelayouts = relayouts.length;
 figure.layout.uirevision = 'session:2';
 await render({parentElement: parent, data: {figure_json: JSON.stringify(figure)}});
 assert.equal(calls.at(-1).layout.uirevision, 'session:2');
 assert.deepEqual(calls.at(-1).layout.xaxis.range, [0, 60]);
+assert.equal(relayouts.length, priorRelayouts);
 cleanup();
 assert.equal(purges, 1);
 assert.equal(observers[0].disconnected, true);
