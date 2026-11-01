@@ -46,7 +46,7 @@ The file has these user-edited sections:
 | --- | --- |
 | `session` | The single session name used in displays and saved outputs |
 | `acquisition` | One session-wide value: `open_ephys` or `spikeglx` |
-| `behavior` | Required trial table and optional event table |
+| `behavior` | Required trial table, optional event table, and optional `treadmill` serial text path |
 | `probes` | One complete record per probe: paths, sites, and optional unit channels |
 | `site_pairs` | Site-name pairs available to synchrony views |
 | optional version-2 `cache` | The session-wide reusable LFP-summary cache |
@@ -127,6 +127,12 @@ the time controls and Jump move it explicitly.
 Rewarded choices use larger filled markers; unrewarded choices use smaller
 open markers. Older results pick up outcomes from the behavior table without
 PCA recomputation.
+
+Optional signed treadmill speed uses `behavior.treadmill`, a session-relative
+Teensy text path. Click **Prepare speed** once, then **Show speed** adds its
+signed-mm/s step trace below events. The speed cache is independent of neural
+probes and bin widths. See the usage guide for preparation and the required
+one-time registration of legacy PCA results before changing their metadata.
 
 Prepare in advance, using version-3 metadata probe roles:
 

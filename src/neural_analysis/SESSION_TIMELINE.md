@@ -307,6 +307,129 @@ shared panning, row visibility, rank/z-score changes, and 20-ms bounded loading.
 Detailed validation JSON, script copies, and logs remain beside each summary
 in the CT026 data directory.
 
+## Optional signed treadmill speed
+
+Add a session-relative Teensy log path to the existing `behavior` object:
+
+```json
+"treadmill": "teensy/CoolTerm Capture (Untitled_0) 2026-08-04 12-08-14-010.txt"
+```
+
+The field is optional in metadata versions 2 and 3. Omitted, null, or empty
+means no speed source. All other metadata fields retain their existing meaning.
+The current speed workflow decodes NeuroKairos IRIG from the log; it does not
+require a PC timestamp date, timezone, calibration field, probe, or neural bin.
+
+**For existing prepared PCA results, register their scientific identity before
+editing the original metadata JSON.** The original archive fingerprint included
+that whole JSON file's stat. While the original sources still match, use:
+
+```python
+from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
+from src.neural_analysis.population.session_timeline_io import register_timeline_scientific_identity
+
+session = resolve_session_metadata(load_session_metadata(metadata_path), metadata_path)
+register_timeline_scientific_identity(session, original_results_npz)
+```
+
+Repeat for each existing bin-width result to retain. This writes only
+`scientific_identity.json` beside the existing archive. It validates the old
+configuration first and leaves NPZ bytes, paths, and mtimes unchanged, preserving
+their Stage 2 summaries. New configurations use actual resolved scientific
+inputs instead of the whole JSON timestamp, so optional speed-path edits do
+not invalidate them. A changed neural/behavior source or population still does.
+An already edited metadata file cannot silently authorize an old unregistered
+archive. Back up metadata before editing it.
+
+Speed is prepared independently of neural data:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json --speed --dry-run
+
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json --speed
+```
+
+Or click **Prepare speed** in the viewer. It parses/aligns once and saves the
+result. A matching result is reused; **Recompute speed** or `--speed --rerun`
+creates a new timestamped run. `--speed` and `--window-summary` are mutually
+exclusive. Probe and neural bin arguments do not configure speed. The existing
+batch entry point accepts `--speed`, with the usual dry-run and worker controls;
+inspect a designated experimental session before running an experimental batch.
+
+**Show speed** is on by default when a matching result is available. The row
+sits below events and above PCs, and works with behavior alone or either/both
+neural populations. A missing, unprepared, stale, or invalid speed source affects
+only this optional row; ordinary neural preparation remains independent.
+Display interactions never read the raw log, decode IRIG, or prepare speed.
+
+The row shows **signed logged mm/s**, including negative values and actual zero
+updates. It holds each value until the next recorded update using horizontal
+steps. It does not take absolute values, invert direction, smooth, resample,
+or insert artificial zeros/endpoints. Speed remains visible between choices
+when its measurements cover those intervals. Retained samples keep their source
+order and equal-time values. The line ends at the last speed timestamp.
+
+Version `treadmill-speed-v2` handles one specific logging ambiguity: a group of
+reset offsets printed immediately before its sync record. It discards the
+ambiguous speed updates only when retained readings on either side are less
+than 50 ms apart in both source-clock and UTC time. It does not assign a guessed
+timestamp. The step plot holds the previous reading until the next retained
+update. Other resets, unsupported timing, longer gaps, or missing neighbors
+remain explicit preparation errors. `meta.rejected_speed_records` records each
+omitted parsed row, logged value, neighboring rows, and both intervals.
+
+The source-clock reconstruction uses sync intervals plus offsets from the latest
+sync edge; it never sums every message or relies on batched PC receipt times.
+Current IRIG frames provide absolute UTC anchors. The viewer then subtracts
+the common first-trial origin. The speed y range uses the full prepared series
+and is independent of PC selection, PC z-scoring, time window, and neural bins.
+Hover shows signed mm/s, elapsed/UTC seconds, and the parsed source row.
+
+The complete speed series is sent to the browser; no choice-window or bounded
+neural filtering is applied to it. The existing neural loading bounds still
+limit native panning when that option is enabled. Showing/hiding speed preserves
+the current panned time interval, and Jump/time controls request a new interval
+as before. The navigator retains the existing session extent.
+
+Outputs are separate from all PCA runs:
+
+```text
+analysis_runs/treadmill_speed_<date>_<time>_<configuration_id>/
+  results.npz
+  config.json
+  run.log
+  summary.md
+  run_session.py
+  run_batch.py
+  measurements.json
+```
+
+The NPZ has named `(speed_sample,)` arrays `utc_s`, `speed_mm_s`, and
+`source_rows`, plus `(decoded_frame,)` arrays `frame_clock_s` and `frame_utc_s`.
+Its `meta` dictionary records version, source identity, units, axes, generator,
+code revision, parameters, and timing diagnostics. The source log's path, size,
+mtime, and analysis version control reuse; trial origin, probe assignments,
+and neural bin width do not. Logs and measurements separate parsing, alignment,
+writing, and total time. No statistical tests are part of speed preparation.
+
+CT026 2026-08-04 was prepared with 54,731 of 54,733 readings and all 63 decoded
+frame anchors. The two omitted speed rows are zero-based parsed positions
+110224 and 144284. Their retained UTC intervals are 36.646 ms and 8.142 ms.
+The signed range remains -198.72 to 526.86 mm/s. Preparation took 0.36 s
+(0.25 s parsing, 0.05 s alignment); the saved 414-kB NPZ loaded in about 3 ms.
+Both original PCA archives and their Stage 2 summaries remain byte-identical
+and reusable after adding the speed metadata.
+
+One measured viewer comparison used 10 PCs per region, the full 500-ms result,
+and bounded 20-ms neural loading. Speed added about 2.42 MB to either chart's
+JSON; figure construction plus serialization took about 1.5-1.8 s with or
+without speed. These are single local calls, excluding browser latency and
+with unspecified filesystem cache state, rather than a latency guarantee.
+Validation JSON, benchmark script/measurements, and the rejection ledger are
+saved in the speed run directory.
+
 ## Outputs, measurements, and batch preparation
 
 Outputs stay under the original session data directory:

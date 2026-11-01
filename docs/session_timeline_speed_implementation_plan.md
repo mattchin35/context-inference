@@ -1,8 +1,9 @@
 # Session timeline: optional signed treadmill speed
 
-Status: full implementation plan for review, 2026-10-30. No speed implementation
-or experimental metadata changes have been made. Follow `AGENTS.md` and
-`docs/SoftwareDesign.md`; implementation starts after this plan is approved.
+Status: implemented and validated on CT026, 2026-10-30; experimental output is
+ready for user inspection. The approved plan below includes the subsequent
+user-approved short-gap rejection rule. Section 13 records implementation,
+validation, and measurements. No experimental batch has been run.
 
 ## 1. Outcome and confirmed decisions
 
@@ -43,7 +44,7 @@ The existing reader parsed the complete file in 0.765 s in one measurement.
 The existing NeuroKairos decoder read 63 valid frames, beginning at
 2026-08-04 16:09:00 UTC and ending at 17:11:00 UTC, with no repeated sync states
 or conversion warnings. These frame times are not the file's coverage bounds.
-No end-to-end speed alignment has yet been validated.
+These are planning-stage observations; Section 13 records completed alignment.
 
 | Existing module | Reuse and limits |
 | --- | --- |
@@ -139,13 +140,22 @@ because a complete IRIG frame occurs later in the file.
 
 Do not cumulatively sum every message: distance, DAC, and speed rows repeat
 the same offset, and the offsets are not intervals between messages.
-Document the resulting `(N,)` source-clock axis in seconds.
+Document the resulting `(N,)` source-clock axis in seconds. Under the narrow
+rejection rule below, ambiguous payload rows have NaN clock values; sync rows
+remain intact. The saved speed product contains only retained readings.
 
 Validate finite, nonnegative intervals/offsets and timer ordering. Different
 speeds at equal timestamps retain source order; the last recorded value is
 the state after that instant. Do not average or silently deduplicate samples.
 Reject clock resets or contradictory edge/offset timing with a useful error;
-do not add automatic epoch stitching or reset repair.
+do not add automatic epoch stitching or reset repair. The user subsequently
+approved one omission rule for CT026: when an offset resets before its printed
+sync record, discard that ambiguous suffix only if retained speed readings
+before and after it are less than 50 ms apart in both source and mapped UTC
+time. Require nondecreasing suffix offsets below the preceding offset and
+retained neighbors on both sides. Record original row/value, sync row,
+retained neighbors, and intervals. Do not reassign any sample timestamp.
+Longer, unbounded, or unsupported resets still stop preparation.
 
 ### 4.3 Decode and map to UTC
 
@@ -191,7 +201,8 @@ Use a small data-only `TreadmillSpeed` record with native NumPy arrays:
 | `meta` | dictionary of diagnostics, units, version, and source identity |
 
 S is the aligned speed sample count; A is the valid frame-anchor count. Keep
-all finite speed values, including zero and negative values. Nonfinite speed
+all retained finite speed values, including zero and negative values. Record
+each short-gap omission in the metadata ledger. Nonfinite speed
 payloads are input errors rather than values to plot or replace with zero.
 No new trial/bin/PC axes are introduced. These simple arrays are directly
 usable by Plotly and can be used to construct a Pynapple time series later.
@@ -235,7 +246,8 @@ file timestamps, neural files, probes, PC ranges, trial tables, and bin size.
 Changing a trial-table origin therefore does not require decoding UTC speed
 again; the viewer subtracts its current common origin at display time.
 
-Use `treadmill-speed-v1` as the initial analysis version. Preserve prior
+Use `treadmill-speed-v2` for the approved short-gap rejection semantics. The
+initial v1 validation stopped on ambiguous timing and produced no NPZ. Preserve prior
 results when source identity, version, or parameters change. `--rerun` creates
 a new timestamped run even for the same identity. `--dry-run` reads metadata
 and file stat only, without parsing, decoding, or creating directories.
@@ -418,6 +430,9 @@ Extend `test_irig_serial_io.py`; add `test_treadmill_speed.py`:
   leading records, equal timestamps, incomplete boundary pulses, and resets;
 - nonfinite/negative timing, contradictory offsets, and duplicate sync states
   produce explicit errors, without guessed time or silent repair;
+- the approved reset-offset suffix omits only ambiguous readings, preserves
+  syncs and original rows, records its ledger, and rejects intervals >=50 ms
+  or missing retained neighbors;
 - seeded synthetic NeuroKairos messages with known absolute UTC, nonzero
   microcontroller drift, misleading PC receipt times, and irregular speed
   updates recover the expected UTC and unchanged mm/s values;
@@ -460,9 +475,8 @@ Use `uv run` for every Python command and check changed paths with Ruff.
 | 6. CT026 | Register original neural identities, back up/update only the treadmill metadata field, dry-run, prepare one speed result, and inspect the actual viewer at 500 and 20 ms. |
 | 7. Documentation | Update usage, metadata README, and implementation record with measured timings, validation results, and limitations. User inspects the new experimental output before any experimental batch. |
 
-No analysis output, experimental source, or existing metadata file is written
-during the current planning task. Necessary output-directory access will be
-handled through the existing execution permissions during implementation.
+Experimental output-directory writes use the existing execution permissions.
+The implementation record below describes the completed single-session run.
 
 ## 11. CT026 validation and performance
 
@@ -471,8 +485,8 @@ mtimes, and file hashes for both configurations. After registration, metadata
 editing, speed preparation, and viewer changes, verify all four NPZ archives
 remain byte-identical and are still selected by ordinary loading.
 
-Validate the speed result against the parsed source: 54,733 speed records
-unless an explicitly reported input problem is discovered, unchanged ordered
+Validate the speed result against the parsed source: 54,733 raw speed records,
+54,731 retained under the approved two-reading omission, unchanged ordered
 mm/s values, expected positive/negative/zero counts, monotonic UTC times,
 63 frame anchors if the same complete frames are accepted, and decoded date
 2026-08-04. Inspect mapping of frame-start source times to encoded UTC,
@@ -502,3 +516,120 @@ speed is prepared once and reused at every neural bin width, the row is
 correctly aligned and navigable with the other rows, existing PCA/Stage 2
 archives remain usable and unchanged, tests pass, and CT026 output plus
 measured performance are available for the user's scientific inspection.
+
+## 13. Implementation and validation record (2026-10-30)
+
+Implemented with the existing NumPy, pandas, IRIG decoder, manual time mapper,
+Plotly, and Streamlit dependencies. No new frontend component or dependency.
+The scientific computation, saved-product lifecycle, and plotting remain
+separate. CLI usage and metadata instructions are in
+`src/neural_analysis/SESSION_TIMELINE.md`, under Optional signed treadmill speed.
+
+### Test-driven implementation
+
+RED tests were committed before implementation: `5c1241b` (metadata/parser),
+`38362f9` (legacy identity), `c29cf80` (timing), `62f6d65` (persistence/CLI),
+`6531ad4` (viewer), and `4ca5ffc` (axis/unit metadata). Implementation is in
+`3028f26`. Inspection corrected one genuine fixture error: the existing file
+identity key is `size`, not `bytes`.
+
+Initial CT026 preparation correctly stopped on an ambiguous offset reset.
+After the user approved rejecting that case across short retained-reading
+intervals, tests in `4cc401c` failed before implementation in `7749d21`.
+A synthetic fixture's expected gap was corrected by 9 microseconds to match
+its actual offsets; the expected scientific rule was unchanged. Version 2
+records the omission policy in both configuration identity and metadata.
+The failed v1 run remains available with its error log and no results NPZ.
+
+The integrated metadata, parser/core IRIG, manual mapping, speed, PCA,
+Stage 2, plotting, UI, and Node lifecycle suite passed **344 tests**.
+Five warnings remain: four existing Pynapple zero-duration warnings and one
+Python 3.12 warning from the existing fork-based synthetic batch executor.
+The latter does not change the successful synthetic across-session result;
+no experimental batch was run.
+
+### CT026 saved products and integrity
+
+Session: `CT026_2026-08-04_120843`. The original metadata was backed up as
+`neural_session.before_treadmill_20261030_163652_860885.json` in its session
+directory. Both original 500-ms and 20-ms PCA archives were registered while
+their original metadata still matched. Only `behavior.treadmill` was then
+added; other metadata values were verified against the backup.
+
+Completed speed product, relative to the session directory:
+
+```text
+analysis_runs/treadmill_speed_20261030_165200_442888_2da30ecadc8103e6/results.npz
+```
+
+Validation checked raw values against every retained speed sample, original
+row order, monotonic UTC, all frame anchors, source/UTC gaps, metadata units
+and axes, and ordinary lookup of both original PCA and Stage 2 products.
+SHA-256, size, and mtime comparisons across successful speed preparation
+confirmed all four original NPZ archives were unchanged. Registration also
+preserved their original paths and identities across the metadata edit.
+`validation.json`, its source script, and the archive identity snapshot are
+saved beside the speed result.
+
+| Quantity | Result |
+| --- | --- |
+| Raw / retained speed readings | 54,733 / 54,731 |
+| Retained positive / negative / zero | 49,264 / 1,538 / 3,929 |
+| Signed range | -198.72 to 526.86 mm/s |
+| Decoded frame anchors | 63; all accepted, no invalid pulses |
+| Source seconds per UTC second | 0.9999816180 |
+| First / last speed UTC Unix seconds | 1785859703.8445628 / 1785863521.3429475 |
+| Rejected parsed row 110224 | -22.13 mm/s; retained UTC gap 36.645651 ms |
+| Rejected parsed row 144284 | 105.13 mm/s; retained UTC gap 8.142233 ms |
+
+Rejected row indices are zero-based parsed-table positions. Their source-clock
+intervals are 36.645 ms and 8.142 ms. The rejection ledger also records the
+following sync rows and both retained neighbors. Sync timing stays intact;
+no rejected speed receives a guessed timestamp. Step plotting holds the
+preceding value across each gap.
+
+### Measured performance
+
+One CT026 preparation took 0.356 s, including 0.247 s parsing and 0.049 s
+alignment. The NPZ is 413,605 bytes and its named arrays occupy 1,314,552 bytes.
+Saved loads measured 2.9-3.3 ms in separate local calls. Validation process
+peak RSS was 482 MB, including imports and other lifetime allocations.
+
+The viewer comparison used 10 PCs per region and standard event/count rows:
+
+| Neural bins / loading | Speed | Figure (s) | Serialization (s) | JSON (MB) |
+| --- | --- | --- | --- | --- |
+| 500 ms / full | off | 1.079 | 0.684 | 16.095 |
+| 500 ms / full | on | 0.947 | 0.692 | 18.515 |
+| 20 ms / bounded | off | 0.877 | 0.657 | 14.585 |
+| 20 ms / bounded | on | 0.876 | 0.598 | 17.005 |
+
+The 20-ms loaded interval was [-0.002, 125.757] elapsed seconds. Speed remained
+session-wide in all figures. Original PCA loads were 0.089 s (500 ms) and
+1.651 s (20 ms); adding speed does not change those arrays. Speed adds about
+2.42 MB of JSON. Single-call timings do not establish a speedup or latency
+guarantee; filesystem cache state was unspecified and browser latency excluded.
+The machine was an i9-12900, 24 logical CPUs, 67.15 GB RAM, with 29.94 GB
+available at measurement. Benchmark process peak RSS was 1.148 GB across both
+configurations, including imports and complete score loads.
+
+Full measurements and the script copy are
+`viewer_benchmark_20261030_165332_163436.json` and
+`benchmark_view_20261030_165332_163436.py` beside the speed result.
+
+### Browser inspection and review artifacts
+
+Actual CT026 views at both bin widths displayed the same saved speed below
+behavior events and above regional PCs. Inspection confirmed negative values,
+zero readings, activity between choices, and hover with signed mm/s, elapsed
+time, UTC, and original parsed row. Native panning changed the shared ticks
+from 10-60 to 30-80 s; hiding/restoring speed, PC z-scoring, and a PC rank change
+preserved that interval. Jump to trial 4 at 20 ms changed the bounded neural
+load interval as requested. No display interaction prepared speed or neural
+results. Automated chart lifecycle tests also passed.
+
+`ct026_speed_preview.png`, `ct026_speed_chart.png`, and `viewer_inspection.md`
+are saved beside the speed result. The first is the browser screenshot; the
+second is the complete Plotly PNG export. Review artifacts were finalized
+2026-11-01. The user can inspect this single-session output before authorizing
+any experimental batch.
