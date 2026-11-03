@@ -196,6 +196,19 @@ def test_selected_alias_label_does_not_mutate_cached_cell(plotting_data: tuple) 
     assert cell["meta"]["settings"]["penalty_mode"] == "same_numeric"
 
 
+def test_all_time_panels_align_pixel_domains_beside_coefficient_strip(plotting_data: tuple) -> None:
+    """Input saved visual fixture; equal elapsed seconds occupy the same horizontal position, return None."""
+    prepared, cell = plotting_data
+    figure = plotting.plot_encoding_timeline(prepared, cell, event_tracks=("LED",))
+    activity = trace_named(figure, "PC activity")
+    activity_axis = activity.xaxis.replace("x", "xaxis", 1)
+    domain = tuple(figure.layout[activity_axis].domain)
+    for name in figure.layout.meta["time_axes"]:
+        assert tuple(figure.layout[name].domain) == domain
+    coefficient_axis = figure.layout.meta["coefficient_axis"]
+    assert figure.layout[coefficient_axis].domain[1] < domain[0]
+
+
 def test_cell_observation_helper_reuses_shared_scores_and_rejects_identity_conflict(plotting_data: tuple) -> None:
     """Input prep/rawcell; shared response assembly returns PC Y(N,K) without requiring saved observed, return None."""
     prepared, cell = plotting_data
