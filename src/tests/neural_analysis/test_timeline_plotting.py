@@ -67,6 +67,24 @@ def test_heatmap_uses_edges_and_explicit_ten_second_gap(timeline_result):
     )
 
 
+def test_explicit_pc_order_preserves_original_variance_and_score_identity(timeline_result):
+    """Input fixture scores(2,8,2); ordered one-based ranks retain actual values/percentages, return None."""
+    regional = timeline_result.regions["PFC"]
+    data = plotting.build_timeline_heatmap_data(regional, timeline_result.choices, pc_order=(2, 1))
+    np.testing.assert_array_equal(data["y"], [2, 1])
+    np.testing.assert_array_equal(data["z"][:, :8], regional.scores[0, :, [1, 0]])
+    np.testing.assert_allclose(data["customdata"][:, 0, 7].astype(float),
+                               regional.transform.explained_variance_ratio[[1, 0]] * 100)
+
+
+@pytest.mark.parametrize("pc_order", [(1, 1), (0,), (3,), (), (1.5,)])
+def test_explicit_pc_order_rejects_duplicate_or_invalid_original_ranks(timeline_result, pc_order):
+    """Input fixture and unitless rank tuple; invalid selection fails without refitting, return None."""
+    with pytest.raises(ValueError, match="PC|rank|order"):
+        plotting.build_timeline_heatmap_data(timeline_result.regions["PFC"], timeline_result.choices,
+                                             pc_order=pc_order)
+
+
 def test_bounded_loading_preserves_true_bin_edges_and_region_scale(timeline_result):
     """Viewport filtering includes intersecting windows without clipping or rescaling cells."""
     result = timeline_result

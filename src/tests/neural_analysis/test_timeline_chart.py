@@ -111,6 +111,22 @@ figure.layout.uirevision = 'session:2';
 await render({parentElement: parent, data: {figure_json: JSON.stringify(figure)}});
 assert.equal(calls.at(-1).layout.uirevision, 'session:2');
 assert.equal(relayouts.length, priorRelayouts);
+// New encoding figures declare time axes; categorical coefficients stay fixed.
+children[0]._fullLayout = {
+    xaxis: {type: 'category', range: [-0.5, 0.5]},
+    xaxis2: {range: [70, 130]},
+};
+figure.layout.meta = {primary_time_axis: 'xaxis2', time_axes: ['xaxis2', 'xaxis4']};
+figure.layout.xaxis = {type: 'category', range: [-0.5, 0.5]};
+figure.layout.xaxis2 = {range: [0, 60]};
+figure.layout.xaxis3 = {type: 'category', range: [-0.5, 0.5]};
+figure.layout.xaxis4 = {range: [0, 60], matches: 'x2'};
+await render({parentElement: parent, data: {figure_json: JSON.stringify(figure)}});
+assert.deepEqual(relayouts.at(-1).update['xaxis2.range'], [70, 130]);
+assert.deepEqual(relayouts.at(-1).update['xaxis4.range'], [70, 130]);
+assert.ok(!('xaxis.range' in relayouts.at(-1).update));
+assert.ok(!('xaxis3.range' in relayouts.at(-1).update));
+assert.deepEqual(calls.at(-1).layout.xaxis.range, [-0.5, 0.5]);
 cleanup();
 assert.equal(purges, 1);
 assert.equal(observers[0].disconnected, true);

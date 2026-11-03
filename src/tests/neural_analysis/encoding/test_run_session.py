@@ -189,3 +189,19 @@ def test_cli_limits_nested_blas_before_importing_numerical_libraries() -> None:
     completed = subprocess.run(["uv", "run", "--frozen", "--no-sync", "python", "-c", script],
                                capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
+
+
+def test_completed_session_exports_bounded_light_png_inspection_examples(
+    encoding_session: EncodingConfig,
+) -> None:
+    """Input config; one selected region/model exports coefficient and timeline PNGs, return None."""
+    path = config_path(encoding_session)
+    payload = json.loads(path.read_text())
+    payload.update({"windows": ["whole"], "timing_modes": ["trial_window"],
+                    "encodings": ["signed_context"], "estimators": ["ridge"],
+                    "probe_roles": {"PFC": "A"}})
+    path.write_text(json.dumps(payload))
+    report = run_session.run_encoding_session(path)
+    figures = list((Path(report["run_directory"]) / "figures").rglob("*.png"))
+    assert len(figures) >= 2
+    assert all(path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n") for path in figures)
