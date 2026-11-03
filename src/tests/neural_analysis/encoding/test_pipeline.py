@@ -265,6 +265,7 @@ def test_reference_cell_failure_is_saved_unavailable_and_other_cells_continue(
     np.testing.assert_array_equal(cell["pc_ranks"], saved["preparation"]["regions"]["PFC"].pc_ranks)
     assert cell["reference_predictions"].shape == cell["observed"].shape
     assert np.isnan(cell["reference_predictions"]).all()
+    assert "synthetic reference-cell fit failure" in (prepared_encoding_run / "run.log").read_text(encoding="ascii")
     monkeypatch.setattr(modeling, "evaluate_block_cv", forbid_work)
     assert pipeline.run_prepared_encoding(prepared_encoding_run)["status"] == "complete"
 
@@ -280,3 +281,15 @@ def test_runtime_version_change_refuses_resume_without_modifying_progress(
     with pytest.raises(ValueError, match="runtime|version|new run"):
         pipeline.run_prepared_encoding(prepared_encoding_run)
     assert (prepared_encoding_run / "progress.json").read_bytes() == original
+
+
+def test_pipeline_logs_each_cell_settings_counts_status_and_elapsed_seconds(prepared_encoding_run: Path) -> None:
+    """Input run Path; cell audit records carry model controls/row counts/status/time, return None."""
+    progress = pipeline.run_prepared_encoding(prepared_encoding_run)
+    text = (prepared_encoding_run / "run.log").read_text(encoding="ascii")
+    assert all(key in text for key in ("cell_id", "settings", "row_count", "status", "elapsed_s"))
+    assert progress["elapsed_s"] >= 0
+    loaded = results.load_encoding_run(prepared_encoding_run)
+    for cell_id, cell in loaded["cells"].items():
+        assert cell_id in text
+        assert cell["meta"]["elapsed_s"] >= 0
