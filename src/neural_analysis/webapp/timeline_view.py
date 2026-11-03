@@ -39,6 +39,7 @@ from src.neural_analysis.population.timeline_plotting import (
 )
 from src.neural_analysis.session_metadata import ResolvedSession
 from src.neural_analysis.webapp.timeline_chart import render_timeline_chart
+from src.neural_analysis.webapp.session_prediction_view import render_prediction_controls
 
 
 def render_session_timeline_view(st_module: object, session: ResolvedSession) -> None:
@@ -54,67 +55,57 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         + hashlib.sha256(str(session.metadata_path).encode()).hexdigest()[:10]
     )
     roles, bin_width_s = _population_controls(st_module, session, scope)
-    try:
-        config = timeline_io.timeline_configuration(session, roles, bin_width_s)
-    except (OSError, ValueError) as error:
-        st_module.error(str(error))
-        return
-    saved = find_saved_timeline(session.session_root, config["configuration_id"])
-    prepare = st_module.sidebar.button("Prepare", key=f"{scope}_prepare")
-    recompute = st_module.sidebar.button(
-        "Recompute", key=f"{scope}_recompute", disabled=saved is None
-    )
-    if prepare or recompute:
-        try:
-            with st_module.spinner("Preparing session-wide PCA..."):
-                report = run_session_timeline(
-                    session.metadata_path, roles, bin_width_s, rerun=recompute
-                )
-            saved = report.result_path
-        except (OSError, ValueError) as error:
-            st_module.error(f"Could not prepare timeline: {error}")
-            return
+    prediction_display = render_prediction_controls(st_module, session, scope, roles, int(round(bin_width_s * 1000)))
     started = perf_counter()
-    try:
-        if saved is not None:
-            info = saved.stat()
-            result = load_timeline_result_cached(
-                str(saved), info.st_size, info.st_mtime_ns
-            )
-            if "reward" not in result.choices:
-                _, current_choices, _ = load_timeline_behavior_cached(
+    if prediction_display is not None:
+        result = prediction_display.result.inputs.timeline
+        config = result.meta
+        saved = session.session_root / prediction_display.result.meta["source_pca"]["path"]
+        bin_width_s = prediction_display.result.meta["effective_config"]["bin_width_ms"] / 1000
+    else:
+        try:
+            config = timeline_io.timeline_configuration(session, roles, bin_width_s)
+        except (OSError, ValueError) as error:
+            st_module.error(str(error))
+            return
+        saved = find_saved_timeline(session.session_root, config["configuration_id"])
+        prepare = st_module.sidebar.button("Prepare", key=f"{scope}_prepare")
+        recompute = st_module.sidebar.button("Recompute", key=f"{scope}_recompute", disabled=saved is None)
+        if prepare or recompute:
+            try:
+                with st_module.spinner("Preparing session-wide PCA..."):
+                    report = run_session_timeline(session.metadata_path, roles, bin_width_s, rerun=recompute)
+                saved = report.result_path
+            except (OSError, ValueError) as error:
+                st_module.error(f"Could not prepare timeline: {error}")
+                return
+        started = perf_counter()
+        try:
+            if saved is not None:
+                info = saved.stat()
+                result = load_timeline_result_cached(str(saved), info.st_size, info.st_mtime_ns)
+                if "reward" not in result.choices:
+                    _, current_choices, _ = load_timeline_behavior_cached(
+                        str(session.metadata_path), config["configuration_id"]
+                    )
+                    # Legacy archives lack reward flags; verify identity before attaching them.
+                    identity = ["row_position", "trial_id", "choice_time", "action"]
+                    if not result.choices[identity].equals(current_choices[identity]):
+                        raise ValueError("Saved choices do not match the current trial table for reward labels.")
+                    result = replace(result, choices=result.choices.assign(reward=current_choices.reward.to_numpy()))
+                st_module.caption(f"Prepared result: {saved}")
+            else:
+                origin, choices, events = load_timeline_behavior_cached(
                     str(session.metadata_path), config["configuration_id"]
                 )
-                # Legacy archives lack reward flags; verify identity before attaching them.
-                identity = ["row_position", "trial_id", "choice_time", "action"]
-                if not result.choices[identity].equals(current_choices[identity]):
-                    raise ValueError(
-                        "Saved choices do not match the current trial table for reward labels."
-                    )
-                result = replace(
-                    result,
-                    choices=result.choices.assign(
-                        reward=current_choices.reward.to_numpy()
-                    ),
+                unavailable = {role: "Not prepared" if role in roles else "No probe assigned" for role in ("PFC", "HPC")}
+                result = SessionTimelineResult(session.session_id, origin, choices, events, {}, unavailable, config)
+                st_module.info(
+                    "Behavior is available now. Select probes and click Prepare to compute and save their session PCs."
                 )
-            st_module.caption(f"Prepared result: {saved}")
-        else:
-            origin, choices, events = load_timeline_behavior_cached(
-                str(session.metadata_path), config["configuration_id"]
-            )
-            unavailable = {
-                role: "Not prepared" if role in roles else "No probe assigned"
-                for role in ("PFC", "HPC")
-            }
-            result = SessionTimelineResult(
-                session.session_id, origin, choices, events, {}, unavailable, config
-            )
-            st_module.info(
-                "Behavior is available now. Select probes and click Prepare to compute and save their session PCs."
-            )
-    except (OSError, ValueError, KeyError) as error:
-        st_module.error(f"Could not load timeline: {error}")
-        return
+        except (OSError, ValueError, KeyError) as error:
+            st_module.error(f"Could not load timeline: {error}")
+            return
     load_elapsed = perf_counter() - started
     state_key = f"{scope}_{config['configuration_id']}"
     summary = _window_summary_controls(st_module, saved, state_key)
@@ -123,11 +114,16 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
     zscore_pcs = st_module.sidebar.checkbox(
         "Z-score each PC",
         value=False,
-        disabled=not result.regions,
+        disabled=not result.regions or (prediction_display is not None and prediction_display.pc_mode != "raw"),
         key=f"{state_key}_zscore_pcs",
         help="Use each PC's mean and population SD across all prepared choice-window bins in this session.",
     )
-    pc_ranges, limits = _pc_controls(st_module, result, state_key, zscore_pcs)
+    pc_ranges, limits = {}, {}
+    if prediction_display is None or (prediction_display.pc_mode != "hidden" and prediction_display.pc_order == "original"):
+        pc_ranges, limits = _pc_controls(
+            st_module, result, state_key, zscore_pcs,
+            allow_manual_limits=prediction_display is None or prediction_display.pc_mode == "raw",
+        )
     context_available = not context_intervals(
         result.events, session_time_bounds(result)[1]
     ).empty
@@ -190,6 +186,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         zscore_pcs=zscore_pcs,
         window_variance=summary.regions if summary is not None else None,
         speed=speed,
+        prediction_display=prediction_display,
     )
     construction_elapsed = perf_counter() - started
     render_timeline_chart(figure, key=f"{scope}_chart")
@@ -201,7 +198,10 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         "PC and display changes preserve the current time range; "
         "Window start/duration and Jump request a new range."
     )
-    _render_variance_footer(st_module, result, zscore_pcs)
+    _render_variance_footer(
+        st_module, result, zscore_pcs,
+        show_score_scaling=prediction_display is None or prediction_display.pc_mode == "raw",
+    )
     if summary is not None:
         _render_window_readout(
             st_module, summary, st_module.session_state.get(f"{state_key}_trial")
@@ -539,13 +539,16 @@ def _navigation_controls(
 
 
 def _pc_controls(
-    st_module: object, result: SessionTimelineResult, key: str, zscore_pcs: bool = False
+    st_module: object, result: SessionTimelineResult, key: str, zscore_pcs: bool = False,
+    *, allow_manual_limits: bool = True,
 ) -> tuple[dict, dict]:
     """Return region/rank pairs and symmetric limits in raw-score or per-PC SD units.
 
     result contains saved (window,bin,PC) scores; key scopes widget state.
     zscore_pcs selects PC-SD units and keeps manual limits separate from raw
     score limits. Neither returned dictionary changes the saved analysis.
+    allow_manual_limits=False retains rank selectors while suppressing raw-score
+    limits for weighted prediction heatmaps, whose limits are fixed.
     """
     ranges = {}
     limits = {}
@@ -562,6 +565,8 @@ def _pc_controls(
                 value=default_pc_range(count),
                 key=f"{key}_{role}_pcs",
             )
+        if not allow_manual_limits:
+            continue
         manual = st_module.sidebar.checkbox(
             f"{role} manual color range", value=False, key=f"{key}_{role}_manual"
         )
@@ -587,12 +592,15 @@ def _pc_controls(
 
 
 def _render_variance_footer(
-    st_module: object, result: SessionTimelineResult, zscore_pcs: bool = False
+    st_module: object, result: SessionTimelineResult, zscore_pcs: bool = False,
+    *, show_score_scaling: bool = True,
 ) -> None:
     """Render original PCA variance counts, with accurate display-scaling descriptions.
 
     result is the saved session analysis; zscore_pcs describes displayed PC-SD
     units only. Counts always use the original full-session variance spectrum.
+    show_score_scaling=False suppresses raw-score descriptions when no raw
+    PC heatmap is displayed, without changing any variance calculations.
     """
     width = result.meta.get("bin_width_s", 0.5) * 1000
     st_module.markdown(
@@ -620,6 +628,8 @@ def _render_variance_footer(
             if zscore_pcs
             else f"Default color limits +/-{regional.color_limit:g}; no score rescaling."
         )
+        if not show_score_scaling:
+            scaling = "Variance summaries describe the original session basis."
         st_module.caption(
             f"{len(regional.transform.retained_unit_ids)} usable units; "
             f"{len(regional.transform.omitted_unit_ids)} constant units omitted; "

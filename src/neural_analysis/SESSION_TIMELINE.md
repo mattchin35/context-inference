@@ -502,3 +502,67 @@ bundle locally, with no CDN or additional dependency. The existing figure
 builder supplies the chart; no saved-result format changes are needed.
 Frontend lifecycle tests run through pytest when Node is on PATH;
 alternatively set `NODE_BINARY` to its executable.
+
+## Condition prediction tracks
+
+**Prepare predictions** fits the seven requested task readouts on the selected
+regional session PCs. It requires the session's existing
+`task_decoding_config.json`, augmented trial CSV, and behavioral feature-parameter
+JSON. The optional `session_prediction_config.json` accepts only
+`base_config_path` and `bin_width_ms`; defaults are the sibling base config and
+500 ms. The GUI's selected probes and bin width override preparation defaults.
+The base loader still validates its full decoder config, including both region
+blocks; an invalid unused setting must be corrected in that input config.
+
+Preview a metadata-driven preparation without fits or writes:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.session_prediction.run_session \
+  --session-metadata /path/to/session/neural_session.json --dry-run
+```
+
+Remove `--dry-run` to prepare. Schema-2 metadata needs explicit `--pfc-probe`
+and/or `--hpc-probe` keys; schema-3 metadata uses its regional roles. Compatible
+PCA/results are reused. Missing PCA is prepared only on an explicit preparation
+request. `--rerun` creates another prediction run and retains the same compatible
+PCA; it does not overwrite either old output. The batch counterpart is
+`src.neural_analysis.task_decoding.session_prediction.run_batch --session-list
+/path/to/sessions.txt`, with the same probe/bin, dry-run and rerun options.
+
+In **Session timeline and PCA**, enable **Show predictions**, select the saved
+run and target, and optionally select raw PC scores or weighted contributions.
+Original order uses regional PC-rank ranges; contribution order shows the top
+N PCs by the saved, session-fixed strength ranking. Every model uses all saved
+PCs independently of visible row count. Raw-PC z-scoring is display-only;
+weighted rows retain target or log-odds units and fixed session color limits.
+Model details expose fitted-fold status, training counts and intercepts.
+
+Training pools correct-rewarded bins in `[-1,+1)` seconds; predictions occupy
+the full `[-2,+2)` choice window with intertrial gaps. One shared deterministic
+five-fold behavioral-block assignment excludes the destination block from
+supervised training. Missing actual values do not prevent predictions; missing
+blocks do. Entirely missing continuous targets remain selectable with explicit
+unavailability. Fewer than five blocks is a preparation error. Canonical
+condition hover preserves overlapping memberships from the full trial table.
+
+These are **block-held-out predictions using a fixed session-wide PCA basis**:
+PCA and unit scaling include held-out neural data, and training includes later
+blocks and post-choice activity. This is an offline readout. State and action
+models can coincide because their correct-rewarded labels coincide. Ridge uses
+fixed alpha=1, logistic uses fixed C=1, intercepts are unpenalized, and every
+training trial has total weight one. Binary outputs mean P(left); binary PC
+contributions add to log-odds rather than probability. Continuous predictions
+are not clipped. Strength ranks describe varying additive terms, not unique
+or causal importance.
+
+Runs live under `analysis_runs/condition_session_prediction_*`, with named-array
+`results.npz`, small `config.json`, logs, summary, runner copies and computational
+source snapshots. For a copied session, retain the prediction directory and
+the exact referenced PCA `results.npz` at its original session-relative path.
+Saved display then needs only metadata and these products, even without raw
+behavior/spikes or the original machine paths. Current preparation widgets do
+not relabel a saved result as another resolution or basis. Viewing and target,
+event, PC or navigation changes do not refit or write analysis products.
+
+Fine-resolution viewport filtering limits contributions and browser payloads;
+the current NPZ loader still loads full regional score arrays into memory.

@@ -84,7 +84,11 @@ def prepare_session_predictions(
         "prediction_bytes_upper_bound": len(choices) * (len(small_inputs.bin_edges_s) - 1) * 7 * 8 * len(roles),
         "source_pca_missing": saved_source is None,
         "source_pca": str(saved_source) if saved_source is not None else None,
-        "source_selection": source_config["selection"],
+        "source_selection": {
+            role: {"unavailable": selection["unavailable"]} if "unavailable" in selection
+            else {"unit_count": len(selection["unit_ids"]), "channel_count": len(selection["channels"])}
+            for role, selection in source_config["selection"].items()
+        },
     }
     if dry_run:
         return PredictionRunReport("dry-run", None, source_config["configuration_id"], perf_counter() - started, details)

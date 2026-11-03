@@ -333,10 +333,28 @@ task-decoding and affected webapp suites.
 Do not add a generic estimator registry or target plugin mechanism for one new
 variable. A small explicit definition and encoding branch is easier to audit.
 
+## Separate session prediction analysis
+
+`session_prediction/` adds individual held-out predictions to the session
+timeline, with its own version/schema. Its preparation/config modules align
+existing targets and canonical conditions to saved timeline choices and one
+shared full-table block map. `modeling.py` fits weighted fixed L2/ridge models
+on all saved unwhitened regional PCs; `results.py` owns named-array archives,
+portable PCA references and scientific identities. `run_session.py` and
+`run_batch.py` compose preparation; `plotting.py` contains display-only helpers.
+
+This path preserves the existing decoder's models, pooled `full` window and
+saved schemas. Existing target-loader callers remain strict by default;
+keyword-only missing-block/empty-numerical-target options are enabled only
+for the new analysis. Unlike the older read-only decoder views, the timeline
+offers explicit preparation buttons; changing display controls never fits.
+See [condition prediction usage](../SESSION_TIMELINE.md#condition-prediction-tracks)
+for CLI commands, interpretation, copy-back and required behavioral inputs.
+
 ## Non-goals
 
-This package does not replace or absorb the older exploratory PCA decoder. It
-does not pool sessions or units, support multiple probes per region, compute
+The original decoder pipelines do not replace or absorb the older exploratory
+PCA decoder. They do not pool sessions or units, support multiple probes per region, compute
 permutation significance or decoding onset, standardize numerical targets,
 tune bins/PC counts/class weights/thresholds, perform live fitting in
 Streamlit, scan arbitrary filesystem paths, or manage a general workflow

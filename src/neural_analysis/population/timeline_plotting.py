@@ -416,7 +416,9 @@ def plot_session_timeline(
             f"<br>{value_label} %{{z:.5g}}<extra></extra>"
         )
         if prediction_display is not None:
-            hover = (f"{role} PC%{{customdata[8]}}<br>{value_label} %{{z:.5g}}"
+            target_label = prediction_display.result.inputs.target_metadata[prediction_display.target_name]["display_label"]
+            hover = (f"{role}: {target_label}; PC%{{customdata[8]}}<br>{value_label} %{{z:.5g}}"
+                     "<br>Prediction %{customdata[12]:.5g}; actual %{customdata[13]:.5g}"
                      "<br>Trial %{customdata[0]}; held-out fold %{customdata[10]}"
                      "<br>Elapsed [%{customdata[5]:.3f}, %{customdata[6]:.3f}) s"
                      "<br>Choice-relative [%{customdata[3]:.3f}, %{customdata[4]:.3f}) s"

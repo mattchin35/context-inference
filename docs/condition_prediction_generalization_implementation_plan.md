@@ -1,7 +1,7 @@
 # Condition Prediction Generalization: Implementation Handoff
 
 Status: reviewed draft, 2026-11-03. Scientific choices are confirmed.
-Implementation, delegation, and experimental preparation have not started.
+Implementation authorized 2026-11-03; WP1-WP5a are GREEN. CT026 dry-run passed; single-session validation is next.
 
 Read the [scientific spec](condition_prediction_generalization_spec_v1.md),
 [SoftwareDesign.md](SoftwareDesign.md), and repository `AGENTS.md` before
@@ -21,16 +21,16 @@ checkpointing to this analysis.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-03 / `refactor` / `d435b42046e96d529b1f75116c79a2be8c72cb97`. Recheck on resumption. |
-| Phase / authorization | WP0 audit complete; ready for handoff. This request authorizes plan revision only. Start WP1 when the user instructs implementation. |
+| Date / branch / inspected HEAD | 2026-11-03 / `refactor` / `9e46967e3cf7798652f9ebaf2013031f274fcbfc`. Recheck on resumption. |
+| Phase / authorization | User instructed implementation through as many packages as practical. Implementation/synthetic/browser gates passed. Proceeding to the one designated CT026 validation under this plan; no batch/cluster work. |
 | Scientific settings | Confirmed; see Section 2. No outstanding scientific question. |
-| Source/tests | No new feature source/test directories, RED/GREEN commits, or implementation tests exist. |
-| Documentation | This plan and the scientific spec are untracked at the inspected baseline; no feature commit is claimed. |
+| Source/tests | session_prediction package and localized target/timeline/webapp integration complete; 172 planned integration tests pass. |
+| Documentation | Spec and plan committed/pushed at `9e46967`; current feedback corrections are uncommitted changes to those tracked files. |
 | Existing user changes | Staged: added `docs/session_timeline_pca_spec_v1.md`. Unstaged tracked: `src/main.py`, `src/neural_analysis/sync_ephys.py`. Preserve these and unrelated untracked files. |
-| Team / writer | No worker launched; no implementation writer assigned. Planned Sol lead plus at most one Luna worker, Section 12. |
+| Team / writer | Current chat lead is the sole writer; no worker launched. Runtime model/effort identity is not exposed to the agent. |
 | Running analysis | None started by this feature; no experimental output exists. |
-| Latest verification | Documentation checks passed: ASCII, four links, fences, whitespace, sections 0-12, nine ledger entries, confirmed settings, and current reused APIs/gates. No implementation tests run. |
-| Next action | Hand off the reviewed documents. Once implementation is authorized, Sol writes WP1 tests and establishes RED before production code. |
+| Latest verification | Planned integration suite: 172 passed in 8.36 s with bundled Node; Ruff clean. Real browser checked saved-only display and pan persistence. CT026 dry-run passed without fits/writes. |
+| Next action | Commit final source/docs, prepare CT026 at 500 ms using its existing PCA, verify saved reconstruction and record performance. User inspection follows. |
 
 ### 0.2 Package ledger
 
@@ -39,15 +39,15 @@ experimental visual acceptance belongs to the user.
 
 | Package | Writer | State | RED commit / command / result | GREEN commit / checks / review | Next gate |
 | --- | --- | --- | --- | --- | --- |
-| WP0 documentation | Lead | Reviewed, ready for handoff | Not applicable | Document checks passed; no commit | Receiving task begins WP1 on implementation instruction. |
-| WP1 settings/alignment/folds | Sol | Not started | None | None | Tests first on implementation authorization. |
-| WP2 models/contributions | Sol | Not started | None | None | Accepted WP1 contracts. |
-| WP3a persistence/identity | Sol | Not started | None | None | WP2 result records. |
-| WP3b runner/CLI/batch | Luna | Not started | None | None | Frozen WP3a API. |
-| WP4a plotting/geometry | Sol | Not started | None | None | Synthetic WP3 round trip. |
-| WP4b webapp integration | Luna | Not started | None | None | Frozen WP4a display API. |
-| WP5a usage documentation | Luna | Not started | Not applicable | None | Integrated synthetic GREEN. |
-| WP5b CT026 inspection | Sol + user | Not started | Not applicable | No run | Authorized implementation and synthetic gates. |
+| WP0 documentation | Lead | Feedback revision verified | Not applicable | Baseline `9e46967`; checked review corrections uncommitted | Receiving task begins WP1 on implementation instruction. |
+| WP1 settings/alignment/folds | Lead | Accepted | `fa67c05`; 2 expected collection errors | `0a8c65f`; 64 passed with legacy targets | WP2. |
+| WP2 models/contributions | Lead | Accepted | `d8561d4`; 2 expected import errors | `3f70f6b`; 74 passed; Ruff clean | WP3a. |
+| WP3a persistence/identity | Lead | Accepted | `17d94ef`; 1 expected import error | `6e4afe5`; 86 integrated tests passed | WP3b. |
+| WP3b runner/CLI/batch | Lead | Accepted | `62a5ae2`; 1 expected import error | `6e3fc86`; 98 integrated tests passed | WP4a. |
+| WP4a plotting/geometry | Lead | Accepted | `91da846`; expected import error | `435fd69`; follow-up hover test `0f77f29`; all 172 integrated tests pass | Browser checks completed. |
+| WP4b webapp integration | Lead | GREEN, reviewed | `1aa86bd`; 2 expected failures; refinements `0f77f29`, `87ef8b3` | 172 integrated tests; saved-only browser display/pan checked | Final source commit. |
+| WP5a usage documentation | Lead | Updated | Not applicable | Timeline guide + neural/task-decoding README updates | Commit with final handoff. |
+| WP5b CT026 inspection | Lead + user | Dry-run passed | Not applicable | 715 choices; both regions; matching existing 500-ms PCA | Single-session preparation, then user inspection. |
 
 ### 0.3 Resume and interruption procedure
 
@@ -129,6 +129,154 @@ Next exact action, owner, and any missing authority:
 - Next action: hand off this reviewed plan/spec; the receiving task starts
   WP1 RED when instructed to implement.
 
+### 2026-11-03 - WP0 / implementation-chat review follow-up
+
+- Baseline: spec/plan committed at `9e46967` and pushed to `origin/refactor`;
+  refreshed the live snapshot without rewriting older untracked-state records.
+- User decisions: continue other targets when a continuous column is entirely
+  missing; save/show every applicable canonical condition membership.
+- Plan corrections: strict-default opt-in empty-target support; saved condition
+  arrays and tests; sequential heatmap display coordinates preserving PC IDs;
+  explicit full-base-config prerequisite; distinction between full NPZ memory
+  loading and viewport-limited chart/contribution work.
+- Read-only source inspection confirmed the validator, heatmap coordinates,
+  config prerequisites, and loader behavior. Source/test directories for this
+  feature are still absent. No worker, fitting, commit, or push in this revision.
+- Verification: `uv run python -c` assertions passed for ASCII, ten local
+  document links, code fences/whitespace, all five corrections, current
+  committed-baseline wording, canonical six-condition order, all sections,
+  and the nine-row ledger. Changed-document `git diff --check` passed;
+  `git status --short` confirms only the two feature documents changed by
+  this revision alongside the preserved user edits. No pytest suite was run.
+- Next action: implementation task uses these updated documents for WP1 RED;
+  these feedback changes are not yet part of the pushed baseline commit.
+
+### 2026-11-03 - WP0 / PC indexing and fixed-penalty clarification
+
+- Corrected displayed contributions to look up scores and coefficient columns
+  by the same original PC ID. Added a nonmonotonic-selection test with distinct
+  coefficients and explicit expected values, alongside geometry/label checks.
+- Aligned the control file with the confirmed specification: alpha=1 and C=1
+  are constants, recorded in result provenance but not user configuration.
+  Removed the penalty input fields and added their rejection to WP1 tests.
+- Module boundaries and Sol/Luna ownership are unchanged. No source/test edits,
+  computation, delegation, staging, commit, or push in this revision.
+- Verification: `uv run python -c` assertions passed for ten document links,
+  ASCII/whitespace/fences, the two-field JSON controls, constant-penalty wording,
+  original-PC weight lookup, reordered contribution values, and ledger rows.
+  Changed-document `git diff --check` passed. No pytest suite was run.
+- Next action: hand off the checked local updates, then begin WP1 only on
+  implementation instruction. Follow-up edits remain uncommitted/unpushed.
+
+### 2026-11-03 - WP1 / RED and GREEN
+
+- User authorized implementation through as much of the plan as practical.
+  Current chat lead is the sole writer; model/effort identity is not exposed.
+- RED: `UV_CACHE_DIR=.pytest_cache/uv uv run --frozen --no-sync --offline pytest -q
+  src/tests/neural_analysis/task_decoding/session_prediction/test_config.py
+  src/tests/neural_analysis/task_decoding/session_prediction/test_preparation.py`
+  produced two expected missing-package collection errors. Tests committed as
+  `fa67c05` before source implementation. Default uv cache was read-only;
+  subsequent commands use the ignored project pytest cache.
+- GREEN: same uv prefix, `pytest -q src/tests/neural_analysis/task_decoding/session_prediction
+  src/tests/neural_analysis/task_decoding/test_targets.py`: 64 passed in 0.60 s.
+  Source review checked row/fold/region mappings and strict-default preservation.
+- No experimental work, worker, or background analysis. Next: source commit,
+  WP2 numerical/oracle tests. Existing unrelated staged and unstaged work preserved.
+
+### 2026-11-03 - WP2 / RED, GREEN and self-review
+
+- RED: same offline uv/cache prefix as WP1, `pytest -q
+  src/tests/neural_analysis/task_decoding/session_prediction/test_modeling.py
+  src/tests/neural_analysis/task_decoding/session_prediction/test_contributions.py`:
+  two expected import errors before source. Tests committed as `d8561d4`.
+- GREEN/refactor: `pytest -q src/tests/neural_analysis/task_decoding/session_prediction
+  src/tests/neural_analysis/task_decoding/test_targets.py`: 74 passed, latest 1.04 s.
+  Ridge checked against independent weighted affine normal equations; logistic
+  objective gradient checked; reconstruction uses original reordered PC IDs.
+  Reviewed missing-block guards, target/region independence and source immutability.
+- Rechecked installed Ridge/LogisticRegression signatures and pooled stacking
+  source. Ruff on all new source/tests plus targets.py passed; whitespace clean.
+- No independent reviewer, experimental run or worker. Next: commit numerical
+  source and begin WP3a saved-result/identity/relocation tests.
+
+### 2026-11-03 - WP3a / RED, GREEN and fixture correction
+
+- RED: offline uv/cache prefix, `pytest -q
+  src/tests/neural_analysis/task_decoding/session_prediction/test_results.py`:
+  expected missing-results import error; tests committed as `17d94ef`.
+- A genuine fixture error surfaced during GREEN: the synthetic event table
+  had no columns, unlike the real timeline loader's empty event schema.
+  Corrected only the fixture to retain Time/Event/Note/elapsed_s columns;
+  no production workaround or requirement change. Persistence tests: 12 passed.
+- Implemented exact-PCA content identity, named-array round trips, small JSON
+  discovery, relocation without raw files, and scientific array validation.
+  No estimator instances or redundant scores/contribution tensor stored.
+- Ruff passed. Integrated WP1-WP3a plus existing target tests checked before
+  source commit. Next: runner composition, dry-run and synthetic pipeline tests.
+
+### 2026-11-03 - WP3b / synthetic runner and CLI
+
+- Lead implemented this bounded package directly; no worker was launched.
+  RED: offline uv/cache prefix, `pytest -q
+  src/tests/neural_analysis/task_decoding/session_prediction/test_scripts.py`:
+  one expected missing-runner import error. Tests committed as `62a5ae2`.
+- GREEN: 5 runner tests passed in 0.74 s. Actual seeded spike files, metadata,
+  six behavioral blocks and full seven-target fitting exercised at 500 and
+  100 ms. Verified reuse, immutable reruns, independent regional selection,
+  missing PCA preparation only on explicit action, snapshots, CLI and batch dry-run.
+- Reused the existing timeline worker-count/session-list conventions. No model
+  pools, scheduler, background process, experimental session or cluster work.
+  Scientific source identity includes the actual runner as well as numerical
+  modules/reused dependencies. Ruff passed before final integration check.
+- Integrated command: same uv prefix, `pytest -q
+  src/tests/neural_analysis/task_decoding/session_prediction
+  src/tests/neural_analysis/task_decoding/test_targets.py
+  src/tests/neural_analysis/test_session_timeline_scripts.py --tb=short`.
+  Next: commit this package, then plot/geometry RED tests.
+
+### 2026-11-03 - WP4a GREEN / WP4b RED
+
+- WP3b integrated check completed: 98 passed in 3.52 s; source `6e3fc86`.
+- WP4a RED test commit `91da846`; expected missing plotting import.
+  GREEN command (same offline uv/cache prefix): `pytest -q
+  src/tests/neural_analysis/task_decoding/session_prediction/test_plotting.py
+  src/tests/neural_analysis/test_timeline_plotting.py --tb=short`: 34 passed.
+  Ruff clean. Optional existing plot argument preserves default callers;
+  new helpers do not import timeline plotting, preventing a circular dependency.
+- WP4b RED: `pytest -q src/tests/neural_analysis/test_session_prediction_webapp.py
+  --tb=short`: 2 expected failures, missing controls module and old availability
+  rejection of a relocated saved-only session. No production UI change yet.
+- Next: commit plotting source, commit WP4b tests, implement saved-first routing.
+  Lead remains sole writer; no experimental analysis or cluster operation.
+
+### 2026-11-03 - WP4b/WP5a / integrated GREEN and browser inspection
+
+- Lead performed UI integration directly; no worker. WP4b RED tests committed
+  `1aa86bd` before UI production code. Saved-first selection bypasses current
+  raw-input validation and metadata availability gating only for saved products.
+- Review refinements used RED tests before fixes: `0f77f29` (2 failures: heatmap
+  prediction/actual hover and original weighted PC ranges), `87ef8b3` (1 failure:
+  misleading raw-score color caption). All now GREEN. Compact dry-run reporting
+  test `1a1dc7c` initially failed for missing unit_count, then reporting was fixed.
+- Planned Section 9 integration command, with `UV_CACHE_DIR=.pytest_cache/uv`,
+  offline/frozen/no-sync uv and `NODE_BINARY=/home/matt/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`:
+  172 passed in 8.36 s. Initial run without NODE_BINARY was 171 passed/1 skipped;
+  bundled Node resolved the skip. Ruff clean on all changed Python source/tests.
+- Browser inspection: loopback Streamlit at port 8517, exec session 43533,
+  synthetic saved-only metadata `/tmp/pytest-of-matt/pytest-221/test_relocated_saved_display_a0/copied/neural_session.json`.
+  Sandbox blocked the initial socket; an approved loopback-only escalation
+  started the server. Browser showed PFC/HPC binary and continuous tracks,
+  weighted PC rows/identities, real gaps and fixed color scales. Panned time
+  ticks 20-70 s persisted across target and PC-mode/order changes. Proof image:
+  `.pytest_cache/session_prediction_browser.png` (ignored synthetic artifact).
+- Usage docs updated in SESSION_TIMELINE.md and the neural/task-decoding READMEs.
+  No new dependencies, framework, scheduler or storage mechanism added.
+- CT026 read-only CLI dry-run passed: 715 choices, 4 training/8 prediction bins,
+  at most 70 models, 640640 prediction bytes upper bound, both metadata roles,
+  existing source PCA `session_timeline_pca_20261030_115229_118901_269a76fce972be62/results.npz`.
+  No experimental fit/write yet. Next: final source commit, designated validation.
+
 ## 1. Outcome and boundaries
 
 Add individual choice-window predictions beneath the existing session events,
@@ -155,6 +303,7 @@ changing it leaves old execution identities unchanged.
 | Item | Contract |
 | --- | --- |
 | Targets, canonical order | `current_state`, `current_action`, `qlearning_relative_value`, `forgetting_q_relative_value`, `hmm_signed_belief`, `hmm_decay_signed_belief`, `relative_doubt`. Exact source columns/orientations are in the spec. |
+| All-missing continuous target | Retain that target as unavailable and continue the others; missing columns or malformed present values are input errors. |
 | Regions / features | Separate PFC and HPC models; all saved session PCs, unwhitened, with no further PC or target scaling. No combined model. |
 | Bins | Default 500 ms; 100 ms selectable. Retain existing 50/20 ms support. Each resolution uses its matching session-PCA archive. |
 | Training / prediction | Pool `[-1, +1)` choice-relative training bins from correct-rewarded trials; predict each `[-2, +2)` choice window; retain intertrial gaps. |
@@ -162,6 +311,7 @@ changing it leaves old execution identities unchanged.
 | Folds | One deterministic five-fold behavioral-block map, shared across targets and regions, before condition/target filtering. |
 | Missing/insufficient blocks | Missing-block choices keep behavior/actual values but no held-out prediction. Fewer than five blocks stops preparation explicitly. |
 | Display | Actual-value overlay, optional raw/weighted PC rows, original/contribution order fixed across navigation. Start inside **Session timeline and PCA**; reconsider a separate view if crowded. |
+| Condition hover | Save/display all canonical condition memberships, preserving overlaps. |
 | Validation | CT026 2026-08-04, initially at 500 ms, after implementation/synthetic gates. |
 
 For each group, train on correct-rewarded trials from the other four and
@@ -218,17 +368,18 @@ Its initial allowed fields/defaults are:
 ```json
 {
   "base_config_path": "task_decoding_config.json",
-  "bin_width_ms": 500,
-  "ridge_alpha": 1.0,
-  "logistic_C": 1.0
+  "bin_width_ms": 500
 }
 ```
 
 Absence uses these defaults; an existing malformed file/unknown key is an
-error. Penalties must be finite positive scalars, bin width one of the four
-supported values. Targets, all-PC policy, five folds, and window bounds are
-fixed for this revision. Resolve input locators relative to the control file,
-contained in the metadata session. No metadata schema change is needed.
+error. Bin width must be one of the four supported values. Define internal
+constants `RIDGE_ALPHA=1.0` and `LOGISTIC_C=1.0`; reject penalty keys, including
+`ridge_alpha` and `logistic_C`, as unknown input fields. There are no JSON,
+CLI, GUI, or runner penalty overrides. Still record the constants in effective
+run configuration/metadata for provenance. Targets, all-PC policy, five folds,
+and window bounds are also fixed. Resolve locators relative to the control
+file, contained in the metadata session. No metadata schema change is needed.
 
 Precedence: fixed scientific contract -> default/control-file settings ->
 explicit GUI bin/probe selection. Overrides apply only on Prepare and are
@@ -246,6 +397,13 @@ not its estimator, PC counts, condition subset, bin width, or bilateral
 coverage requirement. Missing prerequisites produce an actionable error;
 preparation does not fit behavioral models or run the old neural decoder.
 
+This is a deliberate compatibility shortcut: the base loader still requires
+both regional configuration blocks and validates old decoder settings and
+output paths before replacement. A malformed unused setting can therefore
+block preparation. Report the base-config prerequisite clearly; do not
+silently repair it or broaden this work into a config-loader refactor. Saved
+display does not require that config or any of these preparation prerequisites.
+
 Compatibility change required: `validate_augmented_trials()` and
 `build_target_table()` currently require every block ID. Add keyword-only
 `allow_missing_blocks=False` to both and forward it to their shared block
@@ -253,6 +411,11 @@ validator. Default callers retain their current strict behavior. The new
 analysis passes True; present block labels must still form contiguous
 segments when missing entries are ignored. Do not drop/renumber source rows,
 fabricate block IDs, or duplicate the target derivations in a new loader.
+Also add keyword-only `allow_empty_numerical_targets=False` to both public
+functions. Only this new analysis enables it, alongside missing-block support.
+It bypasses only the requirement for one finite numerical target value;
+malformed present values and missing columns still fail. Preserve and test
+both strict defaults for existing decoder callers.
 
 Align the augmented table and source timeline by original row position,
 trial ID, action, and choice timestamp. IDs/positions must agree exactly;
@@ -272,6 +435,9 @@ valid variable test labels/both test classes would suppress usable predictions.
 
 Regional coverage remains independent. Missing actual targets exclude that
 target's training rows but not otherwise predictable held-out windows.
+Build all masks from existing `CONDITION_IDENTIFIERS` on the complete table,
+then map them to choices. Save them without inferring condition from reward
+alone. `correct_rewarded` must equal its column in the saved membership matrix.
 
 ## 5. Fitting and contribution contracts
 
@@ -310,6 +476,11 @@ intercept-only prediction. Do not import target-variance or two-test-trial
 requirements from R2 scoring. Binary training must contain both classes.
 Save independent training-trial/stacked-row counts so weak sampling is visible.
 
+If a continuous source column has no usable values, keep its coordinate in
+T=7, actual values NaN, validity false, models/predictions unavailable, and
+reason `target_unavailable_no_values`. Skip its fits and continue other targets.
+Expose this target's status in the UI; do not silently remove it from selectors.
+
 Treat empty training, single-class binary training, nonconvergence, numerical
 fit failure, or nonfinite parameters as model-unavailable with a readable
 reason. Continue other fits. Invalid input structure raises before fitting;
@@ -341,6 +512,7 @@ Do not pickle estimator instances. Choices retain the source structured table.
 | `target_names`, `target_families` | Unicode `(T,)` | Canonical order/families. |
 | `target_values`, `target_valid` | float64/bool `(N,T)` | Native actual values/validity. |
 | `baseline_valid`, `correct_rewarded` | bool `(N,)` | Independent input masks. |
+| `condition_names`, `condition_masks` | Unicode `(C,)`, bool `(N,C)` | All six canonical conditions in existing order; overlapping membership. |
 | `block_values_json`, `fold_ids` | Unicode/int64 `(N,)` | Canonical block identity; fold `-1` for missing. |
 | `bin_edges_s`, `training_bin_mask` | float64 `(B+1,)`, bool `(B,)` | Exact grid and supervised subset. |
 | `meta` | Dictionary | Versions, configuration, provenance, units/axes, status, timing. |
@@ -365,6 +537,9 @@ remain factual. If no fold fits, mean strength is NaN and display order falls
 back to original PC order. Missing regions omit regional arrays and report
 why in `meta.regions`; behavior remains displayable. Validate shapes, indices,
 masks, finite/NaN conventions, probabilities, fold exclusion, and counts.
+Check `C=6`, canonical condition order, choice-row alignment, and equality of
+the standalone correct-rewarded mask with its membership column. Record
+all-missing target reasons in `meta.target_availability` as well as model rows.
 
 `meta.source_pca` records session-relative archive path, configuration ID,
 size and SHA-256. Record target source identities, class-1 labels, units,
@@ -442,8 +617,19 @@ trial/time/condition/fold and PC/weight/contribution details.
 For weighted rows, initialize NaN and first mask `fold_id >= 0`, valid fit,
 and an empty prediction reason. Only then index that fold's coefficient
 array: NumPy `[-1]` must never select
-the last model for a missing-block choice. For valid rows use
-`contribution[w,b,j] = score[w,b,pc_id[j]-1] * beta[target,fold[w],j]`.
+the last model for a missing-block choice. Select scores and weights by the
+same original PC IDs. For each displayed PC, map its ID to the source-score
+axis and the saved coefficient-axis `pc_ids`; never use display position j
+directly as the coefficient index:
+
+```text
+original_id = displayed_pc_ids[j]
+score_index = original_id - 1
+weight_index = index of original_id in saved model pc_ids
+contribution[w,b,j] = score[w,b,score_index] * beta[target,fold[w],weight_index]
+```
+
+In the full canonical model order both indices equal `original_id - 1`.
 All-PC contributions plus intercept reconstruct output/logit; a visible subset
 need not reconstruct the whole prediction. No full target/fold/window/PC
 contribution tensor is stored.
@@ -456,10 +642,22 @@ viewports/visible-row changes: persist the maximum absolute valid contribution
 over all predictor PCs/destination windows, or 1 if all are zero/unavailable.
 Compute it by fold/PC or bounded chunks, without a full contribution tensor.
 
+Remap the shared heatmap helper's original-PC `y` values at the prediction
+plot boundary to sequential display centers `0..P-1`; use original PC IDs for
+tick text and hover. Preserve the shared helper's existing public contract.
+An order `[7,2,11]` must appear as three equally spaced rows in that exact
+top-to-bottom order. Test the constructed/rendered figure, including y-axis
+orientation and tick/hover labels, rather than testing selected arrays alone.
+List all true saved condition memberships in hover; do not collapse them to
+one mutually exclusive condition or reopen the raw behavioral table.
+
 Reuse the existing chart component/navigation. Target/PC/mode changes reset
 vertical ranges only; Jump/start/duration explicitly update horizontal range.
-Keep all-session navigation reachable with bounded neural loading at fine
-resolution. Inspect the integrated controls for crowding before adding a view.
+Keep all-session navigation reachable with viewport-limited contribution
+construction and chart payloads at fine resolution. The current NPZ loader
+still loads full regional score arrays into memory before filtering; this is
+not partial or bounded NPZ memory loading. Measure source-load RSS before
+considering another storage mechanism. Inspect control crowding before adding a view.
 
 ## 8. Runner and batch behavior
 
@@ -499,18 +697,24 @@ approved scope do not require repeated user permission.
   rows and absolute UTC tolerance; config precedence/defaults; full-table
   block exclusion shared across targets/regions; missing/insufficient blocks;
   missing-block keyword preserves existing strict target validation and
-  normalizes string sentinels for grouping; per-region coverage and all grids.
+  normalizes string sentinels for grouping; empty-target keyword preserves
+  strict defaults, permits all-missing continuous columns, and still rejects
+  malformed present values; canonical overlapping masks/row alignment;
+  rejection of penalty configuration keys; explicit base-config prerequisite
+  failures; per-region coverage and all grids.
 - **WP2 (Sol):** training masks/row weights and no held-out labels in fits;
   compare ridge coefficients/intercept to an independent weighted normal-
   equation oracle (ridge shrinks, so do not demand exact unpenalized recovery);
   oriented logistic probabilities; constant continuous training labels remain
-  valid; empty/single-class/nonconverged fits; missing destination labels;
+  valid; all-missing HMM target keeps its unavailable coordinate while the
+  other six run; empty/single-class/nonconverged fits; missing destination labels;
   identical state/action fits; unchanged PCA; contribution reconstruction,
   scale-aware ranking/ties, missing-fold guard and global color limits.
 - **WP3a (Sol):** all schema/identity invariants and save/load round trip;
   missing/corrupt referenced PCA; nonfinite outputs and probability bounds;
   matching reuse versus scientific changes; relocation; partial publication;
-  no invalidation from display-only changes/unrelated metadata edits.
+  persisted overlapping condition masks and target availability; no
+  invalidation from display-only changes/unrelated metadata edits.
 - **WP3b (Luna, Sol review):** synthetic end-to-end prepare/reuse/rerun;
   dry-run writes/fits nothing; absent PCA prepared only on explicit action;
   metadata/probe/bin precedence; no duplicate estimator logic; thin batch
@@ -518,12 +722,19 @@ approved scope do not require repeated user permission.
   tests are committed, not before.
 - **WP4a (Sol):** real bin edges/gaps, zeros versus unavailable, actual overlays,
   unequal regional coverage, fold-specific weighted rows and original PC IDs;
+  rendered nonmonotonic `[7,2,11]` order has equal row spacing and correct
+  tick/hover identities, including a browser check where needed. Use distinct
+  coefficients and assert values too: `z7=2, z2=3, z11=5` and
+  `beta7=-7, beta2=2, beta11=11` must give displayed contributions
+  `[-14,6,55]`, not weights selected by display-row indices;
   saved-target units, fixed order/limits, no fitting during plotting; existing
   plot callers retain default behavior.
 - **WP4b (Luna, Sol review):** actual Streamlit saved path with removed raw
   inputs and relocated archive, including availability/app dispatch, not just
   mocked loader tests; explicit Prepare;
   saved target/event/PC changes cause no fitting/writes; persistent pan/Jump;
+  full overlapping condition labels without raw sources, unavailable-target
+  explanation, and no fit attempted for the empty target;
   missing optional tracks; defaults without prediction controls remain usable.
 - **WP5a (Luna, Sol review):** update usage/copy-back requirements and scientific
   interpretation without deleting existing instructions.
@@ -566,7 +777,8 @@ Prediction arrays for 1,000 windows per region and seven targets use about
 0.85 MiB at 500 ms, 4.27 MiB at 100 ms, 21.36 MiB at 20 ms (float64, two
 regions). These are estimates, not peak-memory/runtime measurements. The main
 costs can be full PCA loading/preparation, a stacked training matrix, repeated
-SVD fits, and browser payloads. Release temporary matrices between models;
+SVD fits, and browser payloads. Viewport filtering reduces browser/contribution
+work, not the existing full NPZ score-array allocation. Release temporary matrices between models;
 optimize/reuse factorizations only after measurement and correctness checks.
 
 Reuse compatible source PCA; form only the visible target/PC contributions.

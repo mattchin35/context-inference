@@ -53,11 +53,13 @@ pre-choice forecast.
 | Binary model | L2-penalized logistic regression. |
 | Continuous model | Ridge regression. |
 | Penalty selection | Fixed penalties; keep preparation simple. |
-| Penalty settings | Ridge `alpha=1.0`; logistic `C=1.0`; unpenalized intercepts. |
+| Penalty settings | Revision-1 constants: ridge `alpha=1.0`, logistic `C=1.0`, unpenalized intercepts; no user configuration knobs. |
 | Decoder feature scale | Existing unwhitened PC scores, without another PC standardization. |
 | Actual target | Overlay the actual trial-i target across each choice window. |
 | Optional neural view | Original PC activity or signed weighted PC contributions. |
 | Optional PC ordering | Original rank or contribution strength; fixed across session navigation. |
+| Entirely missing continuous target | Keep the target unavailable and continue other targets; malformed present values remain input errors. |
+| Condition hover | Save and show all applicable canonical condition memberships, including overlaps. |
 | Preparation | Provide an explicit Prepare control. |
 | Initial webapp location | Controls within Session timeline and PCA; revisit a separate view if crowded. |
 | Validation session | CT026 2026-08-04. |
@@ -93,6 +95,14 @@ clipping, or target definitions as part of prediction preparation.
 Construct and align targets on the original chronological table before
 filtering the training condition. Preserve original row positions and trial
 IDs when connecting this table to saved timeline choices.
+
+If a requested continuous source column exists but has no usable values,
+retain its target coordinate and mark its models/predictions unavailable;
+continue processing the other targets. Preserve NaN actual values and false
+target-validity masks, with an explicit reason in the saved result and UI.
+Missing required columns and malformed present values still raise input
+errors. This policy is separate from a finite constant target, which ridge
+can fit normally.
 
 ### State and action interpretation
 
@@ -156,9 +166,11 @@ For each target, region, and outer fold:
    held-out blocks, across conditions.
 7. Save individual predictions rather than reducing them to a fold score.
 
-The user selected fixed penalties. There is no inner hyperparameter search
-in this revision. Use ridge `alpha=1.0` and logistic `C=1.0`, with unpenalized
-intercepts, original PC feature scales, and native continuous target units.
+The user selected fixed penalties. Both strengths are revision-1 constants,
+not configurable defaults; expose no JSON, CLI, or GUI penalty overrides.
+There is no inner hyperparameter search. Use ridge `alpha=1.0` and logistic
+`C=1.0`, with unpenalized intercepts, original PC feature scales, and native
+continuous target units.
 The implementation plan records the weighted loss conventions; equal numeric
 values for logistic and ridge parameters do not imply equal penalties.
 
@@ -217,6 +229,10 @@ Provide a display choice between:
 - Original signed session-PC scores.
 - Signed weighted contributions, `weight_j * PC_score_j(t)`.
 
+Match each displayed score to its weight by the same original PC identity,
+even after selection/reordering. Display-row position is not a coefficient
+index.
+
 Weighted rows use each trial's own held-out model. Together with that model's
 intercept, their sum must reconstruct its continuous prediction or binary
 linear predictor. Keep intercepts separately inspectable.
@@ -265,10 +281,16 @@ prediction tracks. Their visibility, ordering, and displayed PC count are
 display settings; they do not change which features the saved model used.
 Keep the existing timeline's light appearance and readable labels.
 
-Hover should identify the target, region, trial, condition/training-condition
-membership, elapsed and choice-relative bin interval, held-out fold,
-prediction, and actual target when present. Contribution hover should also
-identify the original PC, applicable weight, and contribution units.
+For a reordered heatmap, use equally spaced display-row positions. Keep the
+original PC numbers in tick labels and hover; do not use a nonmonotonic list
+of original PC numbers as numeric row coordinates.
+
+Hover should identify the target, region, trial, all applicable canonical
+condition memberships, elapsed and choice-relative bin interval, held-out
+fold, prediction, and actual target when present. Save the existing `all`,
+`correct_rewarded`, `omission`, `incorrect`, `switch`, and `stay` masks during
+preparation. These are overlapping memberships, not one exclusive outcome
+label. Contribution hover also identifies the original PC, weight, and units.
 
 Clearly label the supervised training interval `[-1, +1)`. Predictions in
 the remaining parts of `[-2, +2)` apply the frozen readout outside its training
@@ -294,6 +316,8 @@ with repository rules. At minimum retain:
   analysis version, code provenance, parameters, and random seed where used.
 - Original row positions, trial IDs, choices, time origin, exact bin edges,
   target values, target validity, and training-condition membership.
+- Canonical condition names and full membership masks aligned to those same
+  choice rows, so portable hover never needs the raw behavioral table.
 - Regional window mappings, original PC IDs, feature counts, model fold IDs,
   training masks/counts, coefficients, intercepts, and fit status/reasons.
 - Individual per-bin predictions, availability, and binary output orientation.

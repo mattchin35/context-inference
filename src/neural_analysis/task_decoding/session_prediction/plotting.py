@@ -149,16 +149,18 @@ def enrich_prediction_heatmap(data: dict, display: PredictionDisplay, role: str,
 
     Input x/z/customdata use the existing heatmap helper's M-bin real-time
     geometry: z(P,M), customdata(P,M,8). Append original PC, weight, fold and
-    memberships to yield (P,M,12); gap cells remain unknown.
+    memberships, prediction and actual to yield (P,M,14); gap cells remain unknown.
     """
     inputs = display.result.inputs
     target = inputs.target_names.index(display.target_name)
     model = display.result.regions[role]
     old = data["customdata"]
-    custom = np.full((*old.shape[:2], 12), None, dtype=object)
+    custom = np.full((*old.shape[:2], 14), None, dtype=object)
     custom[:, :, :8] = old
     custom[:, :, 8] = np.asarray(pc_ids)[:, None]
     positions = {trial_id: position for position, trial_id in enumerate(inputs.timeline.choices.trial_id)}
+    regional = inputs.timeline.regions[role]
+    window_by_choice = {int(position): window for window, position in enumerate(regional.choice_positions)}
     coefficient_indices = [int(np.flatnonzero(model.pc_ids == rank)[0]) for rank in pc_ids]
     for column in range(old.shape[1]):
         trial_id = old[0, column, 0]
@@ -168,6 +170,9 @@ def enrich_prediction_heatmap(data: dict, display: PredictionDisplay, role: str,
         fold = int(inputs.fold_ids[position])
         custom[:, column, 10] = fold
         custom[:, column, 11] = condition_label(display, position)
+        bin_index = int(np.searchsorted(regional.bin_edges_s, old[0, column, 3], side="right") - 1)
+        custom[:, column, 12] = model.predictions[window_by_choice[position], bin_index, target]
+        custom[:, column, 13] = inputs.target_values[position, target]
         if fold >= 0 and model.fit_status[target, fold] == "ok":
             custom[:, column, 9] = model.coefficients[target, fold, coefficient_indices]
     return {**data, "y": np.arange(len(pc_ids)), "customdata": custom}

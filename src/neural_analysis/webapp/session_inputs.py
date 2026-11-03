@@ -15,6 +15,7 @@ from src.neural_analysis.session_metadata import (
     resolve_session_metadata,
 )
 from src.neural_analysis.spike_behavior import loading as unit_spike_loading
+from src.neural_analysis.task_decoding.session_prediction.results import discover_prediction_runs
 
 
 CONDITION_OPTIONS = [
@@ -221,6 +222,8 @@ def metadata_view_availability(
             PLOT_VIEW_CONTEXT_ENCODING,
         }:
             availability[view] = MetadataViewAvailability(True, "available")
+        elif view == PLOT_VIEW_SESSION_TIMELINE and discover_prediction_runs(session.session_root):
+            availability[view] = MetadataViewAvailability(True, "saved predictions available")
         elif not behavior_ready:
             availability[view] = MetadataViewAvailability(False, behavior_reason)
         elif view == PLOT_VIEW_SESSION_TIMELINE:

@@ -113,6 +113,15 @@ and `live` remains the only compute-capable source.
 
 ## Session timeline and PCA
 
+The same view also supports explicitly prepared condition prediction tracks.
+Click **Prepare predictions** with the desired probes/bin width, then select a
+saved target and optional raw or weighted PC heatmaps. These offline readouts
+train on correct-rewarded `[-1,+1)` bins and predict block-held-out `[-2,+2)`
+choice windows using all saved session PCs. PCA includes held-out neural data.
+Preparation requires the existing task-decoding behavioral config; saved
+display requires only metadata, the prediction run and its exact referenced
+PCA archive. See [prediction usage](SESSION_TIMELINE.md#condition-prediction-tracks).
+
 Select **Session timeline and PCA** in the metadata-driven webapp to inspect
 completed choices, optional behavioral events, and fixed regional PC heatmaps
 on elapsed session time. Logged active context is overlaid behind the choices
