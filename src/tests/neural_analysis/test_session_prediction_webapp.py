@@ -175,9 +175,18 @@ def test_cross_configuration_mode_switch_retains_navigation_and_clear_labels(run
     assert next(widget for widget in at.number_input if widget.label == "Window start (s)").value == 50
     assert next(widget for widget in at.selectbox if widget.label == "Jump to trial").value == 9
     assert next(widget for widget in at.selectbox if widget.label == "Prediction target").options == ["State decoding", "Action decoding"]
-    assert "mixed_outcome_decoding" in next(widget for widget in at.selectbox if widget.label == "Saved predictions").options[0]
+    assert "Mixed-outcome decoding" in next(widget for widget in at.selectbox if widget.label == "Saved predictions").options[0]
     assert any("State decoding (mixed-outcome training)" in item["text"] for item in updated["layout"]["annotations"])
     assert any("sample size" in item.value and "regularization" in item.value for item in at.caption)
+    saved = load_prediction_result(mixed.result_path)
+    details = at.dataframe[0].value
+    for fold in range(5):
+        mask = saved.regions["PFC"].training_choice_mask[0, fold]
+        assert details.loc[fold, "training_trials"] == mask.sum()
+        for condition in ("correct_rewarded", "omission", "incorrect"):
+            index = saved.inputs.condition_names.index(condition)
+            assert details.loc[fold, condition] == (mask & saved.inputs.condition_masks[:, index]).sum()
+        assert details.loc[fold, "left_class_1"] + details.loc[fold, "right_class_0"] == mask.sum()
     next(widget for widget in at.button if widget.label == "Jump").click().run()
     assert figure_spec(at)["layout"]["uirevision"] != updated["layout"]["uirevision"]
 
@@ -193,3 +202,13 @@ def test_gui_prepare_forwards_selected_mode_and_bounded_caption(runnable_session
     assert load_prediction_result(path).inputs.target_names == ("current_state", "current_action")
     next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval").check().run()
     assert any("reset" in item.value.lower() and "loaded" in item.value.lower() for item in at.caption)
+
+
+def test_continuous_details_do_not_describe_values_as_binary_classes(runnable_session):
+    """Continuous generalization targets show training/outcome counts without class labels."""
+    prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"})
+    at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
+    next(widget for widget in at.selectbox if widget.label == "Prediction target").select("relative_doubt").run()
+    assert not at.exception
+    assert "left_class_1" not in at.dataframe[0].value.columns
+    assert "right_class_0" not in at.dataframe[0].value.columns

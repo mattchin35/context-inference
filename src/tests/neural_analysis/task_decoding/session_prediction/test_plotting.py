@@ -52,7 +52,7 @@ def test_binary_probability_axes_and_logit_contribution_labels(display_result):
     assert "PC" in heatmap.hovertemplate
     assert "actual" in heatmap.hovertemplate.lower()
     assert "prediction" in heatmap.hovertemplate.lower()
-    assert "Current action" in heatmap.hovertemplate
+    assert "Action generalization" in heatmap.hovertemplate
 
 
 def test_ordered_rows_use_sequential_centers_original_labels_and_correct_weights(display_result):
