@@ -1,6 +1,7 @@
 """Small seeded source sessions shared by context-encoding scientific tests."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -72,3 +73,27 @@ def encoding_session(tmp_path: Path) -> EncodingConfig:
         "feature_parameters": "processed/trial_feature_params.json",
         "probe_roles": {"PFC": "A", "HPC": "B"}}), encoding="ascii")
     return load_encoding_config(config_path)
+
+
+@pytest.fixture
+def prepared_encoding_run(encoding_session: EncodingConfig) -> Path:
+    """Return a new manifest+immutable preparation run Path, before any model cells.
+
+    Input EncodingConfig describes seeded source files with UTC-second times.
+    The saved preparation retains complete trials and (W,B,K) regional scores.
+    Compact settings request two encodings/estimators/penalty modes for one
+    timing/window, giving ten distinct fits after verified aliases collapse.
+    """
+    from src.neural_analysis.encoding import preparation, results
+
+    config = replace(encoding_session, windows=("whole",), timing_modes=("choice_updated",),
+                     penalty_modes=("same_numeric", "matched_context"))
+    session, trials, behavior = preparation.load_behavior_inputs(config)
+    regions, unavailable = preparation.prepare_regional_activity(config, session, trials, behavior)
+    identities = results.compute_run_identities(config)
+    path = config.intermediate_root / identities["preparation_id"] / "preparation.npz"
+    run = config.run_root / "context_encoding_test"
+    results.initialize_run(config, run, path, identities)
+    results.save_preparation(path, trials, behavior, regions,
+                             {**identities, "unavailable": unavailable, "generator": "pytest", "random_seed": 20261103})
+    return run
