@@ -8,7 +8,7 @@ import pandas as pd
 from src.behavior_analysis.project_utils import is_present_value
 from src.neural_analysis.interregional.preparation import build_block_fold_assignment
 from src.neural_analysis.population.session_timeline import (
-    SessionTimelineResult, prepare_timeline_choices,
+    SessionTimelineResult, choice_bin_edges, prepare_timeline_choices,
 )
 from src.neural_analysis.task_decoding.conditions import build_condition_masks
 from src.neural_analysis.task_decoding.config import (
@@ -102,8 +102,6 @@ def prepare_prediction_inputs(
         for name, family in zip(TARGET_NAMES, families, strict=True)
     }
     width = timeline.meta["bin_width_s"]
-    from src.neural_analysis.population.session_timeline import choice_bin_edges
-
     edges = choice_bin_edges(width)
     for region in timeline.regions.values():
         mapping = region.choice_positions
