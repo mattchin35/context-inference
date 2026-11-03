@@ -48,7 +48,8 @@ def prediction_inputs(tmp_path):
             positions, role, role, 0.5,
         )
     timeline = SessionTimelineResult(
-        "synthetic", origin, choices, pd.DataFrame(), regions, {},
+        "synthetic", origin, choices,
+        pd.DataFrame(columns=["Time", "Event", "Note", "elapsed_s"]), regions, {},
         {"configuration_id": "fixture", "bin_width_s": 0.5},
     )
     return replace(config, target_names=("current_action",)), trials, timeline
