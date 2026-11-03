@@ -80,19 +80,28 @@ def test_dry_run_writes_and_fits_nothing(runnable_session, monkeypatch):
     assert not (root / "analysis_runs").exists()
 
 
-def test_prepare_reuse_rerun_and_source_snapshots(runnable_session, monkeypatch):
+@pytest.mark.parametrize("mode, target_count", [("correct_rewarded_generalization", 7), ("mixed_outcome_decoding", 2)])
+def test_prepare_reuse_rerun_and_source_snapshots(runnable_session, monkeypatch, mode, target_count):
     """A real seeded pipeline fits once, reuses by identity and preserves old reruns."""
     roles = {"PFC": "A", "HPC": "B"}
-    first = run_session.prepare_session_predictions(runnable_session, probe_roles=roles)
+    first = run_session.prepare_session_predictions(runnable_session, probe_roles=roles, analysis_mode=mode)
     loaded = load_prediction_result(first.result_path)
     assert first.status == "prepared"
     assert set(loaded.regions) == {"PFC", "HPC"}
-    assert all(model.predictions.shape[1:] == (8, 7) for model in loaded.regions.values())
+    assert all(model.predictions.shape[1:] == (8, target_count) for model in loaded.regions.values())
+    assert first.details["analysis_mode"] == mode
+    assert first.details["max_model_count"] == target_count * 2 * 5
+    assert first.details["prediction_bytes_upper_bound"] == 18 * 8 * target_count * 8 * 2
+    assert loaded.meta["fit_count"] <= target_count * 2 * 5
     directory = first.result_path.parent
     for name in ("run_session.py", "run_batch.py", "summary.md", "run.log", "config.json"):
         assert (directory / name).is_file()
     assert (directory / "source_snapshots/modeling.py").is_file()
     assert "Block-held-out" in (directory / "summary.md").read_text()
+    assert mode in (directory / "summary.md").read_text()
+    assert mode in (directory / "run.log").read_text()
+    if target_count == 2:
+        assert "relative to average loss" in (directory / "summary.md").read_text()
     original_fit = run_session.fit_region_prediction_models
 
     def forbidden(*args, **kwargs):
@@ -100,10 +109,10 @@ def test_prepare_reuse_rerun_and_source_snapshots(runnable_session, monkeypatch)
         pytest.fail("Matching preparation must be reused")
 
     monkeypatch.setattr(run_session, "fit_region_prediction_models", forbidden)
-    second = run_session.prepare_session_predictions(runnable_session, probe_roles=roles)
+    second = run_session.prepare_session_predictions(runnable_session, probe_roles=roles, analysis_mode=mode)
     assert second.status == "reused" and second.result_path == first.result_path
     monkeypatch.setattr(run_session, "fit_region_prediction_models", original_fit)
-    third = run_session.prepare_session_predictions(runnable_session, probe_roles=roles, rerun=True)
+    third = run_session.prepare_session_predictions(runnable_session, probe_roles=roles, analysis_mode=mode, rerun=True)
     assert third.result_path != first.result_path
     assert load_prediction_result(third.result_path).meta["source_pca"] == loaded.meta["source_pca"]
 
@@ -136,4 +145,50 @@ def test_cli_and_batch_dry_run_use_shared_runner(runnable_session, capsys):
     listing = runnable_session.parent / "sessions.txt"
     listing.write_text("neural_session.json\n")
     assert run_batch.main(["--session-list", str(listing), "--pfc-probe", "A", "--dry-run"]) == 0
+    assert not (runnable_session.parent / "analysis_runs").exists()
+
+
+@pytest.mark.parametrize("width", [500, 100])
+def test_mixed_controls_only_train_two_targets_and_reuse_exact_pca(runnable_session, width):
+    """A separate mixed product reuses source PCA and never replaces the original run."""
+    roles = {"PFC": "A", "HPC": "B"}
+    reference = run_session.prepare_session_predictions(runnable_session, probe_roles=roles, bin_width_ms=width)
+    original_bytes = reference.result_path.read_bytes()
+    source = load_prediction_result(reference.result_path).meta["source_pca"]
+    controls = runnable_session.parent / "session_prediction_config.json"
+    controls.write_text(json.dumps({"analysis_mode": "mixed_outcome_decoding", "bin_width_ms": width}))
+    mixed = run_session.prepare_session_predictions(runnable_session, probe_roles=roles)
+    loaded = load_prediction_result(mixed.result_path)
+    assert loaded.inputs.target_names == ("current_state", "current_action")
+    assert loaded.meta["source_pca"] == source
+    assert mixed.identity != reference.identity
+    assert reference.result_path.read_bytes() == original_bytes
+    assert loaded.meta["fit_count"] <= 20
+    assert mixed.details["max_model_count"] == 20
+    explicit = run_session.prepare_session_predictions(
+        runnable_session, probe_roles=roles, analysis_mode="correct_rewarded_generalization",
+    )
+    assert explicit.status == "reused" and explicit.result_path == reference.result_path
+
+
+def test_mixed_cli_batch_forwarding_and_dry_run(runnable_session, capsys):
+    """Both entry points forward canonical mode overrides without fitting or writing."""
+    assert run_session.main([
+        "--session-metadata", str(runnable_session), "--pfc-probe", "A",
+        "--analysis-mode", "mixed_outcome_decoding", "--dry-run",
+    ]) == 0
+    output = capsys.readouterr().out
+    assert '"max_model_count": 10' in output
+    assert "mixed_outcome_decoding" in output
+    reports = run_batch.run_prediction_batch(
+        (runnable_session,), probe_roles={"PFC": "A"},
+        analysis_mode="mixed_outcome_decoding", dry_run=True,
+    )
+    assert reports[0].details["analysis_mode"] == "mixed_outcome_decoding"
+    listing = runnable_session.parent / "mixed_sessions.txt"
+    listing.write_text("neural_session.json\n")
+    assert run_batch.main([
+        "--session-list", str(listing), "--pfc-probe", "A", "--analysis-mode",
+        "mixed_outcome_decoding", "--dry-run",
+    ]) == 0
     assert not (runnable_session.parent / "analysis_runs").exists()
