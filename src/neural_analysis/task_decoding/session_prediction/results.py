@@ -1,6 +1,6 @@
 """Session-local named-array persistence tied to an exact source PCA archive."""
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 import hashlib
 from importlib.metadata import version
 import json
@@ -67,6 +67,7 @@ def build_prediction_metadata(
         "task_decoding/session_prediction/preparation.py",
         "task_decoding/session_prediction/modeling.py",
         "task_decoding/session_prediction/results.py",
+        "task_decoding/session_prediction/run_session.py",
         "task_decoding/targets.py", "task_decoding/config.py", "task_decoding/conditions.py",
         "task_decoding/pooled/decoding.py", "interregional/preparation.py", "spike_behavior/trials.py",
     )
@@ -192,8 +193,6 @@ def load_prediction_result(path: Path | str, *, session_root: Path | str | None 
         if not choices[identity_columns].equals(timeline.choices[identity_columns]):
             raise ValueError("Saved prediction choices do not match source PCA choices")
         # Prediction choices may add optional rewards to an older PCA table.
-        from dataclasses import replace
-
         timeline = replace(timeline, choices=choices)
         inputs = PredictionInputs(
             timeline=timeline, target_names=tuple(archive["target_names"]),
