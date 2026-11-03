@@ -14,6 +14,10 @@ from src.neural_analysis.population.session_timeline import (
     SessionTimelineResult,
 )
 from src.neural_analysis.population.window_variance import WindowVarianceSummary
+from src.neural_analysis.task_decoding.session_prediction.plotting import (
+    PredictionDisplay, add_prediction_tracks, enrich_prediction_heatmap,
+    prediction_heatmap_values, selected_pc_ids,
+)
 from src.mouse_behavior_preprocessing.treadmill_speed import TreadmillSpeed
 
 
@@ -280,6 +284,7 @@ def plot_session_timeline(
     zscore_pcs: bool = False,
     window_variance: dict[str, WindowVarianceSummary] | None = None,
     speed: TreadmillSpeed | None = None,
+    prediction_display: PredictionDisplay | None = None,
 ) -> go.Figure:
     """Build synchronized tracks from a prepared result, without modifying its arrays.
 
@@ -298,6 +303,8 @@ def plot_session_timeline(
     filtering or changing the established session/navigator bounds.
     Return a Plotly figure;
     native chart navigation does not send arbitrary range events to Python.
+    prediction_display optionally adds saved PFC/HPC target readouts and actual
+    overlays, with hidden/raw/weighted PC rows. It never changes fitted models.
     """
     full_bounds = session_time_bounds(result)
     contexts = context_intervals(result.events, full_bounds[1])
@@ -317,10 +324,21 @@ def plot_session_timeline(
     if speed is not None:
         titles.append("Signed speed (mm/s)")
         heights.append(1.1)
-    for role, regional in result.regions.items():
+    if prediction_display is not None:
+        label = prediction_display.result.inputs.target_metadata[prediction_display.target_name]["display_label"]
+        titles.extend([f"PFC - {label}", f"HPC - {label}"])
+        heights.extend([1.5, 1.5])
+    display_regions = result.regions if prediction_display is None or prediction_display.pc_mode != "hidden" else {}
+    for role, regional in display_regions.items():
         first, last = pc_ranges.get(role, (1, min(10, regional.scores.shape[2])))
-        titles.append(f"{role} ({regional.probe_id}) - session PCs {first}-{last}")
-        heights.append(max(2.0, (last - first + 1) * 0.2))
+        if prediction_display is None:
+            titles.append(f"{role} ({regional.probe_id}) - session PCs {first}-{last}")
+            visible_pc_count = last - first + 1
+        else:
+            ids = selected_pc_ids(prediction_display, role, pc_ranges.get(role))
+            titles.append(f"{role} ({regional.probe_id}) - {prediction_display.pc_mode} PCs; {prediction_display.pc_order} order")
+            visible_pc_count = len(ids)
+        heights.append(max(2.0, visible_pc_count * 0.2))
         if role in window_variance:
             titles.append(f"{role} - fixed session axes for 95% window variance")
             heights.append(0.9)
@@ -346,30 +364,63 @@ def plot_session_timeline(
         speed_row = row
         _add_speed_track(figure, speed, result.time_origin_s, row)
         row += 1
-    for role, regional in result.regions.items():
+    if prediction_display is not None:
+        add_prediction_tracks(figure, prediction_display, row, loaded_range_s)
+        row += 2
+    for role, regional in display_regions.items():
         display_scores = None
         default_limit = regional.color_limit
-        if zscore_pcs:
+        weighted = prediction_display is not None and prediction_display.pc_mode == "weighted"
+        scaled_raw = zscore_pcs and not weighted
+        ids = None
+        if prediction_display is not None:
+            ids = selected_pc_ids(prediction_display, role, pc_ranges.get(role))
+            sliced, windows, display_scores = prediction_heatmap_values(prediction_display, role, ids, loaded_range_s)
+            if weighted:
+                target = prediction_display.result.inputs.target_names.index(prediction_display.target_name)
+                default_limit = prediction_display.result.regions[role].contribution_color_limit[target]
+            elif scaled_raw:
+                all_values = zscore_pc_scores(regional.scores[:, :, np.asarray(ids) - 1])
+                default_limit = float(np.abs(all_values).max()) or 1.0
+                display_scores = all_values[windows]
+            data = build_timeline_heatmap_data(sliced, result.choices,
+                                              display_scores=display_scores, pc_order=ids)
+            data = enrich_prediction_heatmap(data, prediction_display, role, ids)
+        elif scaled_raw:
             first, last = pc_ranges.get(role, (1, min(10, regional.scores.shape[2])))
             display_scores = zscore_pc_scores(regional.scores[:, :, first - 1 : last])
             default_limit = float(np.abs(display_scores).max())
             if default_limit == 0.0:
                 default_limit = 1.0
-        data = build_timeline_heatmap_data(
-            regional,
-            result.choices,
-            pc_ranges.get(role),
-            loaded_range_s,
-            display_scores,
-        )
-        limit = float(color_limits.get(role, default_limit))
+        if prediction_display is None:
+            data = build_timeline_heatmap_data(
+                regional, result.choices, pc_ranges.get(role), loaded_range_s, display_scores,
+            )
+        limit = float(default_limit if weighted else color_limits.get(role, default_limit))
         if not np.isfinite(limit) or limit <= 0:
             raise ValueError(
                 "Manual color limits must be positive finite score values."
             )
         axis_domain = figure.layout[f"yaxis{row}"].domain
-        colorbar_title = f"{role} z-score<br>(PC SD)" if zscore_pcs else f"{role} score"
-        value_label = "Z-score (PC SD)" if zscore_pcs else "Score"
+        colorbar_title = f"{role} z-score<br>(PC SD)" if scaled_raw else f"{role} score"
+        value_label = "Z-score (PC SD)" if scaled_raw else "Score"
+        if weighted:
+            units = "log-odds" if prediction_display.result.inputs.target_families[target] == "categorical" else "target units"
+            colorbar_title = f"{role} contribution<br>({units})"
+            value_label = f"Contribution ({units})"
+        hover = (
+            f"{role} ({regional.probe_id}) %{{y}} - %{{customdata[7]:.2f}}% session variance"
+            "<br>Trial %{customdata[0]}<br>Elapsed [%{customdata[5]:.3f}, %{customdata[6]:.3f}) s"
+            "<br>UTC [%{customdata[1]:.6f}, %{customdata[2]:.6f}) s"
+            "<br>Choice-relative [%{customdata[3]:.3f}, %{customdata[4]:.3f}) s"
+            f"<br>{value_label} %{{z:.5g}}<extra></extra>"
+        )
+        if prediction_display is not None:
+            hover = (f"{role} PC%{{customdata[8]}}<br>{value_label} %{{z:.5g}}"
+                     "<br>Trial %{customdata[0]}; held-out fold %{customdata[10]}"
+                     "<br>Elapsed [%{customdata[5]:.3f}, %{customdata[6]:.3f}) s"
+                     "<br>Choice-relative [%{customdata[3]:.3f}, %{customdata[4]:.3f}) s"
+                     "<br>Weight %{customdata[9]:.5g}<br>Conditions: %{customdata[11]}<extra></extra>")
         figure.add_trace(
             go.Heatmap(
                 **data,
@@ -387,13 +438,7 @@ def plot_session_timeline(
                     "y": sum(axis_domain) / 2,
                     "thickness": 12,
                 },
-                hovertemplate=(
-                    f"{role} ({regional.probe_id}) %{{y}} - %{{customdata[7]:.2f}}% session variance"
-                    "<br>Trial %{customdata[0]}<br>Elapsed [%{customdata[5]:.3f}, %{customdata[6]:.3f}) s"
-                    "<br>UTC [%{customdata[1]:.6f}, %{customdata[2]:.6f}) s"
-                    "<br>Choice-relative [%{customdata[3]:.3f}, %{customdata[4]:.3f}) s"
-                    f"<br>{value_label} %{{z:.5g}}<extra></extra>"
-                ),
+                hovertemplate=hover,
             ),
             row=row,
             col=1,
@@ -402,7 +447,7 @@ def plot_session_timeline(
             autorange="reversed",
             tickmode="array",
             tickvals=data["y"],
-            ticktext=[f"PC{rank}" for rank in data["y"]],
+            ticktext=[f"PC{rank}" for rank in (ids if ids is not None else data["y"])],
             row=row,
             col=1,
         )
@@ -443,6 +488,10 @@ def plot_session_timeline(
     figure.update_yaxes(
         uirevision=f"{identity}:rows:{tuple(tracks)}:{sorted(pc_ranges.items())}:{tuple(window_variance)}:speed:{speed is not None}"
     )
+    if prediction_display is not None:
+        figure.update_yaxes(uirevision=f"{identity}:prediction:{prediction_display.target_name}:"
+                             f"{prediction_display.pc_mode}:{prediction_display.pc_order}:{prediction_display.pc_count}:"
+                             f"{sorted(pc_ranges.items())}:{tuple(tracks)}:speed:{speed is not None}")
     figure.update_layout(
         height=max(600, int(sum(heights) * 90 + 180)),
         margin={"l": 85, "r": 135, "t": 50, "b": 90},
