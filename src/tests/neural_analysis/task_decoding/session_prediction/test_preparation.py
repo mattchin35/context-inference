@@ -9,6 +9,7 @@ from src.neural_analysis.interregional.preparation import build_block_fold_assig
 from src.neural_analysis.population.session_timeline import choice_bin_edges
 from src.neural_analysis.task_decoding import targets
 from src.neural_analysis.task_decoding.config import CONDITION_IDENTIFIERS
+from src.neural_analysis.task_decoding.conditions import build_condition_masks
 from src.neural_analysis.task_decoding.session_prediction.config import TARGET_NAMES
 from src.neural_analysis.task_decoding.session_prediction.preparation import (
     prepare_prediction_inputs, training_bin_mask,
@@ -22,6 +23,8 @@ def test_alignment_targets_conditions_and_full_table_folds(prediction_inputs):
     prepared = prepare_prediction_inputs(trials, timeline, base)
     positions = timeline.choices.row_position.to_numpy()
     assert prepared.target_names == TARGET_NAMES
+    assert prepared.analysis_mode == "correct_rewarded_generalization"
+    np.testing.assert_array_equal(prepared.training_condition_mask, prepared.correct_rewarded)
     assert prepared.target_values.shape == (len(positions), 7)
     np.testing.assert_array_equal(prepared.target_values[:, 1], trials.action.iloc[positions])
     np.testing.assert_array_equal(prepared.target_values[:, 2], trials.Qlearning_rel_value.iloc[positions])
@@ -107,3 +110,50 @@ def test_opt_in_target_validation_preserves_strict_defaults(prediction_inputs):
     bad.loc[117, "cur_block"] = 0
     with pytest.raises(ValueError, match="contiguous"):
         targets.build_target_table(bad, config, allow_missing_blocks=True, allow_empty_numerical_targets=True)
+
+
+def test_mixed_membership_targets_and_shared_folds(prediction_inputs):
+    """Mixed N-by-2 targets retain canonical outcome unions and full-table folds."""
+    base, trials, timeline = prediction_inputs
+    trials.loc[105, "correct"] = 0
+    trials.loc[105, "state_int"] = 1 - trials.loc[105, "action"]
+    trials.loc[106, "correct"] = np.nan
+    trials.loc[103, "cur_block"] = np.nan
+    original = trials.copy(deep=True)
+    score_copies = {role: region.scores.copy() for role, region in timeline.regions.items()}
+    reference = prepare_prediction_inputs(trials, timeline, base)
+    mixed = prepare_prediction_inputs(trials, timeline, base, analysis_mode="mixed_outcome_decoding")
+    positions = timeline.choices.row_position.to_numpy()
+    masks = build_condition_masks(trials, CONDITION_IDENTIFIERS)
+    expected = (masks["correct_rewarded"] | masks["omission"] | masks["incorrect"])[positions]
+    assert mixed.analysis_mode == "mixed_outcome_decoding"
+    assert mixed.target_names == ("current_state", "current_action")
+    assert mixed.target_families == ("categorical", "categorical")
+    np.testing.assert_array_equal(mixed.target_values, reference.target_values[:, :2])
+    np.testing.assert_array_equal(mixed.target_valid, reference.target_valid[:, :2])
+    np.testing.assert_array_equal(mixed.training_condition_mask, expected)
+    np.testing.assert_array_equal(mixed.correct_rewarded, reference.correct_rewarded)
+    np.testing.assert_array_equal(mixed.fold_ids, reference.fold_ids)
+    np.testing.assert_array_equal(mixed.bin_edges_s, reference.bin_edges_s)
+    np.testing.assert_array_equal(mixed.baseline_valid, reference.baseline_valid)
+    assert expected[positions == 5].all()  # Incorrect choice is included once.
+    assert expected[positions == 4].all()  # Correct omission is included.
+    assert not expected[positions == 6].any()  # Unknown outcome is not canonical all.
+    assert trials.equals(original)
+    for role, region in timeline.regions.items():
+        np.testing.assert_array_equal(region.scores, score_copies[role])
+        np.testing.assert_array_equal(mixed.timeline.regions[role].choice_positions,
+                                      reference.timeline.regions[role].choice_positions)
+
+
+def test_mixed_does_not_require_continuous_source_columns(prediction_inputs):
+    """Select two targets before shared validation; strict generalization stays intact."""
+    base, trials, timeline = prediction_inputs
+    trials = trials.drop(columns=[
+        "Qlearning_rel_value", "FQlearning_rel_value", "HMM_rel_value_logodds",
+        "HMM_rel_value_logodds_decay", "relative_doubt_index",
+    ])
+    mixed = prepare_prediction_inputs(trials, timeline, base, analysis_mode="mixed_outcome_decoding")
+    assert mixed.target_values.shape == (len(timeline.choices), 2)
+    with pytest.raises(ValueError, match="missing"):
+        prepare_prediction_inputs(trials, timeline, base)
