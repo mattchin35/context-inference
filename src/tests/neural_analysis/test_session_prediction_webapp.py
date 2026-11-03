@@ -309,5 +309,7 @@ def test_continuous_performance_panel_has_native_errors_and_no_class_accuracy(ru
     assert "Accuracy (%)" not in overall.columns
     assert overall["RMSE"].dropna().ge(0).all()
     assert any("target units" in item.value and "RMSE" in item.value for item in at.caption)
+    assert not any("0.5 left/right threshold" in item.value for item in at.caption)
+    assert not any("Single-class groups" in item.value for item in at.caption)
     gaps = next(item.value for item in at.dataframe if "RMSE difference" in item.value.columns)
     assert "R2 difference" in gaps.columns
