@@ -54,6 +54,7 @@ def test_explicit_prepare_and_display_changes_never_refit(runnable_session, monk
     next(widget for widget in at.selectbox if widget.label == "Prediction target").select("relative_doubt").run()
     next(widget for widget in at.selectbox if widget.label == "Prediction PC view").select("weighted").run()
     assert any(widget.label == "PFC PC ranks" for widget in at.slider)
+    assert not any("Default color limits" in item.value for item in at.caption)
     before = figure_spec(at)["layout"]["uirevision"]
     next(widget for widget in at.selectbox if widget.label == "Prediction PC order").select("contribution").run()
     assert not at.exception
