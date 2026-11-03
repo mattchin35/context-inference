@@ -1,7 +1,8 @@
 # Condition Prediction Generalization: Implementation Handoff
 
-Status: reviewed draft, 2026-11-03. Scientific choices are confirmed.
-Implementation authorized 2026-11-03; WP1-WP5a are GREEN. CT026 dry-run passed; single-session validation is next.
+Status: implemented and numerically validated, 2026-11-03. Scientific choices are confirmed.
+WP1-WP5a complete. Designated CT026 preparation/browser inspection complete;
+the user's visual/scientific acceptance is pending. No experimental batch run.
 
 Read the [scientific spec](condition_prediction_generalization_spec_v1.md),
 [SoftwareDesign.md](SoftwareDesign.md), and repository `AGENTS.md` before
@@ -21,16 +22,16 @@ checkpointing to this analysis.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-03 / `refactor` / `9e46967e3cf7798652f9ebaf2013031f274fcbfc`. Recheck on resumption. |
-| Phase / authorization | User instructed implementation through as many packages as practical. Implementation/synthetic/browser gates passed. Proceeding to the one designated CT026 validation under this plan; no batch/cluster work. |
+| Date / branch / inspected HEAD | 2026-11-03 / `refactor` / `f7cd9c8` (final display fix; CT026 computation used `2c39850`). Recheck on resumption. |
+| Phase / authorization | User-authorized implementation and designated single-session validation complete. User inspection pending; no broader sessions, batch, transfer or cluster operation. |
 | Scientific settings | Confirmed; see Section 2. No outstanding scientific question. |
-| Source/tests | session_prediction package and localized target/timeline/webapp integration complete; 172 planned integration tests pass. |
-| Documentation | Spec and plan committed/pushed at `9e46967`; current feedback corrections are uncommitted changes to those tracked files. |
+| Source/tests | session_prediction package and localized target/timeline/webapp integration complete; 173 planned integration tests pass. |
+| Documentation | Reviewed local spec/plan revisions were preserved and committed with feature work. Final validation evidence appended below; feature commits have not been pushed. |
 | Existing user changes | Staged: added `docs/session_timeline_pca_spec_v1.md`. Unstaged tracked: `src/main.py`, `src/neural_analysis/sync_ephys.py`. Preserve these and unrelated untracked files. |
 | Team / writer | Current chat lead is the sole writer; no worker launched. Runtime model/effort identity is not exposed to the agent. |
-| Running analysis | None started by this feature; no experimental output exists. |
-| Latest verification | Planned integration suite: 172 passed in 8.36 s with bundled Node; Ruff clean. Real browser checked saved-only display and pan persistence. CT026 dry-run passed without fits/writes. |
-| Next action | Commit final source/docs, prepare CT026 at 500 ms using its existing PCA, verify saved reconstruction and record performance. User inspection follows. |
+| Running analysis | No analysis running. CT026 result published; local saved-result preview at `http://127.0.0.1:8517`, exec session `99148`, watcher disabled. Earlier preview sessions stopped. |
+| Latest verification | 173 passed in 8.66 s with bundled Node; Ruff/whitespace clean. CT026: 70/70 fits, 715/715 windows in each region, exact continuous reconstruction, no missing predictions. |
+| Next action | User inspects CT026 preview/summary. Resume from saved products; no rerun or broader session processing without a new request. |
 
 ### 0.2 Package ledger
 
@@ -45,9 +46,9 @@ experimental visual acceptance belongs to the user.
 | WP3a persistence/identity | Lead | Accepted | `17d94ef`; 1 expected import error | `6e4afe5`; 86 integrated tests passed | WP3b. |
 | WP3b runner/CLI/batch | Lead | Accepted | `62a5ae2`; 1 expected import error | `6e3fc86`; 98 integrated tests passed | WP4a. |
 | WP4a plotting/geometry | Lead | Accepted | `91da846`; expected import error | `435fd69`; follow-up hover test `0f77f29`; all 172 integrated tests pass | Browser checks completed. |
-| WP4b webapp integration | Lead | GREEN, reviewed | `1aa86bd`; 2 expected failures; refinements `0f77f29`, `87ef8b3` | 172 integrated tests; saved-only browser display/pan checked | Final source commit. |
-| WP5a usage documentation | Lead | Updated | Not applicable | Timeline guide + neural/task-decoding README updates | Commit with final handoff. |
-| WP5b CT026 inspection | Lead + user | Dry-run passed | Not applicable | 715 choices; both regions; matching existing 500-ms PCA | Single-session preparation, then user inspection. |
+| WP4b webapp integration | Lead | Accepted | `1aa86bd`, `0f77f29`, `87ef8b3`; final control test `1cce9ad` | `2c39850`, `f7cd9c8`; 173 tests pass; saved-only browser display/pan checked | User inspection. |
+| WP5a usage documentation | Lead | Complete | Not applicable | `2c39850`: timeline guide + neural/task-decoding README updates | User usage/review. |
+| WP5b CT026 inspection | Lead + user | Numerical/browser validation complete; user acceptance pending | Not applicable | 70 fits; 715 windows/region; exact reconstruction; performance below | User inspects saved preview/summary. |
 
 ### 0.3 Resume and interruption procedure
 
@@ -276,6 +277,53 @@ Next exact action, owner, and any missing authority:
   at most 70 models, 640640 prediction bytes upper bound, both metadata roles,
   existing source PCA `session_timeline_pca_20261030_115229_118901_269a76fce972be62/results.npz`.
   No experimental fit/write yet. Next: final source commit, designated validation.
+
+### 2026-11-03 - WP5b / CT026 preparation and numerical/browser validation
+
+- Single designated session only, at 500 ms, after implementation approval and
+  synthetic/browser gates. Session root:
+  `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260804_latent_inference`.
+- Exact run: `analysis_runs/condition_session_prediction_20261103_141009_556738_3a20d0dc3d27c60f2466/`.
+  Computational HEAD `2c39850`; the later UI-only fix does not invalidate its
+  scientific identity. Existing PCA and metadata were reused without changes.
+- Command: `UV_CACHE_DIR=.pytest_cache/uv uv run --frozen --no-sync --offline
+  python -m src.neural_analysis.task_decoding.session_prediction.run_session
+  --session-metadata <session-root>/neural_session.json`. Approved sandbox
+  escalation permitted the new session-local output directory. Exec `5891`
+  exited 0; actual elapsed 5.622 s. All 70 models fitted, no unavailable fits.
+- PFC: 715 windows, 174 saved predictor PCs; HPC: 715 windows, 316 PCs.
+  Predictions per region: (715,8,7). For all targets/regions, training trials
+  across folds: [225,233,223,232,243]; four bins/trial. Saved loader validated
+  counts, masks, block exclusion, class probabilities and coefficient reconstruction.
+  Additional evaluation of saved continuous affine outputs had maximum absolute
+  reconstruction error 0.0. State/action prediction difference was 0.0,
+  consistent with identical eligible labels. No missing prediction bins.
+- Run log: PFC fitting 1.551 s, HPC fitting 3.737 s; save/validation 0.062 s.
+  Saved NPZ 865355 bytes. Peak process RSS 382390272 bytes (process lifetime).
+  Separate warm/unspecified-filesystem-cache read: 0.135 s. Figure construction /
+  serialization / JSON bytes: current_action hidden PCs 1.303 s / 0.279 s /
+  4553578; relative_doubt weighted top 10 PCs 1.641 s / 1.226 s / 29735129.
+  These measurements do not establish browser timings or other-session budgets.
+- A second ordinary preparation request reused this same immutable result in
+  0.402 s; no second fit/run directory. No batch, cluster job or transfer.
+- Real browser displayed CT026 binary/continuous panels, actual overlays,
+  optional saved speed/context, and true gaps. Inspection found a real UI
+  mismatch: hidden PC rows still offered attached window-count controls.
+  RED test `1cce9ad` failed as expected; minimal fix committed as `f7cd9c8`.
+  Final Section 9 integration command with bundled NODE_BINARY: 173 passed in
+  8.66 s. Ruff and changed-path whitespace checks passed.
+- Initial preview emitted machine inotify-limit warnings; subsequent preview
+  commands use `--server.fileWatcherType=none` without changing machine settings.
+  Matplotlib's unwritable default cache warning was avoided on later commands
+  with `MPLCONFIGDIR=.pytest_cache/matplotlib`; no external library changed.
+- Final preview uses ignored `.pytest_cache/session_prediction_preview.py`,
+  calling the actual timeline renderer directly to avoid unrelated raw-spike
+  startup in the full app. Loopback port 8517, exec session 99148; no analysis
+  running. Final CT026 screenshot: `.pytest_cache/ct026_session_prediction.png`
+  (ignored preview artifact); browser tab retained for user inspection.
+  User visual/scientific acceptance remains outstanding. Final spec/plan ASCII,
+  local-link, code-fence and whitespace checks passed. Unrelated user work remains
+  staged/unstaged exactly as before; no feature commits were pushed.
 
 ## 1. Outcome and boundaries
 

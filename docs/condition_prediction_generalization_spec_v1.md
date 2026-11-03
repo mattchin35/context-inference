@@ -1,9 +1,9 @@
 # Condition Prediction Generalization on the Session Timeline
 
 Status: scientific decisions confirmed, revision 1, 2026-11-03.
-Implementation has not started.
+Implementation and validation status are recorded in the linked implementation plan.
 
-Draft implementation plan:
+Implementation plan and validation record:
 [condition_prediction_generalization_implementation_plan.md](condition_prediction_generalization_implementation_plan.md).
 
 This document records the user's confirmed decisions for a new session
@@ -411,5 +411,5 @@ hyperparameter searches, new behavioral-model fits, significance testing,
 or new Slurm resource settings.
 
 Preparing this specification does not authorize experimental computation or
-implementation. The scientific settings are now resolved; the linked draft
-implementation plan is ready for review before implementation begins.
+implementation. The scientific settings are resolved; the linked implementation
+plan records the current implementation and validation gates.
