@@ -104,6 +104,7 @@ def test_repeated_events_have_one_legend_entry_and_coefficient_scale_clears_pc_l
     axis = figure.layout[coefficient.xaxis.replace("x", "xaxis", 1)]
     yaxis = figure.layout[coefficient.yaxis.replace("y", "yaxis", 1)]
     assert coefficient.colorbar.orientation == "h"
+    assert coefficient.colorbar.title.side == "top"
     assert axis.domain[0] <= coefficient.colorbar.x <= axis.domain[1]
     assert coefficient.colorbar.y > yaxis.domain[1]
 
