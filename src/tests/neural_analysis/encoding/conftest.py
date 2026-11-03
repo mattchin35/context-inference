@@ -53,7 +53,7 @@ def encoding_session(tmp_path: Path) -> EncodingConfig:
         pd.DataFrame({"channel_id": ["CH0", "CH1", "CH2"],
             "label": ["good", "good", "bad"], "inside_brain": [True, True, True],
             "x_um": [0.0, 0.0, 0.0], "y_um": [0.0, 20.0, 40.0],
-        }).to_csv(directory / "quality.csv", index=False)
+        }).to_csv(directory / "channel_quality.csv", index=False)
         spikes = origin + rng.uniform(0.0, 120.0, size=(4, 600))
         assignments = np.repeat([7, 8, 9, 10], 600)
         order = np.argsort(spikes.ravel())
@@ -61,7 +61,7 @@ def encoding_session(tmp_path: Path) -> EncodingConfig:
         np.savez(directory / "aligned.npz", spike_utc_unix=spikes.ravel()[order],
                  irig_utc_unix=origin + np.arange(lower, 121.0))
         probes[probe] = {"lfp": "", "alignment": f"{probe}/aligned.npz",
-            "sorter": probe, "quality": f"{probe}/quality.csv", "sites": {probe: 0}}
+            "sorter": probe, "quality": f"{probe}/channel_quality.csv", "sites": {probe: 0}}
     metadata = {"schema_version": "2", "session": "synthetic-context-encoding",
         "acquisition": "open_ephys", "behavior": {"trials": "trials.csv", "events": "events.csv"},
         "probes": probes, "site_pairs": []}

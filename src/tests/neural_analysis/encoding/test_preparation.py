@@ -162,7 +162,8 @@ def test_exact_saved_basis_reuses_signs_scaling_and_scores(
     exact_path = timeline_io.save_timeline_result(path.with_name("exact.npz"), candidate)
     monkeypatch.setattr(timeline, "bin_choice_counts", forbid_binning)
     _, _, _, reused, unavailable = load_and_prepare(replace(config, timeline_result=exact_path))
-    assert not unavailable
+    assert "PFC" not in unavailable
+    assert unavailable["HPC"] == "No probe role configured"
     assert reused["PFC"].reused
     for field in ("scores", "bin_edges_s"):
         np.testing.assert_array_equal(getattr(reused["PFC"].timeline, field), getattr(regions["PFC"].timeline, field))
@@ -203,7 +204,7 @@ def test_saved_basis_mismatch_rebuilds_instead_of_relabeling_pcs(
         arrays["pfc_training_scale"] = np.zeros_like(original.transform.training_scale)
         np.savez_compressed(path, **arrays)
     if mismatch == "source":
-        quality = session.session_root / "A/quality.csv"
+        quality = session.session_root / "A/channel_quality.csv"
         quality.write_text(quality.read_text(encoding="ascii") + "\n", encoding="ascii")
     _, _, _, rebuilt, _ = load_and_prepare(replace(encoding_session, timeline_result=path))
     assert not rebuilt["PFC"].reused
