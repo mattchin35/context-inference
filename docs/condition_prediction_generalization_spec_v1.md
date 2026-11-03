@@ -1,13 +1,15 @@
-# Condition Prediction Generalization on the Session Timeline
+# Condition Generalization and Mixed-Outcome Decoding on the Session Timeline
 
-Status: scientific decisions confirmed, revision 1, 2026-11-03.
-Implementation and validation status are recorded in the linked implementation plan.
+Status: scientific decisions confirmed, document revision 2, 2026-11-03.
+Correct-rewarded generalization is implemented; the mixed-outcome extension
+is specified here and awaits implementation. The linked plan records the
+separate implementation and validation gates. Keep this existing filename.
 
 Implementation plan and validation record:
 [condition_prediction_generalization_implementation_plan.md](condition_prediction_generalization_implementation_plan.md).
 
-This document records the user's confirmed decisions for a new session
-prediction analysis. It is not an implementation plan. These decisions take
+This document records the user's confirmed decisions for session prediction
+analyses. It is not an implementation plan. These decisions take
 precedence over suggestions made earlier in the discussion. Section 11 records
 the five-fold policy confirmed after the user's requested explanation.
 
@@ -21,11 +23,18 @@ Related documents:
 
 ## 1. Goal
 
-Train a population readout on correct-rewarded trials, then display its
-predicted task variable during individual choice windows throughout the
-session. Show choices, selected behavioral events, and the prediction on a
-shared elapsed-session-time axis. Overlay the actual trial-level target for
-comparison.
+Provide two explicitly named analyses using the same session timeline:
+
+- **Correct-rewarded generalization:** train the existing seven task-variable
+  readouts on correct-rewarded trials and apply them across choice conditions.
+- **Mixed-outcome decoding:** train separate state and action classifiers on
+  correct-rewarded, correct-omission, and incorrect trials from the training
+  folds. This measures decoding of the recorded state and action across
+  outcomes; it is a separate analysis from the correct-rewarded reference.
+
+Display predictions during individual choice windows throughout the session.
+Show choices, selected behavioral events, and predictions on a shared
+elapsed-session-time axis, with actual trial-level targets overlaid.
 
 This expands the condition generalization idea from aggregate decoding
 performance to the actual predicted values for individual trials and bins.
@@ -40,12 +49,14 @@ pre-choice forecast.
 
 | Item | User decision |
 | --- | --- |
-| Training condition | Canonical `correct_rewarded` trials. |
-| Targets | The seven targets in Section 3. |
+| Analysis modes | Correct-rewarded generalization and mixed-outcome decoding; save and inspect separately. |
+| Generalization training / targets | Canonical `correct_rewarded`; all seven targets in Section 3. |
+| Mixed-outcome training / targets | Union of canonical `correct_rewarded`, `omission`, and `incorrect`; `current_state` and `current_action` only. Canonical `omission` means correct omission. |
+| Sampling / balancing | All eligible training trials; equal total weight per trial. No subsampling, class/outcome balancing, or additional training fraction. |
 | Training interval | One pooled interval, `[-1, +1)` seconds relative to choice. |
 | Prediction interval | The complete `[-2, +2)` second choice window. |
 | Intertrial intervals | Leave gaps; do not predict outside choice windows. |
-| Evaluation | One deterministic five-fold behavioral-block assignment shared across targets and regions. |
+| Evaluation | One deterministic five-fold behavioral-block assignment shared across modes, targets, and regions. |
 | PCA fitting scope | Session-wide PCs, including conditions beyond correct-rewarded. |
 | Predictor PCs | All available saved session PCs for each region. |
 | Regional outputs | Separate PFC and HPC models and tracks. |
@@ -53,7 +64,7 @@ pre-choice forecast.
 | Binary model | L2-penalized logistic regression. |
 | Continuous model | Ridge regression. |
 | Penalty selection | Fixed penalties; keep preparation simple. |
-| Penalty settings | Revision-1 constants: ridge `alpha=1.0`, logistic `C=1.0`, unpenalized intercepts; no user configuration knobs. |
+| Penalty settings | Unchanged constants: ridge `alpha=1.0`, logistic `C=1.0`, unpenalized intercepts; no user configuration knobs. |
 | Decoder feature scale | Existing unwhitened PC scores, without another PC standardization. |
 | Actual target | Overlay the actual trial-i target across each choice window. |
 | Optional neural view | Original PC activity or signed weighted PC contributions. |
@@ -73,7 +84,7 @@ interval `[-1, +1)`. It must not silently reuse the existing pooled decoder's
 `full` setting, which means `[-2, +2)`. Save exact numeric bounds in the new
 configuration and results.
 
-## 3. Initial target set
+## 3. Target sets by analysis mode
 
 Reuse the current target definitions and source columns. Each target refers
 to trial i; do not shift labels to a previous or next trial.
@@ -87,6 +98,12 @@ to trial i; do not shift labels to a previous or next trial.
 | `hmm_signed_belief` | `HMM_rel_value_logodds` | Continuous | Predicted HMM belief log-odds. |
 | `hmm_decay_signed_belief` | `HMM_rel_value_logodds_decay` | Continuous | Predicted decayed HMM belief log-odds. |
 | `relative_doubt` | `relative_doubt_index` | Continuous | Predicted relative doubt in source units. |
+
+Correct-rewarded generalization retains this complete seven-target order.
+Mixed-outcome decoding uses only the first two targets, in that same order.
+Do not train the five continuous targets on mixed outcomes or duplicate their
+existing fits in the mixed-outcome product. Target identifiers, source
+columns, and binary orientation do not change between modes.
 
 Use the existing augmented behavioral table and feature provenance for model
 values. Do not refit the behavioral models or invent new units, normalization,
@@ -111,7 +128,20 @@ training rows, labels, and settings are identical, the two binary models
 should produce identical predictions. Their actual labels can differ on
 other trials. The specification retains both requested targets, but their
 names do not establish independently identified state and action readouts.
-Report this limitation rather than forcing the models to differ.
+Report this limitation rather than forcing the models to differ. The
+correct-rewarded state readout projects activity onto a reference learned
+where recorded state and action agree. It can motivate hypotheses about the
+mouse's inferred state, but does not independently establish an internal
+belief representation or distinguish state from action coding.
+
+Mixed-outcome state decoding predicts recorded task state; mixed-outcome
+action decoding predicts actual choice. Both classifiers use the same
+training-condition pool, with their own target-validity masks. Incorrect
+trials allow state and action labels to differ. Correct omissions alone do
+not remove their agreement on correct trials. Different labels allow the
+models to differ but do not guarantee different fitted outputs or establish
+causal separation of neural representations. Preserve both original
+generalization outputs rather than replacing or relabeling them.
 
 ## 4. Neural inputs and the fixed session PCA basis
 
@@ -149,12 +179,30 @@ activity. Preserve the other region's usable results independently.
 
 Use behavioral blocks as the cross-validation groups. All bins from a trial
 and all trials from one block must remain in the same fold. Establish the
-group assignment before selecting correct-rewarded training rows. Every
-prediction must identify the model and held-out block fold that generated it.
+group assignment before selecting either mode's training rows. For the same
+source table, both modes use the identical map. Every prediction must
+identify its analysis mode, model, and held-out block fold.
+
+Select training-condition membership from the existing canonical masks:
+
+```text
+correct_rewarded_generalization: correct_rewarded
+mixed_outcome_decoding: correct_rewarded OR omission OR incorrect
+```
+
+Intersect this membership with baseline validity, regional complete-window
+coverage, target validity, and the other four folds. Preserve existing manual
+reward/no-choice exclusions; do not substitute the broad canonical `all` mask
+or count overlapping `switch`/`stay` memberships as additional observations.
+Use every eligible training trial once. A fold need not contain all three
+outcomes to fit, but its binary training labels must contain both classes.
+Do not rebalance outcomes, resample trials, or select another training
+fraction. The held-out fold remains entirely excluded even when an outcome
+is absent from the other folds.
 
 For each target, region, and outer fold:
 
-1. Select eligible correct-rewarded trials from the other folds.
+1. Select eligible trials for the chosen analysis mode from the other folds.
 2. Select the bins inside `[-1, +1)` seconds.
 3. Stack `(training trial, training bin, PC)` into
    `(training trial * training bin, PC)` in trial-major order.
@@ -166,13 +214,20 @@ For each target, region, and outer fold:
    held-out blocks, across conditions.
 7. Save individual predictions rather than reducing them to a fold score.
 
-The user selected fixed penalties. Both strengths are revision-1 constants,
+The user selected fixed penalties. Both strengths remain constants,
 not configurable defaults; expose no JSON, CLI, or GUI penalty overrides.
 There is no inner hyperparameter search. Use ridge `alpha=1.0` and logistic
 `C=1.0`, with unpenalized intercepts, original PC feature scales, and native
 continuous target units.
 The implementation plan records the weighted loss conventions; equal numeric
 values for logistic and ridge parameters do not imply equal penalties.
+
+Mixed training changes sample size as well as outcome composition. With
+summed logistic loss, equal total weight per trial, and fixed `C=1`, more
+training trials reduce regularization relative to the average loss. A
+comparison of the modes therefore does not isolate outcome composition.
+Keep the confirmed weights and penalty; do not rescale C, match sample sizes,
+or add balancing to make this comparison appear controlled.
 
 Each ordinary choice gets the prediction from its own held-out model. Do not
 average models that trained on that choice into its displayed prediction.
@@ -270,6 +325,48 @@ timestamps, event toggles, context shading, jump-to-trial controls, duration
 controls, session navigator, and preserved pan/zoom behavior. Reuse optional
 speed where available; it is not an input to the prediction models.
 
+Provide an **Analysis** selector with **Correct-rewarded generalization** and
+**Mixed-outcome decoding**. Filter saved runs and target options to that mode.
+On first saved-only entry, initialize to a mode with saved products if the
+default has none. Honor subsequent explicit selections, including showing an
+unprepared mode without substituting results from the other analysis.
+When switching to an unprepared mode, keep the last valid saved behavior/PCA
+visible and clearly identify its source and bin width. Suppress prediction
+tracks, target overlays and weighted contributions until the selected mode
+has a saved result. Raw PC activity may remain visible. This state must work
+with raw sources removed, without recomputation or raw-input fallback; showing
+saved background activity does not make the selected analysis prepared.
+Use the following visible binary output names in track titles and inspection:
+
+| Analysis | State output | Action output |
+| --- | --- | --- |
+| Correct-rewarded generalization | State generalization | Action generalization |
+| Mixed-outcome decoding | State decoding | Action decoding |
+
+Track titles must also identify the training population, for example
+`PFC - State generalization (correct-rewarded training)` and
+`PFC - State decoding (mixed-outcome training)`. Saved-run labels, hover,
+model details, and summaries must identify the mode. Explain the three
+mixed training outcomes in the caption. Avoid the standalone name
+"sessionwide state decoding": coverage remains restricted to choice windows.
+Retain the continuous target labels in the generalization mode.
+
+Horizontal navigation belongs to the session and elapsed-time origin, not
+the saved PCA configuration. Preserve the current time range when switching
+modes or runs with different bin widths or regional PCA bases, including
+500-ms generalization to 100-ms mixed decoding. Keep PC controls and vertical
+axes specific to the displayed basis/model. Explicit navigation still changes
+the range; a different session/time origin or a necessary bounds clamp is a
+separate coordinate change. Preserve the actual browser pan as well as the
+server's navigation controls.
+
+Bounded neural loading is the explicit exception: preserve the browser range
+only when it fits inside the destination loaded interval. Otherwise reset to
+the interval selected by the server's navigation controls and explain this
+behavior in the bounded-loading caption. This also applies when switching to
+20-ms data, where bounded loading is enabled by default. Keep the existing
+bounded loading approach; do not add browser-to-Python pan callbacks.
+
 For a selected target, show separate PFC and HPC prediction panels beneath
 the behavioral tracks. Overlay the actual trial-i target on both panels,
 constant within its choice window. Do not interpolate the actual target or
@@ -299,15 +396,34 @@ described in Section 5.
 
 ## 8. Preparation and saved results
 
-Provide an explicit Prepare control. Preparation performs model fitting and
-saves predictions and provenance; display interactions load saved products.
+Provide an explicit Prepare control for the selected mode. Preparation fits
+models and saves predictions/provenance; display interactions load saved products.
 Reuse compatible saved preparation by default. Require an explicit rerun
 action for a new result when an equivalent preparation already exists.
+Preparing mixed-outcome decoding fits only its two classifiers per region
+and fold: at most 20 fits with both regions, versus 70 for generalization.
+Reuse matching saved PCA; do not rebuild spikes/PCA or refit the other mode
+merely to add these readouts. An explicitly requested preparation can still
+prepare a missing source PCA through the existing preparation path.
 
 Keep a separate versioned identity for this analysis. Existing task-variable,
 pooled condition-generalization, and session-PCA results retain their current
 schemas and meanings. In particular, the existing pooled `full` training
 window must not change.
+
+Each saved run contains one analysis mode. Include its stable identifier,
+ordered target set, and canonical training-condition names in effective
+configuration/provenance and scientific identity. Persist the selected
+choice-aligned `training_condition_mask` separately from `correct_rewarded`.
+Validate it against the saved canonical masks; never overwrite the meaning
+of `correct_rewarded` to represent mixed membership.
+
+Continue discovering/loading original version-1 seven-target results as
+correct-rewarded generalization, without editing those archives, rerunning
+their fits, or requiring raw inputs. New results use the versioned contract
+in the implementation plan. Missing mode metadata in a new-schema result is
+an error, not permission to guess its training population. Modes cannot
+satisfy each other's preparation-reuse requests.
 
 Save named arrays in a session-local NPZ with `meta` metadata, consistent
 with repository rules. At minimum retain:
@@ -345,7 +461,8 @@ constructed from saved weights and matching PC scores for the displayed data.
 | `src/neural_analysis/population/timeline_plotting.py` | Shared choices/events/context, real-time geometry, and original-PC ordering support. |
 | `src/neural_analysis/webapp/timeline_view.py` and `timeline_chart.py` | Existing preparation/navigation conventions and persistent chart rendering. |
 | `src/neural_analysis/task_decoding/config.py` and `targets.py` | Exact target names, class orientation, and chronological target construction. |
-| `src/neural_analysis/task_decoding/conditions.py` | Canonical correct-rewarded mask. |
+| `src/neural_analysis/task_decoding/conditions.py` | Canonical correct-rewarded, correct-omission, incorrect, and overlapping hover masks. |
+| `src/neural_analysis/task_decoding/session_prediction/` | Existing preparation, numerical models, saved results, runners, and plot helpers; extend these modules for the second mode. |
 | `src/neural_analysis/task_decoding/modeling.py` | Existing block-split primitives where their contracts fit; its current elastic-net estimator factory is not the selected new L2 model. |
 | `src/neural_analysis/task_decoding/pooled/decoding.py` | Reference for pooled row ordering, repeated labels, and trial weights. Its training-only PCA and aggregate-only outputs are not this analysis's contracts. |
 
@@ -360,7 +477,9 @@ The later plan must cover these scientific and display behaviors before
 experimental preparation:
 
 - Correct trial-i target alignment despite excluded or missing rows.
-- Correct-rewarded-only supervised training and exact `[-1, +1)` bin selection.
+- Exact per-mode target sets, canonical training membership, and `[-1, +1)` bins.
+- Mixed-outcome training includes incorrect and correct-omission trials without
+  including manual/no-choice rows or double-counting switch/stay membership.
 - Shared block exclusion for every training/prediction pair, including all
   bins from each trial; recorded fixed session-wide preprocessing scope.
 - Prediction at every valid `[-2, +2)` bin with real intertrial gaps preserved.
@@ -372,6 +491,16 @@ experimental preparation:
   and remains fixed while navigating.
 - Equal settings and labels yielding equal state/action predictions where
   their eligible training subsets coincide.
+- A synthetic mixed-outcome example with different recoverable state/action
+  labels; do not require unequal predictions for every possible dataset.
+- Mode-specific identities/reuse, strict new-schema validation, original
+  seven-target archive readability, and visible mode/training labels.
+- Switching to an unprepared mode in a saved-only session retains background
+  behavior/PCA and suppresses all prediction-derived tracks without raw reads.
+- Navigation survives switches between different saved PCA configurations;
+  PC controls and vertical axes still follow the displayed basis/model.
+- With bounded neural loading, retain an in-bounds browser range and reset an
+  out-of-bounds range to the control-selected interval with an explanatory caption.
 - Preparation reuse, saved-result round trips, and display changes that never
   refit a model or mutate source PCA products.
 
@@ -387,9 +516,9 @@ case policies after the explanation of how the session trace is constructed:
 
 - Assign whole behavioral blocks to five groups once, independently of target
   labels or region, using deterministic `GroupKFold(shuffle=False)`.
-- For each held-out group, train on eligible correct-rewarded trials from the
-  other four groups and predict all eligible choice windows in that group.
-- Use the same assignment for all seven targets and both regions, while
+- For each held-out group, train on eligible trials for the selected mode
+  from the other four groups and predict all eligible windows in that group.
+- Use the same assignment for both modes, their targets, and both regions, while
   retaining target-specific label eligibility and regional neural coverage.
 - Choices with missing block IDs have no held-out prediction; behavior and
   actual values can still be displayed.
@@ -403,13 +532,15 @@ evaluates offline block generalization, not future-only prediction.
 
 ## 12. Scope limits
 
-This revision covers same-session, correct-rewarded-trained regional PC
-readouts and individual choice-window predictions. It does not require
+This revision covers same-session regional PC readouts in two fixed modes:
+seven-target correct-rewarded generalization and two-target mixed-outcome
+decoding, with individual choice-window predictions. It does not require
 continuous intertrial prediction, cross-session models, combined PFC+HPC
-models, direct-unit decoders, destination-native model comparisons,
+models, direct-unit decoders, arbitrary training-condition/target builders,
 hyperparameter searches, new behavioral-model fits, significance testing,
 or new Slurm resource settings.
 
 Preparing this specification does not authorize experimental computation or
-implementation. The scientific settings are resolved; the linked implementation
-plan records the current implementation and validation gates.
+implementation of the extension. The scientific settings are resolved; the
+linked implementation plan distinguishes completed original work from the
+pending mixed-outcome implementation and validation gates.

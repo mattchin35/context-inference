@@ -16,7 +16,7 @@ from src.neural_analysis.task_decoding.config import (
 )
 from src.neural_analysis.task_decoding.targets import build_target_table
 
-from .config import TARGET_NAMES
+from .config import GENERALIZATION_MODE, target_names_for_mode, training_conditions_for_mode
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,9 @@ class PredictionInputs:
 
     timeline contains independent regional scores (W_r,B,K_r) and maps into N
     shared choices. Targets/validity are float64/bool (N,T), in source units;
-    baseline/correct_rewarded/fold_ids/block_values_json are (N,). Missing folds
+    baseline/correct_rewarded/training_condition_mask/fold_ids/block_values_json
+    are (N,). analysis_mode determines the fixed target set and training union.
+    Missing folds
     are -1. condition_masks is bool (N,C), retaining overlapping memberships.
     target_metadata preserves source/family/class labels; availability maps
     target names to an empty string or a reason. Time edges are relative seconds.
@@ -46,6 +48,20 @@ class PredictionInputs:
     bin_edges_s: np.ndarray
     target_metadata: dict
     target_availability: dict[str, str]
+    analysis_mode: str
+    training_condition_mask: np.ndarray
+
+
+def training_membership(
+    analysis_mode: str, condition_names: tuple[str, ...], condition_masks: np.ndarray,
+) -> np.ndarray:
+    """Return bool (N,) union from canonical names and bool (N,C) memberships.
+
+    This is condition membership only, before baseline, target, neural coverage,
+    or fold filtering. Each choice remains one row even when memberships overlap.
+    """
+    names = training_conditions_for_mode(analysis_mode)
+    return np.any(condition_masks[:, [condition_names.index(name) for name in names]], axis=1)
 
 
 def training_bin_mask(bin_edges_s: np.ndarray) -> np.ndarray:
@@ -67,6 +83,8 @@ def prepare_prediction_inputs(
     trial_df: pd.DataFrame,
     timeline: SessionTimelineResult,
     base_config: TaskDecodingConfig,
+    *,
+    analysis_mode: str = GENERALIZATION_MODE,
 ) -> PredictionInputs:
     """Return targets/folds mapped from original trials to saved timeline choices.
 
@@ -75,8 +93,11 @@ def prepare_prediction_inputs(
     order and units. base_config supplies existing target definitions; its
     target subset/alignment are locally replaced. Input objects are not changed.
     Reject mismatched choice identities using absolute UTC tolerance 1 us.
+    analysis_mode selects fixed seven- or two-target axes and the canonical
+    training-condition union; default retains correct-rewarded generalization.
     """
-    config = replace(base_config, target_names=TARGET_NAMES, alignment="choice_time")
+    target_names = target_names_for_mode(analysis_mode)
+    config = replace(base_config, target_names=target_names, alignment="choice_time")
     targets = build_target_table(
         trial_df, config, allow_missing_blocks=True, allow_empty_numerical_targets=True,
     )
@@ -96,10 +117,10 @@ def prepare_prediction_inputs(
     all_folds = np.array([-1 if fold is None else fold for fold in assignment.fold_ids], dtype=np.int64)
     masks = build_condition_masks(trial_df, CONDITION_IDENTIFIERS)
     conditions = np.column_stack([masks[name][positions] for name in CONDITION_IDENTIFIERS])
-    families = tuple(TARGET_DEFINITION_BY_IDENTIFIER[name].family for name in TARGET_NAMES)
+    families = tuple(TARGET_DEFINITION_BY_IDENTIFIER[name].family for name in target_names)
     availability = {
         name: "target_unavailable_no_values" if family == "numerical" and not targets[name + "_valid"].any() else ""
-        for name, family in zip(TARGET_NAMES, families, strict=True)
+        for name, family in zip(target_names, families, strict=True)
     }
     width = timeline.meta["bin_width_s"]
     edges = choice_bin_edges(width)
@@ -114,11 +135,12 @@ def prepare_prediction_inputs(
                 or region.scores.shape[2] < 1 or not np.isfinite(region.scores).all()):
             raise ValueError("Regional score axes, finiteness or bin grid disagree")
     return PredictionInputs(
-        timeline, TARGET_NAMES, families,
-        targets.loc[:, TARGET_NAMES].to_numpy(dtype=float)[positions],
-        targets.loc[:, [name + "_valid" for name in TARGET_NAMES]].to_numpy(dtype=bool)[positions],
+        timeline, target_names, families,
+        targets.loc[:, target_names].to_numpy(dtype=float)[positions],
+        targets.loc[:, [name + "_valid" for name in target_names]].to_numpy(dtype=bool)[positions],
         targets.baseline_valid.to_numpy(dtype=bool)[positions], conditions[:, 1].copy(),
         all_folds[positions], np.asarray(assignment.block_values_json, dtype=str)[positions],
         CONDITION_IDENTIFIERS, conditions, training_bin_mask(edges), edges,
-        targets.attrs["target_metadata"], availability,
+        targets.attrs["target_metadata"], availability, analysis_mode,
+        training_membership(analysis_mode, CONDITION_IDENTIFIERS, conditions),
     )

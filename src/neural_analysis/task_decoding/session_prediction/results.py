@@ -199,6 +199,8 @@ def load_prediction_result(path: Path | str, *, session_root: Path | str | None 
             target_families=tuple(archive["target_families"]),
             condition_names=tuple(archive["condition_names"]),
             target_metadata=meta["target_metadata"], target_availability=meta["target_availability"],
+            analysis_mode="correct_rewarded_generalization",
+            training_condition_mask=archive["correct_rewarded"].copy(),
             **{name: archive[name] for name in SHARED_ARRAYS},
         )
         regions = {}
