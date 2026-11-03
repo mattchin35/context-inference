@@ -63,10 +63,16 @@ export default async function renderTimeline({parentElement, data}) {
     state.height = figure.layout.height;
     // New matched axes must inherit the actual browser range, not older server fields.
     const rangeUpdate = {};
-    const currentRange = state.chart._fullLayout?.xaxis?.range;
+    const declaredTimeAxes = figure.layout.meta?.time_axes;
+    const timeAxes = Array.isArray(declaredTimeAxes)
+        ? declaredTimeAxes
+        : Object.keys(figure.layout).filter((name) => /^xaxis\d*$/.test(name));
+    const primaryTimeAxis = figure.layout.meta?.primary_time_axis ?? "xaxis";
+    const currentRange = state.chart._fullLayout?.[primaryTimeAxis]?.range;
     if (currentRange && state.revision === figure.layout.uirevision) {
-        for (const [name, axis] of Object.entries(figure.layout)) {
-            if (/^xaxis\d*$/.test(name)) {
+        for (const name of timeAxes) {
+            const axis = figure.layout[name];
+            if (axis) {
                 axis.range = [...currentRange];
                 rangeUpdate[`${name}.range`] = [...currentRange];
             }

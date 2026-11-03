@@ -199,10 +199,61 @@ def _execute(directory: Path, pipeline_module: ModuleType, results_module: Modul
     progress = pipeline_module.run_prepared_encoding(directory)
     manifest = results_module.load_run_manifest(directory)
     config = results_module.restore_config(manifest["config"])
+    figures = _export_examples(directory, manifest, progress, results_module)
     _write_summary(directory, config, progress)
     _append_log(directory, f"Status {progress['status']}; elapsed {perf_counter() - started:.6f} s; "
                           f"completed cells {len(progress['completed_cells'])}")
-    return {"status": progress["status"], "run_directory": str(directory), "progress": progress}
+    return {"status": progress["status"], "run_directory": str(directory),
+            "progress": progress, "figures": figures}
+
+
+def _export_examples(directory: Path, manifest: dict, progress: dict, results_module: ModuleType) -> list[str]:
+    """Input saved run/manifest/progress/results; export one bounded example per region.
+
+    Return run-relative PNG filename strings. Plotting reloads saved preparation
+    and only a selected model cell at a time. Each interval starts at that
+    region's first available neural bin and spans at most 60 elapsed seconds.
+    Existing complete examples remain unchanged; interrupted exports use a new
+    subdirectory. Other saved models can be exported in the inspection view.
+    """
+    import numpy as np
+    from .plotting import save_inspection_figures
+
+    entries = []
+    for relative in progress["completed_cells"].values():
+        with np.load(directory / relative, allow_pickle=True) as archive:
+            entries.append({"path": relative, "meta": archive["meta"].item()})
+    chosen = {}
+    for entry in sorted(entries, key=_example_priority):
+        chosen.setdefault(entry["meta"]["settings"]["region"], entry)
+    prepared = None
+    paths = []
+    for role, entry in chosen.items():
+        destination = directory / "figures" / role
+        existing = list(destination.glob("*.png"))
+        if len(existing) >= 2:
+            paths.extend(str(path.relative_to(directory)) for path in existing)
+            continue
+        if existing:
+            stamp = datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S_%f")
+            destination = destination / f"continued_{stamp}"
+        if prepared is None:
+            prepared = results_module.load_preparation(Path(manifest["session_root"]) / manifest["preparation_path"])
+        cell = results_module.load_cell(directory / entry["path"])
+        regional = prepared["regions"][role]
+        start = float(regional.bin_rows.elapsed_start_s.iloc[0])
+        stop = min(start + 60, float(regional.bin_rows.elapsed_end_s.max()))
+        exported = save_inspection_figures(destination, prepared, cell, time_range_s=(start, stop),
+                                            selected_pc=int(regional.pc_ranks[0]))
+        paths.extend(str(path.relative_to(directory)) for path in exported)
+    return paths
+
+
+def _example_priority(entry: dict) -> tuple:
+    """Input saved cell metadata/path; return deterministic representative-model priority, no physical units."""
+    meta, settings = entry["meta"], entry["meta"]["settings"]
+    return (not meta["available"], settings["window"] != "whole", settings["timing_mode"] != "choice_updated",
+            settings["encoding"] != "signed_context", settings["estimator"] != "ridge", meta["cell_id"])
 
 
 def _append_log(directory: Path, message: str) -> None:

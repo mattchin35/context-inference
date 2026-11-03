@@ -215,6 +215,19 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         )
 
 
+def render_timeline_navigation(
+    st_module: object, result: SessionTimelineResult, key: str,
+) -> tuple[tuple[float, float], int]:
+    """Render existing elapsed-time/jump controls for a saved timeline result.
+
+    Inputs are Streamlit's widget interface, a saved result with UTC origin and
+    elapsed-second choice identities, and a widget-key string. Return the
+    elapsed-second (start,end) viewport and integer navigation revision. No
+    sources or neural arrays are loaded or fitted by these controls.
+    """
+    return _navigation_controls(st_module, result, key)
+
+
 def resolve_time_range(
     start_s: float, duration_s: float, bounds_s: tuple[float, float]
 ) -> tuple[float, float]:

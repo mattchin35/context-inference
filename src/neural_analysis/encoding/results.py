@@ -307,14 +307,29 @@ def load_encoding_run(run_directory: Path | str, cell_ids: Sequence[str] | None 
             raise ValueError(f"Requested cell is not completed: {cell_id}")
         cell = load_cell(run / progress["completed_cells"][cell_id])
         _check_cell_identity(cell["meta"], cell_id, manifest)
-        region = prepared["regions"][cell["meta"]["settings"]["region"]]
-        scores = region.timeline.scores.reshape(-1, region.timeline.scores.shape[-1])
-        indices, ranks = cell["selected_row_indices"], cell["pc_ranks"]
-        if np.any(indices < 0) or np.any(indices >= len(scores)) or not np.array_equal(ranks, region.pc_ranks):
-            raise ValueError("Cell observation/PC identity differs from preparation")
-        cell["observed"] = scores[indices][:, ranks - 1]
+        cell["observed"] = cell_observations(prepared, cell)
         cells[cell_id] = cell
     return {"manifest": manifest, "config": config, "preparation": prepared, "progress": progress, "cells": cells}
+
+
+def cell_observations(preparation: dict, cell: dict) -> np.ndarray:
+    """Assemble saved cell responses from one shared preparation without source access.
+
+    Inputs: preparation dict with regions' scores(W,B,K_full) and original
+    pc_ranks(K_fit); raw cell with selected_row_indices(N,) and pc_ranks(K_fit).
+    Return observed(N,K_fit) in fixed unwhitened PC-score units. Original row/PC
+    identities are validated; no input is modified and no model is fitted.
+    """
+    if cell["meta"]["preparation_id"] != preparation["meta"]["preparation_id"]:
+        raise ValueError("Cell preparation identity differs from shared activity")
+    region = preparation["regions"][cell["meta"]["settings"]["region"]]
+    scores = region.timeline.scores.reshape(-1, region.timeline.scores.shape[-1])
+    indices, ranks = cell["selected_row_indices"], cell["pc_ranks"]
+    if (indices.ndim != 1 or not np.issubdtype(indices.dtype, np.integer)
+            or np.any(indices < 0) or np.any(indices >= len(scores))
+            or not np.array_equal(ranks, region.pc_ranks)):
+        raise ValueError("Cell observation/PC identity differs from preparation")
+    return scores[indices][:, ranks - 1]
 
 
 # Small archive/identity helpers.
@@ -467,5 +482,4 @@ def _source_record(path: Path, hash_contents: bool) -> dict:
 def _digest(payload: dict) -> str:
     """Input canonicalizable control dict; return deterministic SHA256 identity string, no physical units."""
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest()[:20]
-
 

@@ -59,6 +59,8 @@ PLOT_VIEW_CONDITION_GENERALIZATION = "Condition generalization results"
 
 PLOT_VIEW_INTERREGIONAL = "Inter-regional regression results"
 
+PLOT_VIEW_CONTEXT_ENCODING = "Context encoding results"
+
 PLOT_VIEW_SESSION_TIMELINE = "Session timeline and PCA"
 
 PLOT_VIEW_OPTIONS = [
@@ -74,6 +76,7 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_TASK_DECODING,
     PLOT_VIEW_CONDITION_GENERALIZATION,
     PLOT_VIEW_INTERREGIONAL,
+    PLOT_VIEW_CONTEXT_ENCODING,
     PLOT_VIEW_SESSION_TIMELINE,
 ]
 
@@ -215,6 +218,7 @@ def metadata_view_availability(
             PLOT_VIEW_TASK_DECODING,
             PLOT_VIEW_CONDITION_GENERALIZATION,
             PLOT_VIEW_INTERREGIONAL,
+            PLOT_VIEW_CONTEXT_ENCODING,
         }:
             availability[view] = MetadataViewAvailability(True, "available")
         elif not behavior_ready:

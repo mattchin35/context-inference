@@ -155,6 +155,7 @@ from src.neural_analysis.webapp.session_inputs import (
     MetadataViewAvailability,
     PLOT_VIEW_CONDITION_GENERALIZATION,
     PLOT_VIEW_INTERREGIONAL,
+    PLOT_VIEW_CONTEXT_ENCODING,
     PLOT_VIEW_SESSION_TIMELINE,
     PLOT_VIEW_LFP_PHASE_CLUSTERING,
     PLOT_VIEW_LFP_SUMMARY,
@@ -197,6 +198,7 @@ from src.neural_analysis.webapp.summary_view import (
     render_metadata_lfp_summary_view,
 )
 from src.neural_analysis.webapp.interregional_views import render_interregional_view
+from src.neural_analysis.webapp.encoding_views import render_encoding_view
 from src.neural_analysis.webapp.condition_generalization_views import (
     render_condition_generalization_view,
 )
@@ -676,6 +678,9 @@ def _start_metadata_webapp(session: ResolvedSession) -> str | None:
     if plot_view == PLOT_VIEW_INTERREGIONAL:
         render_interregional_view(st, session)
         return None
+    if plot_view == PLOT_VIEW_CONTEXT_ENCODING:
+        render_encoding_view(st, session)
+        return None
     if plot_view == PLOT_VIEW_SESSION_TIMELINE:
         render_session_timeline_view(st, session)
         return None
@@ -772,6 +777,13 @@ def main(argv: Sequence[str] = ()) -> None:
     if plot_view == PLOT_VIEW_SESSION_TIMELINE:
         st.info(
             "Session timeline and PCA uses session metadata. Launch this webapp "
+            "with `--session-metadata <session_root>/neural_session.json`."
+        )
+        return
+
+    if plot_view == PLOT_VIEW_CONTEXT_ENCODING:
+        st.info(
+            "Context encoding results require a metadata session. Launch this webapp "
             "with `--session-metadata <session_root>/neural_session.json`."
         )
         return

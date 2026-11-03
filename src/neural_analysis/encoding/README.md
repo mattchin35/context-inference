@@ -56,6 +56,30 @@ start workers, or write outputs. Neural coverage and PC counts remain pending.
 Experimental execution follows a separate gate: synthetic validation first, then
 one user-designated session and user inspection, followed by authorized batches.
 
+## Saved inspection
+
+```bash
+uv run streamlit run src/neural_analysis/psth_webapp.py -- --session-metadata /path/to/session/neural_session.json
+```
+
+Choose **Context encoding results**. Completed cells from partial runs remain
+available. Select a saved model, raw/standardized coefficients, original/strength
+ordering, visible rows, and one original PC for the prediction trace. Coefficient
+and activity rows share original PC labels; all time panels pan together while
+the coefficient axis remains categorical. The raw neural scale stays fixed.
+
+Time controls and Jump select the interval explicitly. At 20 ms, bounded neural
+loading defaults on; pan within the loaded interval and use controls to load
+another interval. Other resolutions default to the full saved neural payload.
+No control launches fitting. Live behavioral/spike files are unnecessary after
+preparation has been saved.
+
+New runs export a coefficient summary and a bounded timeline/trace example for
+each available region under `figures/`. The saved view can export another model,
+PC, coefficient scale, or prediction scope. The export button names its exact
+time-control interval; captions identify model, PC, elapsed range, and scope.
+Exports preserve existing files and use light-mode opaque PNGs.
+
 ## Scientific and saved-data contracts
 
 - Activity windows are `[-2,+2)` seconds relative to choice. Supported bin widths

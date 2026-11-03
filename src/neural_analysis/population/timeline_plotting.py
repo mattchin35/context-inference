@@ -42,24 +42,35 @@ def build_timeline_heatmap_data(
     pc_range: tuple[int, int] | None = None,
     loaded_range_s: tuple[float, float] | None = None,
     display_scores: np.ndarray | None = None,
+    pc_order: tuple[int, ...] | None = None,
 ) -> dict[str, np.ndarray]:
     """Return explicit temporal edges, signed scores, and per-cell hover information.
 
     regional scores are (W,B,K); choices supplies elapsed_s, choice_time (UTC
     seconds), and original trial_id. pc_range is inclusive one-based ranks.
     loaded_range_s optionally selects intersecting windows in elapsed seconds.
+    pc_order optionally supplies explicit unique one-based original PC ranks
+    in display order, instead of pc_range. Existing range defaults are unchanged.
     display_scores optionally replaces selected PC values, shape (W,B,P), in
     raw score or PC-SD units. It must retain the regional window/bin order.
     Return x (M+1,) edges, y (P,) ranks, z (P,M), customdata (P,M,8). Each actual
     inter-window gap is one NaN column, regardless of its elapsed duration.
     """
     component_count = regional.scores.shape[2]
-    first, last = pc_range or (1, min(10, component_count))
-    if first < 1 or last < first or last > component_count:
-        raise ValueError("PC range must be within the available one-based ranks.")
-    ranks = np.arange(first, last + 1)
+    if pc_order is None:
+        first, last = pc_range or (1, min(10, component_count))
+        if first < 1 or last < first or last > component_count:
+            raise ValueError("PC range must be within the available one-based ranks.")
+        ranks = np.arange(first, last + 1)
+    else:
+        ranks = np.asarray(pc_order)
+        if (pc_range is not None or ranks.ndim != 1 or not len(ranks)
+                or not np.issubdtype(ranks.dtype, np.integer)
+                or len(np.unique(ranks)) != len(ranks) or np.any(ranks < 1)
+                or np.any(ranks > component_count)):
+            raise ValueError("PC order must contain unique available one-based integer ranks")
     scores = (
-        regional.scores[:, :, first - 1 : last]
+        regional.scores[:, :, ranks - 1]
         if display_scores is None
         else display_scores
     )
@@ -99,7 +110,7 @@ def build_timeline_heatmap_data(
         info[:, :, 5] = elapsed_edges[:-1]
         info[:, :, 6] = elapsed_edges[1:]
         info[:, :, 7] = (
-            regional.transform.explained_variance_ratio[first - 1 : last, None] * 100
+            regional.transform.explained_variance_ratio[ranks - 1, None] * 100
         )
         custom.append(info)
     return {
@@ -232,6 +243,29 @@ def available_event_tracks(events: pd.DataFrame) -> tuple[str, ...]:
     if any(re.fullmatch(r".*LED.*_(on|off)", name) for name in names):
         tracks.append("LED")
     return tuple(tracks)
+
+
+def add_timeline_behavior(
+    figure: go.Figure,
+    result: SessionTimelineResult,
+    event_tracks: tuple[str, ...] = (),
+    show_context: bool = True,
+) -> None:
+    """Add existing choice/context/event traces to preallocated subplot rows.
+
+    figure has choices at row1/column1 and one subsequent row per available
+    requested event track. result retains choices(W,C), events(E,C), original
+    IDs and UTC/elapsed-second times. Logged shading keeps its original timing.
+    Return None; this public helper shares existing rendering without fitting
+    or modifying result arrays. Unavailable requested event tracks are skipped.
+    """
+    contexts = context_intervals(result.events, session_time_bounds(result)[1])
+    if show_context:
+        _add_context_overlay(figure, contexts)
+    _add_choices(figure, result.choices, 1, contexts)
+    tracks = [track for track in event_tracks if track in available_event_tracks(result.events)]
+    for row, track in enumerate(tracks, start=2):
+        _add_event_track(figure, result.events, track, row)
 
 
 def plot_session_timeline(
