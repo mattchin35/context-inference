@@ -15,6 +15,9 @@ from src.neural_analysis.task_decoding.session_prediction.results import (
     SessionPredictions, discover_prediction_runs, load_prediction_result,
 )
 from src.neural_analysis.task_decoding.session_prediction.run_session import prepare_session_predictions
+from src.neural_analysis.task_decoding.session_prediction.scoring import (
+    SCORING_POPULATIONS, SCORING_VERSION, compute_prediction_performance,
+)
 
 
 @dataclass(frozen=True)
@@ -129,6 +132,7 @@ def render_prediction_controls(
     if unavailable:
         st_module.info(f"{target} unavailable: {unavailable}. Other targets remain available.")
     _render_model_details(st_module, result, target)
+    _render_performance_panel(st_module, result, Path(selected), session.session_root, target, mode_scope)
     return PredictionViewState(analysis_mode, True, result, PredictionDisplay(result, target, mode, order, count))
 
 
@@ -147,6 +151,110 @@ def load_saved_prediction_cached_for_path(path: Path, session_root: Path) -> Ses
 
 
 # Rendering/cache helpers; scientific arrays and units are unchanged.
+def _render_performance_panel(
+    st_module: object, result: SessionPredictions, path: Path, session_root: Path,
+    target: str, scope: str,
+) -> None:
+    """Render cached session-wide trial metrics from one saved target; return None.
+
+    result supplies N-choice labels, W/B/K PCA scores and saved models in their
+    original units. path/root bind the cache to prediction and PCA file stats.
+    scope keys a display-only population selector. Never fit or write products.
+    """
+    result_stat = path.stat()
+    source_stat = (session_root / result.meta["source_pca"]["path"]).stat()
+    report = _cached_prediction_performance(
+        str(path.resolve()), result_stat.st_size, result_stat.st_mtime_ns,
+        source_stat.st_size, source_stat.st_mtime_ns, target, SCORING_VERSION,
+        _result=result,
+    )
+    populations = {"all": "All eligible choices", "training_outcomes": "Training outcomes",
+                   "correct_rewarded": "Correct-rewarded", "omission": "Correct-omission", "incorrect": "Incorrect"}
+    with st_module.expander("Prediction performance"):
+        inputs = result.inputs
+        label = prediction_target_label(inputs.analysis_mode, target, inputs.target_metadata[target]["display_label"])
+        binary = inputs.target_families[inputs.target_names.index(target)] == "categorical"
+        aggregation = ("Binary probabilities are averaged before the 0.5 left/right threshold. " if binary else
+                       "Predictions and RMSE retain target units; R2 uses target variation within each scored group. ")
+        st_module.caption(f"{label}: one prediction per trial, averaged over [-1,+1) s. "
+                          + aggregation +
+                          "Scores describe the full saved session and do not change with pan or visible PCs.")
+        st_module.markdown("**Held-out performance**")
+        st_module.caption("Every held-out trial is counted once per region. Training outcomes matches the model's "
+                          "training pool; All eligible choices also includes other outcomes. "
+                          "Unavailable metrics do not mean zero performance.")
+        st_module.dataframe(_performance_rows(report["held_out"], populations), hide_index=True)
+        st_module.markdown("**Left versus right on held-out trials**")
+        population = st_module.selectbox("Laterality scoring population", options=SCORING_POPULATIONS,
+                                         format_func=populations.get, key=f"{scope}_score_population")
+        side_rows = [row for row in report["laterality"] if row["population"] == population]
+        gap_rows = [row for row in report["gaps"] if row["population"] == population]
+        st_module.dataframe(_performance_rows(side_rows, populations), hide_index=True)
+        st_module.dataframe(_performance_rows(gap_rows, populations, differences=True), hide_index=True)
+        interpretation = ("Positive accuracy differences (percentage points) favor left. "
+                          "Single-class groups have accuracy but no balanced accuracy. " if binary else
+                          "Positive R2 differences favor left; positive RMSE differences mean larger left errors. "
+                          "RMSE uses the target units. Constant/singleton targets have RMSE but no R2. ")
+        st_module.caption("Differences are left minus right. " + interpretation +
+                          "Missing side labels affect only that split. "
+                          "Side differences can reflect behavior and outcome composition as well as neural laterality; "
+                          "they do not alone establish a hemisphere effect.")
+        with st_module.expander("Training / test by fold"):
+            st_module.caption("Training uses each model's exact saved training trials and coefficients. "
+                              "Held-out uses that fold's matching training outcomes. Training sets overlap across "
+                              "folds, so their counts and scores are not pooled as independent trials.")
+            st_module.dataframe(_performance_rows(report["folds"], populations), hide_index=True)
+
+
+def _performance_rows(rows: list[dict], populations: dict[str, str], *, differences: bool = False) -> list[dict]:
+    """Format small metric records for tables; fractions become percent/percentage points.
+
+    rows contain dimensionless accuracy/R2, native-unit RMSE and trial counts.
+    populations maps canonical IDs to labels. Return new dictionaries without
+    altering records. Side differences use ordinary accuracy, not balanced accuracy.
+    """
+    labels = {"region": "Region", "population": "Population", "grouping": "Grouping", "side": "Side",
+              "fold": "Fold", "split": "Split", "n_trials": "Trials", "fit_status": "Fit status",
+              "fit_reason": "Fit reason", "left_n_trials": "Left trials", "right_n_trials": "Right trials",
+              "accuracy": "Accuracy difference (pp)" if differences else "Accuracy (%)",
+              "balanced_accuracy": "Balanced accuracy (%)", "r2": "R2 difference" if differences else "R2",
+              "rmse": "RMSE difference" if differences else "RMSE"}
+    formatted = []
+    for row in rows:
+        record = {}
+        for name, value in row.items():
+            if differences and name == "balanced_accuracy":
+                continue
+            if name in ("accuracy", "balanced_accuracy") and value is not None:
+                value *= 100
+            elif name == "population":
+                value = populations[value]
+            elif name == "grouping":
+                value = "Choice" if value == "choice" else "State/context"
+            elif name == "side":
+                value = value.capitalize()
+            elif name == "split":
+                value = "Training" if value == "training" else "Held-out"
+            record[labels[name]] = value
+        formatted.append(record)
+    return formatted
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def _cached_prediction_performance(
+    path: str, size: int, mtime_ns: int, source_size: int, source_mtime_ns: int,
+    target: str, scoring_version: str, *, _result: SessionPredictions,
+) -> dict[str, list[dict]]:
+    """Cache small target-score records by saved paths/stats and scoring version.
+
+    Path is absolute; sizes are bytes and mtimes integer nanoseconds. _result
+    contains already-validated N/W/B/T/K products and is deliberately excluded
+    from hashing, avoiding another PCA load/copy or hash on each widget change.
+    No model is fitted and no cached score alters saved scientific identity.
+    """
+    return compute_prediction_performance(_result.inputs, _result.regions, target)
+
+
 def _render_model_details(st_module: object, result: SessionPredictions, target: str) -> None:
     """Render per-fold saved counts/parameters for a selected target identifier.
 
