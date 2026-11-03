@@ -33,6 +33,24 @@ def figure_spec(view: AppTest) -> dict:
     return json.loads(json.loads(component.proto.json)["figure_json"])
 
 
+def choose_first(label: str, options: list, **settings: object) -> object:
+    """Input widget label/options/settings; return first default option, no physical units."""
+    return options[0]
+
+
+def test_configuration_defaults_prefer_pfc_and_same_numeric_over_file_hash_order() -> None:
+    """No inputs; saved metadata order cannot choose a different initial penalty policy, return None."""
+    entries = []
+    for region, mode in (("HPC", "matched_context"), ("PFC", "matched_context"), ("PFC", "same_numeric")):
+        entries.append({"id": region + mode, "meta": {"settings": {"region": region,
+            "window": "whole", "timing_mode": "choice_updated", "encoding": "separate_context",
+            "estimator": "ridge", "penalty_mode": mode}, "penalty_aliases": [mode]}})
+    fake = SimpleNamespace(sidebar=SimpleNamespace(selectbox=choose_first))
+    entry, mode = encoding_views._configuration_controls(fake, entries, "fixture")
+    assert entry["meta"]["settings"]["region"] == "PFC"
+    assert mode == "same_numeric"
+
+
 @pytest.fixture
 def completed_view_run(prepared_encoding_run: Path) -> tuple[Path, Path]:
     """Input prepared run Path; return completed run/metadata Paths, fixed (W,B,K) activity."""
@@ -88,6 +106,7 @@ def test_controls_reuse_saved_activity_and_preserve_time_revision(
     view = AppTest.from_function(render_for_test, args=(str(metadata),)).run()
     assert not view.exception
     first = figure_spec(view)
+    np.testing.assert_allclose(first["layout"]["meta"]["loaded_range_s"], [0.0, 116.0])
     component_id = view.get("bidi_component")[0].proto.id
     scale = next(item for item in view.selectbox if item.label == "Coefficient scale")
     scale.select("standardized").run()
@@ -139,3 +158,22 @@ def test_partial_run_displays_completed_cells_without_requiring_all_models(
     assert not view.exception
     assert view.get("bidi_component")
     assert any("partial" in item.value.lower() for item in view.warning)
+
+
+def test_png_export_honors_selected_reference_prediction_scope(
+    completed_view_run: tuple[Path, Path],
+) -> None:
+    """Input saved run/metadata Paths; explicitly selected reference traces keep their PNG scope, return None."""
+    from PIL import Image
+
+    run, metadata = completed_view_run
+    view = AppTest.from_function(render_for_test, args=(str(metadata),)).run()
+    next(item for item in view.selectbox if item.label == "Prediction scope").select("reference").run()
+    next(item for item in view.button if item.label.startswith("Export PNGs for ")).click().run()
+    assert not view.exception
+    paths = list((run / "figures").rglob("*.png"))
+    assert len(paths) == 2
+    for path in paths:
+        with Image.open(path) as image:
+            caption = image.info["Description"].lower()
+            assert "reference" in caption and "held-out predictions" not in caption

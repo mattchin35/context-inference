@@ -1,6 +1,7 @@
 """Saved context coefficients, fixed PC identity and coupled real-time display contracts."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -220,3 +221,43 @@ def test_light_png_exports_are_cell_identified_readable_and_captioned(plotting_d
             assert all(label in caption for label in ("PFC", "before", "choice_updated", "signed_context", "ridge", "held-out"))
     with pytest.raises(FileExistsError):
         plotting.save_inspection_figures(tmp_path / "figures", prepared, cell, selected_pc=12)
+
+
+def test_predictor_hover_shows_actual_saved_design_with_trial_and_time_metadata(plotting_data: tuple) -> None:
+    """Input prep/rawcell; fitted bins show saved X even if context-derived values differ, return None."""
+    prepared, cell = plotting_data
+    changed = {**cell, "predictors": cell["predictors"].copy()}
+    changed["predictors"][0, 0] = 1.0
+    figure = plotting.plot_encoding_timeline(prepared, changed, time_range_s=(0, 140))
+    predictors = trace_named(figure, "Model predictors")
+    assert np.asarray(predictors.z)[0, 0] == 1.0
+    assert cell["predictors"][0, 0] == -1.0
+    assert all(text in predictors.hovertemplate for text in ("Trial", "UTC", "Choice-relative", "%{z}"))
+    custom = np.asarray(predictors.customdata, dtype=object)
+    assert custom[0, 0, 0] == 105
+    np.testing.assert_allclose(custom[0, 0, 1:5].astype(float), [8.0, 8.5, -2.0, -1.5])
+    activity = trace_named(figure, "PC activity")
+    assert "Assigned predictors" in activity.hovertemplate
+    assert "signed_context=1" in str(np.asarray(activity.customdata, dtype=object)[0, 0, 10])
+
+
+def test_reference_png_export_uses_requested_scope_in_trace_and_caption(
+    plotting_data: tuple, tmp_path: Path,
+) -> None:
+    """Input prep/rawcell/output Path; explicit reference export consumes reference Yhat(N,K), return None."""
+    import matplotlib.pyplot as plt
+
+    prepared, cell = plotting_data
+    cell = {**cell, "held_out_predictions": np.full_like(cell["held_out_predictions"], np.nan)}
+    with patch.object(plt.Axes, "plot", autospec=True, side_effect=plt.Axes.plot) as plotted:
+        paths = plotting.save_inspection_figures(tmp_path / "reference", prepared, cell,
+            selected_pc=12, prediction_scope="reference", time_range_s=(0, 140))
+    calls = [call for call in plotted.call_args_list if str(call.kwargs.get("label", "")).startswith("Reference prediction")]
+    assert len(calls) == 1
+    values = np.asarray(calls[0].args[2])
+    np.testing.assert_allclose(values[np.isfinite(values)], np.repeat(cell["reference_predictions"][:, 11], 2))
+    assert not any(str(call.kwargs.get("label", "")).startswith("Held-out prediction") for call in plotted.call_args_list)
+    for path in paths:
+        with Image.open(path) as image:
+            assert "reference-fit predictions" in image.info["Description"]
+            assert "held-out predictions" not in image.info["Description"]
