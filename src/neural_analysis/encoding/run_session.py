@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -58,7 +59,9 @@ def run_encoding_session(
             if any(identities[key] != manifest["identities"][key]
                    for key in ("preparation_id", "model_id", "code_identity")):
                 raise ValueError("Inputs or numerical code changed before preparation; start a new run")
-            _publish_preparation(config, preparation_path, identities)
+            save_s = _publish_preparation(config, preparation_path, identities)
+            progress = results.inspect_run_status(directory)
+            results.write_progress(directory, {**progress, "preparation_save_s": save_s})
         return _execute(directory, pipeline, results)
 
     if config_path is None or run_directory is not None:
@@ -87,6 +90,7 @@ def run_encoding_session(
     _append_log(directory, f"Session {config.session_root}; identities {json.dumps(identities, sort_keys=True)}")
     _write_summary(directory, config, {"status": "preparing", "completed_cells": {}})
     try:
+        preparation_save_s = 0.0
         if preparation_path.exists():
             saved = results.load_preparation(preparation_path)
             if saved["meta"]["preparation_id"] != identities["preparation_id"]:
@@ -94,7 +98,9 @@ def run_encoding_session(
             del saved
             _append_log(directory, f"Reusing immutable preparation {preparation_path}")
         else:
-            _publish_preparation(config, preparation_path, identities)
+            preparation_save_s = _publish_preparation(config, preparation_path, identities)
+        progress = results.inspect_run_status(directory)
+        results.write_progress(directory, {**progress, "preparation_save_s": preparation_save_s})
         return _execute(directory, pipeline, results)
     except Exception as error:
         _append_log(directory, f"ERROR {type(error).__name__}: {error}")
@@ -171,8 +177,8 @@ def _plan(config: EncodingConfig) -> dict:
             "context_event_diagnostics": behavior.meta["context_event_diagnostics"]}
 
 
-def _publish_preparation(config: EncodingConfig, path: Path, identities: dict) -> None:
-    """Input config/new NPZ Path/identities; save one fixed PCA snapshot, return None.
+def _publish_preparation(config: EncodingConfig, path: Path, identities: dict) -> float:
+    """Input config/new NPZ Path/identities; save a fixed PCA snapshot and return publication seconds.
 
     Saved score axes are (window,bin,original PC), with UTC/elapsed/relative
     seconds retained by preparation. Runtime is recorded in elapsed seconds.
@@ -182,10 +188,13 @@ def _publish_preparation(config: EncodingConfig, path: Path, identities: dict) -
     started = perf_counter()
     session, trials, behavior = preparation.load_behavior_inputs(config)
     regions, unavailable = preparation.prepare_regional_activity(config, session, trials, behavior)
+    preparation_s = perf_counter() - started
+    save_started = perf_counter()
     results.save_preparation(path, trials, behavior, regions,
                              {**identities, "generator": __name__, "unavailable": unavailable,
-                              "preparation_elapsed_s": perf_counter() - started,
+                              "preparation_elapsed_s": preparation_s,
                               "randomness_used": False, "random_seed": None})
+    return perf_counter() - save_started
 
 
 def _execute(directory: Path, pipeline_module: ModuleType, results_module: ModuleType) -> dict:
@@ -200,11 +209,82 @@ def _execute(directory: Path, pipeline_module: ModuleType, results_module: Modul
     manifest = results_module.load_run_manifest(directory)
     config = results_module.restore_config(manifest["config"])
     figures = _export_examples(directory, manifest, progress, results_module)
+    performance = benchmark_encoding_run(directory)
+    (directory / "performance.json").write_text(json.dumps(performance, indent=2) + "\n", encoding="ascii")
     _write_summary(directory, config, progress)
     _append_log(directory, f"Status {progress['status']}; elapsed {perf_counter() - started:.6f} s; "
                           f"completed cells {len(progress['completed_cells'])}")
     return {"status": progress["status"], "run_directory": str(directory),
-            "progress": progress, "figures": figures}
+            "progress": progress, "figures": figures, "performance": performance}
+
+
+def benchmark_encoding_run(run_directory: Path | str) -> dict:
+    """Measure saved-result loading, representative plots, bytes and process memory.
+
+    Input is a completed/partial saved run Path. Return a JSON-compatible report:
+    times in seconds, sizes/memory in bytes, bin width in milliseconds, and
+    regional window/bin/unit/PC counts. Shared preparation is loaded once and
+    one representative prediction cell per available region is loaded at a time.
+    No live sources, PCA, or regression fits are loaded/executed here.
+
+    Preparation/fit/cell-save durations are recorded from the original computation;
+    preparation_save_s measures publication in this run (zero for reused shared
+    preparation). Unrecorded older timings remain None. Load/figure/serialization
+    durations are measured now, with unspecified filesystem cache state. Peak RSS
+    covers the current process lifetime, including imports and earlier work.
+    This function returns measurements without writing files or timing a browser.
+    """
+    import resource
+    from . import results
+    from .plotting import plot_encoding_timeline
+
+    started = perf_counter()
+    directory = Path(run_directory)
+    manifest = results.load_run_manifest(directory)
+    progress = json.loads((directory / "progress.json").read_text(encoding="utf-8"))
+    path = Path(manifest["session_root"]) / manifest["preparation_path"]
+    prepared = results.load_preparation(path)
+    entries = _saved_cell_metadata(directory, progress)
+    chosen = _representative_cells(entries)
+    load_s = perf_counter() - started
+    regions = {}
+    figure_s, serialization_s, serialization_bytes = 0.0, 0.0, 0
+    for role, region in prepared["regions"].items():
+        windows, bins, _ = region.timeline.scores.shape
+        regions[role] = {"windows": windows, "bins": bins,
+            "input_units": len(region.timeline.transform.input_unit_ids),
+            "retained_units": len(region.timeline.transform.retained_unit_ids),
+            "fitted_pcs": len(region.pc_ranks),
+            "pca_s": region.timeline.timings_s.get("standardization_and_pca")}
+        if role not in chosen:
+            continue
+        cell_started = perf_counter()
+        cell = results.load_cell(directory / chosen[role]["path"])
+        load_s += perf_counter() - cell_started
+        start = float(region.bin_rows.elapsed_start_s.iloc[0])
+        stop = min(start + 60, float(region.bin_rows.elapsed_end_s.max()))
+        construction_started = perf_counter()
+        figure = plot_encoding_timeline(prepared, cell, time_range_s=(start, stop), loaded_range_s=(start, stop))
+        figure_s += perf_counter() - construction_started
+        serialization_started = perf_counter()
+        payload = figure.to_json()
+        serialization_s += perf_counter() - serialization_started
+        serialization_bytes += len(payload.encode("utf-8"))
+        del cell, figure, payload
+    save_records = _cell_save_records(directory)
+    save_times = [save_records.get(entry["meta"]["cell_id"]) for entry in entries]
+    return {"measurement": "measured; filesystem cache state unspecified",
+        "session_id": prepared["behavior"].session_id, "bin_width_ms": manifest["config"]["bin_width_ms"],
+        "regions": regions, "recorded_preparation_s": prepared["meta"].get("preparation_elapsed_s"),
+        "preparation_save_s": progress.get("preparation_save_s"),
+        "aggregate_fit_s": _complete_timing_sum([entry["meta"].get("fit_elapsed_s") for entry in entries]),
+        "aggregate_cell_save_s": _complete_timing_sum(save_times), "load_s": load_s,
+        "figure_s": figure_s, "serialization_s": serialization_s, "serialization_bytes": serialization_bytes,
+        "compressed_npz_bytes": path.stat().st_size + sum((directory / entry["path"]).stat().st_size for entry in entries),
+        "peak_process_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024),
+        "memory_note": "Peak RSS covers this process lifetime, including imports and prior work; not incremental analysis memory.",
+        "timing_note": "Fit seconds include reference/fold regression fitting, prediction and scoring; PCA seconds include unit standardization.",
+        "browser_responsiveness": "requires separate interactive inspection"}
 
 
 def _export_examples(directory: Path, manifest: dict, progress: dict, results_module: ModuleType) -> list[str]:
@@ -216,16 +296,9 @@ def _export_examples(directory: Path, manifest: dict, progress: dict, results_mo
     Existing complete examples remain unchanged; interrupted exports use a new
     subdirectory. Other saved models can be exported in the inspection view.
     """
-    import numpy as np
     from .plotting import save_inspection_figures
 
-    entries = []
-    for relative in progress["completed_cells"].values():
-        with np.load(directory / relative, allow_pickle=True) as archive:
-            entries.append({"path": relative, "meta": archive["meta"].item()})
-    chosen = {}
-    for entry in sorted(entries, key=_example_priority):
-        chosen.setdefault(entry["meta"]["settings"]["region"], entry)
+    chosen = _representative_cells(_saved_cell_metadata(directory, progress))
     prepared = None
     paths = []
     for role, entry in chosen.items():
@@ -247,6 +320,55 @@ def _export_examples(directory: Path, manifest: dict, progress: dict, results_mo
                                             selected_pc=int(regional.pc_ranks[0]))
         paths.extend(str(path.relative_to(directory)) for path in exported)
     return paths
+
+
+def _saved_cell_metadata(directory: Path, progress: dict) -> list[dict]:
+    """Input saved run Path/progress; return indexed cell paths/metadata without prediction-array reads."""
+    import numpy as np
+
+    entries = []
+    for relative in progress["completed_cells"].values():
+        with np.load(directory / relative, allow_pickle=True) as archive:
+            entries.append({"path": relative, "meta": archive["meta"].item()})
+    return entries
+
+
+def _representative_cells(entries: list[dict]) -> dict[str, dict]:
+    """Input completed cell metadata/path entries; return one deterministic example per region, no units changed."""
+    chosen = {}
+    for entry in sorted(entries, key=_example_priority):
+        chosen.setdefault(entry["meta"]["settings"]["region"], entry)
+    return chosen
+
+
+def _cell_save_records(directory: Path) -> dict[str, float]:
+    """Input run Path; return measured original NPZ-publication seconds keyed by cell ID.
+
+    Reused-cell log lines and unrecorded/interrupted timing entries are omitted;
+    absence stays distinguishable from a measured zero duration.
+    """
+    path = directory / "run.log"
+    records = {}
+    if not path.is_file():
+        return records
+    for line in path.read_text(encoding="ascii").splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        value = record.get("save_s")
+        if record.get("action") == "fitted" and isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
+            records[record["cell_id"]] = value
+    return records
+
+
+def _complete_timing_sum(values: list[float | None]) -> float | None:
+    """Input recorded scalar durations in seconds; return their sum or None if any timing was unrecorded."""
+    if any(value is None or not math.isfinite(value) or value < 0 for value in values):
+        return None
+    return float(sum(values))
 
 
 def _example_priority(entry: dict) -> tuple:

@@ -115,10 +115,14 @@ def plot_encoding_timeline(
     coefficient_custom = np.empty((len(display), slopes.shape[0], 2), dtype=object)
     coefficient_custom[:, :, 0] = np.asarray([f"PC{value}" for value in ranks])[:, None]
     coefficient_custom[:, :, 1] = cell["column_names"][None, :]
+    coefficient_panel = figure.get_subplot(activity_row, 1)
     figure.add_trace(go.Heatmap(x=cell["column_names"], y=np.arange(len(display)), z=slopes[:, display].T,
         customdata=coefficient_custom, name="Coefficients", colorscale=SIGNED_COLORS,
         zmin=-coefficient_limit, zmax=coefficient_limit, zauto=False, zsmooth=False,
-        hoverongaps=False, colorbar={"title": f"{coefficient_scale} slope", "x": -0.06, "len": 0.25},
+        hoverongaps=False, colorbar={"title": {"text": f"{coefficient_scale} slope", "side": "top"}, "orientation": "h",
+            "x": sum(coefficient_panel.xaxis.domain) / 2, "xanchor": "center",
+            "y": coefficient_panel.yaxis.domain[1] + 0.035, "yanchor": "bottom", "thickness": 10,
+            "len": coefficient_panel.xaxis.domain[1] - coefficient_panel.xaxis.domain[0]},
         hovertemplate="%{customdata[0]} / %{customdata[1]}<br>Coefficient %{z:.6g}<extra></extra>"),
         row=activity_row, col=1)
     data = timeline_plotting.build_timeline_heatmap_data(region.timeline, behavior.choices,
@@ -170,6 +174,13 @@ def plot_encoding_timeline(
             annotation.x = sum(activity_domain) / 2
     figure.update_xaxes(title_text="Elapsed session time (s; zero = first trial start)", row=detail_row, col=1)
     figure.update_yaxes(fixedrange=True, showgrid=False, zeroline=False)
+    # Interval helpers draw one trace per event; show their shared legend only once.
+    legend_names = set()
+    for trace in figure.data:
+        if trace.showlegend is not False and trace.name:
+            if trace.name in legend_names:
+                trace.showlegend = False
+            legend_names.add(trace.name)
     figure.update_layout(title={"text": _configuration_label(cell, inspection_penalty_mode), "font": {"size": 16}},
         height=max(780, 680 + len(display) * 14 + len(tracks) * 55),
         margin={"l": 100, "r": 110, "t": 100, "b": 80}, template="plotly_white",

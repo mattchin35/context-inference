@@ -117,6 +117,19 @@ version, parameters, units/axes, and randomness provenance. Completed scientific
 unavailability is finished work; it is not repeatedly refit during resume.
 Experimental outputs are rejected inside the source repository.
 
+Each executed new/resumed run also writes `performance.json`: regional
+window/bin/unit/PC counts, recorded preparation/PCA/fit/publication seconds,
+saved-result load and representative figure/serialization seconds, serialized
+and compressed NPZ bytes, and peak process RSS. Peak RSS includes imports and
+prior work in that process; it is not incremental analysis memory. Filesystem
+cache state is unspecified. Older unrecorded timings remain null. These small
+synthetic measurements do not establish real-session performance.
+`preparation_save_s` measures publication in the current run, so reused shared
+preparation records zero; `recorded_preparation_s` describes its original computation.
+`run_session.benchmark_encoding_run(run_directory)` repeats the saved-only
+measurements without fitting or writing; it loads shared preparation once and
+one representative prediction cell per region at a time.
+
 The initial implementation covers PC ridge/OLS inspection. Production unit fits,
 Poisson, significance testing, automatic alpha tuning, and additional predictors
 remain outside this delivery.

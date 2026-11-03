@@ -57,6 +57,7 @@ def run_prepared_encoding(run_directory: Path | str) -> dict:
     results.write_progress(run, progress)
     for description in cells:
         cell_started = perf_counter()
+        save_s = None
         cell_id = description["cell_id"]
         relative = str(Path("cells") / f"{cell_id}.npz")
         path = run / relative
@@ -72,9 +73,11 @@ def run_prepared_encoding(run_directory: Path | str) -> dict:
             region = snapshot["regions"][description["settings"]["region"]]
             cell = _compute_cell(config, region, description, manifest["identities"])
             cell["meta"]["elapsed_s"] = perf_counter() - cell_started
+            save_started = perf_counter()
             results.save_cell(path, cell)
+            save_s = perf_counter() - save_started
             action = "fitted"
-        _append_cell_log(run, cell, action, perf_counter() - cell_started)
+        _append_cell_log(run, cell, action, perf_counter() - cell_started, save_s)
         # The durable NPZ always precedes this small index publication.
         progress["completed_cells"][cell_id] = relative
         results.write_progress(run, progress)
@@ -150,22 +153,26 @@ def _compute_cell(config: EncodingConfig, region: PreparedRegion, description: d
         "reference_scope": "all-eligible-data reference fit",
         "score_scope": "held-out regression conditional on fixed descriptive session PCA",
         "cv_available": False, "cv_reason": "No eligible predictor bins", "reference_valid": False,
+        "fit_elapsed_s": 0.0,
     }
     cell = _empty_cell_arrays(len(indices), len(names), len(region.pc_ranks))
     cell.update({"selected_row_indices": indices, "pc_ranks": region.pc_ranks,
                  "predictors": x, "fold_ids": folds, "column_names": np.asarray(names), "meta": meta})
     if not len(indices):
         return cell
+    fit_started = perf_counter()
     try:
         evaluated = modeling.evaluate_block_cv(x, y, folds, estimator=settings["estimator"], alpha=config.alpha,
                                               encoding=encoding, penalty_mode=penalty_mode)
     except (ValueError, ArithmeticError, np.linalg.LinAlgError) as error:
+        meta["fit_elapsed_s"] = perf_counter() - fit_started
         reason = f"Reference fit unavailable: {error}"
         meta.update({"available": False, "unavailable_reason": reason, "cv_reason": reason})
         cell["fold_reasons"] = np.full(5, reason)
         cell["fold_r2_reason"] = np.full((5, len(region.pc_ranks)), reason)
         cell["r2_reason"] = np.full(len(region.pc_ranks), reason)
         return cell
+    meta["fit_elapsed_s"] = perf_counter() - fit_started
     reference = evaluated["reference_fit"]
     cell.update({"reference_slopes": reference.slopes, "reference_intercept": reference.intercept,
                  "standardized_slopes": modeling.standardize_coefficients(reference, x, y)})
@@ -206,9 +213,10 @@ def _fit_metadata(fitted: modeling.LinearFit) -> dict:
         "coefficient_convention": fitted.coefficient_convention, "limitations": list(fitted.limitations)}
 
 
-def _append_cell_log(run: Path, cell: dict, action: str, elapsed_s: float) -> None:
+def _append_cell_log(run: Path, cell: dict, action: str, elapsed_s: float, save_s: float | None) -> None:
     """Append one cell's settings/counts/status/reasons to run Path; wall time is scalar seconds.
 
+    save_s is measured NPZ publication seconds, or None for reused cells.
     Input cell contains native coefficient/prediction arrays, which are not
     duplicated in the log. Return None; plain JSON text preserves errors and
     scientific unavailability alongside execution progress.
@@ -217,7 +225,8 @@ def _append_cell_log(run: Path, cell: dict, action: str, elapsed_s: float) -> No
     record = {name: meta[name] for name in ("cell_id", "settings", "row_count", "trial_count",
         "configured_alpha", "effective_alpha", "cv_available", "cv_reason", "unavailable_reason")}
     record.update({"action": action, "status": "available" if meta["available"] else "unavailable",
-                   "elapsed_s": elapsed_s, "fold_reasons": cell["fold_reasons"].tolist()})
+                   "elapsed_s": elapsed_s, "save_s": save_s,
+                   "fold_reasons": cell["fold_reasons"].tolist()})
     with (run / "run.log").open("a", encoding="ascii") as stream:
         stream.write(json.dumps(record, sort_keys=True, ensure_ascii=True) + "\n")
 
