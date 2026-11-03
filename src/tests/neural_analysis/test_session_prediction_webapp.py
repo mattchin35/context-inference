@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import pandas as pd
 
 from streamlit.testing.v1 import AppTest
 
@@ -231,3 +232,82 @@ def test_continuous_details_do_not_describe_values_as_binary_classes(runnable_se
     assert not at.exception
     assert "left_class_1" not in at.dataframe[0].value.columns
     assert "right_class_0" not in at.dataframe[0].value.columns
+
+
+@pytest.mark.parametrize("mode", ["correct_rewarded_generalization", "mixed_outcome_decoding"])
+def test_saved_performance_panel_laterality_population_and_cache(runnable_session, tmp_path, monkeypatch, mode):
+    """Portable saved scores show both lateralities and reuse small summaries on display changes."""
+    from src.neural_analysis.webapp import session_prediction_view, timeline_view
+
+    trials = pd.read_csv(runnable_session.parent / "augmented.csv")
+    trials.loc[5, "correct"] = 0
+    trials.loc[5, "state_int"] = 1 - trials.loc[5, "action"]
+    trials.loc[5, "reward"] = 0
+    for name in ("augmented.csv", "trials.csv"):
+        trials.to_csv(runnable_session.parent / name, index=False)
+    report = prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"}, analysis_mode=mode)
+    copied = tmp_path / "portable_performance"
+    shutil.copytree(runnable_session.parent / "analysis_runs", copied / "analysis_runs")
+    shutil.copyfile(runnable_session, copied / "neural_session.json")
+    unchanged = {path: path.read_bytes() for path in copied.rglob("*") if path.is_file()}
+
+    def forbidden(*args, **kwargs):
+        """No fitting/raw path is allowed after copying portable products; return never."""
+        raise AssertionError("Performance display cannot fit or use raw inputs")
+
+    monkeypatch.setattr(timeline_view.timeline_io, "timeline_configuration", forbidden)
+    monkeypatch.setattr(timeline_view, "load_timeline_behavior_cached", forbidden)
+    monkeypatch.setattr(session_prediction_view, "prepare_session_predictions", forbidden)
+    original = session_prediction_view.compute_prediction_performance
+    compute = Mock(wraps=original)
+    monkeypatch.setattr(session_prediction_view, "compute_prediction_performance", compute)
+    at = AppTest.from_function(render_prediction_test_app, args=(str(copied / "neural_session.json"),)).run()
+    assert not at.exception
+    assert compute.call_count == 1
+    assert any(expander.label == "Prediction performance" for expander in at.expander)
+    overall = next(item.value for item in at.dataframe if "Population" in item.value.columns
+                   and "Grouping" not in item.value.columns and "Fold" not in item.value.columns)
+    assert set(overall["Population"]) >= {"All eligible choices", "Training outcomes", "Correct-rewarded", "Incorrect"}
+    assert overall["Accuracy (%)"].dropna().between(0, 100).all()
+    folds = next(item.value for item in at.dataframe if "Split" in item.value.columns)
+    assert set(folds["Split"]) == {"Training", "Held-out"}
+    assert set(folds["Fold"]) == set(range(5))
+    assert any("[-1,+1)" in item.value and "trial" in item.value for item in at.caption)
+    before_path, before_revision = component_path(at.main), figure_spec(at)["layout"]["uirevision"]
+    next(widget for widget in at.selectbox if widget.label == "Laterality scoring population").select("incorrect").run()
+    assert not at.exception
+    sides = next(item.value for item in at.dataframe if "Side" in item.value.columns)
+    assert set(sides["Grouping"]) == {"Choice", "State/context"}
+    assert set(sides["Side"]) == {"Left", "Right"}
+    assert set(sides["Region"]) == {"PFC", "HPC"}
+    assert sides.groupby(["Region", "Grouping"])["Trials"].sum().eq(1).all()
+    assert sides.loc[sides["Trials"] == 0, "Accuracy (%)"].isna().all()
+    gaps = next(item.value for item in at.dataframe if "Accuracy difference (pp)" in item.value.columns)
+    assert gaps["Accuracy difference (pp)"].isna().all()  # One side is absent in each one-trial group.
+    assert compute.call_count == 1
+    next(widget for widget in at.selectbox if widget.label == "Prediction PC view").select("weighted").run()
+    assert compute.call_count == 1
+    assert component_path(at.main) == before_path
+    assert figure_spec(at)["layout"]["uirevision"] == before_revision
+    next(widget for widget in at.selectbox if widget.label == "Prediction target").select("current_action").run()
+    assert compute.call_count == 2
+    assert not at.exception
+    assert all(path.read_bytes() == content for path, content in unchanged.items())
+    assert len(unchanged) == len([path for path in copied.rglob("*") if path.is_file()])
+    assert (copied / report.result_path.relative_to(runnable_session.parent)).exists()
+
+
+def test_continuous_performance_panel_has_native_errors_and_no_class_accuracy(runnable_session):
+    """Continuous target changes expose R2/RMSE and meaningful side-error differences."""
+    prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"})
+    at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
+    next(widget for widget in at.selectbox if widget.label == "Prediction target").select("relative_doubt").run()
+    assert not at.exception
+    overall = next(item.value for item in at.dataframe if "Population" in item.value.columns
+                   and "Grouping" not in item.value.columns and "Fold" not in item.value.columns)
+    assert "R2" in overall.columns and "RMSE" in overall.columns
+    assert "Accuracy (%)" not in overall.columns
+    assert overall["RMSE"].dropna().ge(0).all()
+    assert any("target units" in item.value and "RMSE" in item.value for item in at.caption)
+    gaps = next(item.value for item in at.dataframe if "RMSE difference" in item.value.columns)
+    assert "R2 difference" in gaps.columns
