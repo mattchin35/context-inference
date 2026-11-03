@@ -75,6 +75,8 @@ def test_dry_run_writes_and_fits_nothing(runnable_session, monkeypatch):
     assert report.details["source_pca_missing"]
     assert report.details["max_model_count"] == 70
     assert report.details["prediction_bytes_upper_bound"] > 0
+    assert report.details["source_selection"]["PFC"]["unit_count"] > 0
+    assert "unit_ids" not in report.details["source_selection"]["PFC"]
     assert not (root / "analysis_runs").exists()
 
 
