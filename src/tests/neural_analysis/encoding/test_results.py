@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from src.neural_analysis.encoding.configuration import EncodingConfig
-from src.neural_analysis.encoding import preparation, results
+from src.neural_analysis.encoding import pipeline, preparation, results
 
 
 def forbid_source_access(*args: object, **kwargs: object) -> None:
@@ -171,3 +171,36 @@ def test_invalid_preparation_version_is_reported_without_overwrite(prepared_enco
     with pytest.raises(ValueError, match="version|schema"):
         results.load_preparation(path)
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("failure", ["missing", "identity", "version"])
+def test_complete_status_validates_published_preparation(prepared_encoding_run: Path, failure: str) -> None:
+    """Input completed run Path/failure; missing or mismatched shared PCA cannot appear reusable, return None."""
+    pipeline.run_prepared_encoding(prepared_encoding_run)
+    manifest = results.load_run_manifest(prepared_encoding_run)
+    path = Path(manifest["session_root"]) / manifest["preparation_path"]
+    if failure == "missing":
+        path.unlink()
+    else:
+        with np.load(path, allow_pickle=True) as archive:
+            arrays = {name: archive[name] for name in archive.files}
+        meta = arrays["meta"].item()
+        meta["preparation_id" if failure == "identity" else "schema_version"] = "wrong"
+        arrays["meta"] = np.asarray(meta, dtype=object)
+        np.savez_compressed(path, **arrays)
+    with pytest.raises((ValueError, OSError), match="preparation|schema|version"):
+        results.inspect_run_status(prepared_encoding_run)
+
+
+def test_numeric_runtime_versions_are_provenance_and_scientific_identity(
+    encoding_session: EncodingConfig, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Input config/patch; changed numerical-library version changes both stage IDs, return None."""
+    first = results.compute_run_identities(encoding_session)
+    changed = {**first["runtime_versions"], "numpy": "different-numerical-version"}
+    monkeypatch.setattr(results, "numerical_runtime_versions", Mock(return_value=changed), raising=False)
+    second = results.compute_run_identities(encoding_session)
+    assert second["preparation_id"] != first["preparation_id"]
+    assert second["model_id"] != first["model_id"]
+    assert second["runtime_versions"] == changed
+    assert "python" in first["runtime_versions"]

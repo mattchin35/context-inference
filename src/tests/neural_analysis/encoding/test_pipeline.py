@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from src.neural_analysis.encoding import modeling, pipeline, results
+from src.neural_analysis.encoding.modeling import evaluate_block_cv as original_evaluate
 from src.neural_analysis.encoding.results import write_progress as original_write_progress
 
 
@@ -22,6 +23,15 @@ def crash_after_cell_publish(run_directory: Path, progress: dict) -> None:
 def forbid_work(*args: object, **kwargs: object) -> None:
     """Reject arbitrary fitting/source arguments; return no arrays or physical units."""
     raise AssertionError("Completed saved work must not run again")
+
+
+def fail_one_reference_cell(
+    predictors: np.ndarray, responses: np.ndarray, fold_ids: np.ndarray, **settings: object,
+) -> dict:
+    """Input X(N,P)/PC Y(N,K)/fold IDs; fail only one PFC signed ridge reference, return no repaired arrays."""
+    if len(predictors) == 60 and settings.get("estimator") == "ridge" and settings.get("encoding") == "signed_context":
+        raise ValueError("synthetic reference-cell fit failure")
+    return original_evaluate(predictors, responses, fold_ids, **settings)
 
 
 def test_pipeline_publishes_unique_fits_with_explicit_aliases_and_observation_identity(prepared_encoding_run: Path) -> None:
@@ -187,3 +197,86 @@ def test_saved_cells_do_not_duplicate_full_activity_or_other_configuration_resul
             assert "reference_slopes" in archive.files and "fold_slopes" in archive.files
             assert "observed" not in archive.files  # Reconstructed from shared preparation on load.
             assert "pfc_scores" not in archive.files and "hpc_scores" not in archive.files
+
+
+def test_completed_resume_validates_each_cell_once(prepared_encoding_run: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Input run Path/patch; resume validates ten published cells once without retaining all arrays, return None."""
+    pipeline.run_prepared_encoding(prepared_encoding_run)
+    counter = Mock(wraps=results.load_cell)
+    monkeypatch.setattr(results, "load_cell", counter)
+    pipeline.run_prepared_encoding(prepared_encoding_run)
+    assert counter.call_count == 10
+
+
+@pytest.mark.parametrize("array_name,bad_value", [("held_out_predictions", np.nan), ("mse", np.inf)])
+def test_cv_available_cell_rejects_nonfinite_primary_products(
+    prepared_encoding_run: Path, array_name: str, bad_value: float,
+) -> None:
+    """Input run Path/product/scalar; a valid-CV claim requires finite OOF and MSE, return None."""
+    progress = pipeline.run_prepared_encoding(prepared_encoding_run)
+    path = prepared_encoding_run / next(iter(progress["completed_cells"].values()))
+    with np.load(path, allow_pickle=True) as archive:
+        arrays = {name: archive[name] for name in archive.files}
+    assert arrays["meta"].item()["cv_available"]
+    arrays[array_name].flat[0] = bad_value
+    np.savez_compressed(path, **arrays)
+    with pytest.raises(ValueError, match="finite|prediction|MSE|mse"):
+        results.load_cell(path)
+    with pytest.raises(ValueError, match="finite|prediction|MSE|mse"):
+        results.inspect_run_status(prepared_encoding_run)
+
+
+@pytest.mark.parametrize("array_name", [
+    "fold_valid", "fold_train_counts", "fold_test_counts", "fold_reasons", "fold_r2_reason",
+    "r2_reason", "column_names", "fold_ids", "pc_ranks", "selected_row_indices",
+])
+def test_cell_loader_validates_metadata_axes_and_integer_identities(
+    prepared_encoding_run: Path, array_name: str,
+) -> None:
+    """Input run Path/array name; malformed fold/predictor/response metadata cannot load, return None."""
+    progress = pipeline.run_prepared_encoding(prepared_encoding_run)
+    path = prepared_encoding_run / next(iter(progress["completed_cells"].values()))
+    with np.load(path, allow_pickle=True) as archive:
+        arrays = {name: archive[name] for name in archive.files}
+    if array_name in ("fold_ids", "pc_ranks", "selected_row_indices"):
+        arrays[array_name] = arrays[array_name].astype(float)
+        arrays[array_name].flat[0] = 0.5
+    else:
+        arrays[array_name] = arrays[array_name][:-1]
+    np.savez_compressed(path, **arrays)
+    with pytest.raises(ValueError, match="shape|integer|identity|fold|column|rank"):
+        results.load_cell(path)
+
+
+def test_reference_cell_failure_is_saved_unavailable_and_other_cells_continue(
+    prepared_encoding_run: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Input run Path/patch; failed reference preserves selected row/PC identity and never retries, return None."""
+    monkeypatch.setattr(modeling, "evaluate_block_cv", fail_one_reference_cell)
+    progress = pipeline.run_prepared_encoding(prepared_encoding_run)
+    assert progress["status"] == "complete" and len(progress["completed_cells"]) == 10
+    saved = results.load_encoding_run(prepared_encoding_run)
+    failed = [cell for cell in saved["cells"].values() if not cell["meta"]["available"]]
+    assert len(failed) == 1
+    cell = failed[0]
+    assert "synthetic reference-cell" in cell["meta"]["unavailable_reason"]
+    assert not cell["meta"]["reference_valid"]
+    assert len(cell["selected_row_indices"]) == 60
+    np.testing.assert_array_equal(cell["pc_ranks"], saved["preparation"]["regions"]["PFC"].pc_ranks)
+    assert cell["reference_predictions"].shape == cell["observed"].shape
+    assert np.isnan(cell["reference_predictions"]).all()
+    monkeypatch.setattr(modeling, "evaluate_block_cv", forbid_work)
+    assert pipeline.run_prepared_encoding(prepared_encoding_run)["status"] == "complete"
+
+
+def test_runtime_version_change_refuses_resume_without_modifying_progress(
+    prepared_encoding_run: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Input run Path/patch; numerical runtime drift requires a new run before writes, return None."""
+    manifest = results.load_run_manifest(prepared_encoding_run)
+    changed = {**manifest["identities"]["runtime_versions"], "scipy": "different-numerical-version"}
+    monkeypatch.setattr(results, "numerical_runtime_versions", Mock(return_value=changed), raising=False)
+    original = (prepared_encoding_run / "progress.json").read_bytes()
+    with pytest.raises(ValueError, match="runtime|version|new run"):
+        pipeline.run_prepared_encoding(prepared_encoding_run)
+    assert (prepared_encoding_run / "progress.json").read_bytes() == original
