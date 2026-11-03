@@ -342,6 +342,17 @@ shared full-table block map. `modeling.py` fits weighted fixed L2/ridge models
 on all saved unwhitened regional PCs; `results.py` owns named-array archives,
 portable PCA references and scientific identities. `run_session.py` and
 `run_batch.py` compose preparation; `plotting.py` contains display-only helpers.
+Two fixed modes share the same source PCA and full-table block map:
+`correct_rewarded_generalization` (default seven targets) and
+`mixed_outcome_decoding` (state/action only, training on correct-rewarded,
+correct-omission and incorrect trials). Pass `--analysis-mode` to either runner
+or select **Analysis** in the timeline. Each mode has its own saved identity;
+the mixed product does not refit the original targets or matching PCA.
+New v2/schema-2 products persist explicit training membership; original
+v1/schema-1 archives load read-only as correct-rewarded generalization.
+At fixed C, mixed training changes sample size and regularization relative to
+average loss as well as outcome composition; it is not a controlled comparison
+of composition alone.
 
 This path preserves the existing decoder's models, pooled `full` window and
 saved schemas. Existing target-loader callers remain strict by default;

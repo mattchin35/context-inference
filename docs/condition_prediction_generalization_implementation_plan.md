@@ -1,11 +1,11 @@
 # Condition Generalization and Mixed-Outcome Decoding: Implementation Handoff
 
-Status: original generalization implemented and numerically validated;
-mixed-outcome extension planned, 2026-11-03. Scientific choices are confirmed.
-WP1-WP5a and original CT026 numerical/browser validation are complete; user
-acceptance is not recorded. WP6-WP9 below are pending. This revision updates
-documentation only; extension source/test work awaits an implementation
-instruction. No experimental batch run. Keep this existing filename.
+Status: both analysis modes implemented, 2026-11-03. WP6-WP8 and WP9
+documentation/synthetic/browser gates are complete (216 integration tests).
+Original CT026 generalization validation is recorded; user acceptance and a
+new CT026 mixed-outcome preparation remain outstanding. No experimental run
+or batch was included in the extension implementation instruction.
+Keep this existing filename.
 
 Read the [scientific spec](condition_prediction_generalization_spec_v1.md),
 [SoftwareDesign.md](SoftwareDesign.md), and repository `AGENTS.md` before
@@ -25,16 +25,16 @@ checkpointing to this analysis.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-03 / `refactor` / `d2bdd43`; CT026 computation used `2c39850`. Local `origin/refactor` and HEAD agree (0 behind / 0 ahead). Recheck on resumption. |
-| Phase / authorization | User authorized extension implementation. WP6-WP7 GREEN; WP8 next. No new experimental processing, batch, transfer or cluster operation included. |
+| Date / branch / inspected HEAD | 2026-11-03 / `refactor`; validated extension source commit `5b72147`, original CT026 computation `2c39850`. Baseline was `d2bdd43`; extension commits are local, not pushed. Recheck on resumption. |
+| Phase / authorization | User authorized extension implementation; code and synthetic/browser gates complete. No new experimental processing, batch, transfer or cluster operation included. |
 | Scientific settings | Two fixed modes confirmed; mixed-outcome state AND action, with the five continuous readouts retained only in correct-rewarded generalization. See Section 2. |
-| Source/tests | WP6-WP7 implemented. Prediction package plus existing target regressions: 125 passed. WP8-WP9 pending. |
-| Documentation | Revision 2 integrates both modes, WP6-WP9, saved-anchor UI state, cross-configuration navigation, implementation-review corrections, and the user-approved bounded-loading navigation exception. Original work is committed through `d2bdd43`; this documentation update is uncommitted. |
+| Source/tests | WP6-WP8 implemented. Full Section 9 integration gate: 216 passed in 14.43 s, including Node frontend checks. Changed Python Ruff and whitespace checks clean. |
+| Documentation | Spec/plan revision 2 and existing timeline/neural/task-decoding usage guides describe both modes, v1/v2 products, anchored inspection, navigation, and the bounded-loading exception. |
 | Existing user changes | Staged: added `docs/session_timeline_pca_spec_v1.md`. Unstaged tracked: `src/main.py`, `src/neural_analysis/sync_ephys.py`. Preserve these and unrelated untracked files. |
 | Team / writer | Current chat lead is the sole writer; no worker launched. Runtime model/effort identity is not exposed to the agent. |
-| Running analysis | No analysis/worker launched in this revision. Original CT026 result is published. Prior preview was port 8517 / exec 99148; its current liveness was not checked. |
-| Latest verification | Original recorded gate: 173 passed in 8.66 s with bundled Node; Ruff/whitespace clean. CT026: 70/70 fits, 715 windows/region, exact continuous reconstruction. New documentation checks are recorded below. |
-| Next action | Begin WP8 RED for runner/mode UI and anchored display/navigation, then WP9. Preserve original results and completed WP1-WP5 evidence. |
+| Running analysis | No experimental analysis/worker launched. Temporary synthetic browser preview used port 8518; stopped after inspection. Original port-8517 preview was left untouched. |
+| Latest verification | Extension: 216 passed in 14.43 s; browser preserved 40-90 s ticks across 500/100-ms modes and weighted rows. Bounded 20-ms retained an in-bounds pan and reset an out-of-bounds pan. Original CT026 evidence remains unchanged. |
+| Next action | User review and, when requested, the designated 500-ms CT026 mixed preparation/inspection portion of WP9. Preserve original results and completed evidence; no implementation work remains. |
 
 ### 0.2 Package ledger
 
@@ -43,7 +43,7 @@ experimental visual acceptance belongs to the user.
 
 | Package | Writer | State | RED commit / command / result | GREEN commit / checks / review | Next gate |
 | --- | --- | --- | --- | --- | --- |
-| WP0 documentation | Lead | Original complete; extension reference updated | Not applicable | Original baseline `9e46967`; completed record `d2bdd43`; extension doc checks below | WP6 on implementation instruction. |
+| WP0 documentation | Lead | Complete | Not applicable | Original baseline `9e46967`; completed record `d2bdd43`; extension implementation evidence below | User review. |
 | WP1 settings/alignment/folds | Lead | Accepted | `fa67c05`; 2 expected collection errors | `0a8c65f`; 64 passed with legacy targets | WP2. |
 | WP2 models/contributions | Lead | Accepted | `d8561d4`; 2 expected import errors | `3f70f6b`; 74 passed; Ruff clean | WP3a. |
 | WP3a persistence/identity | Lead | Accepted | `17d94ef`; 1 expected import error | `6e4afe5`; 86 integrated tests passed | WP3b. |
@@ -52,10 +52,10 @@ experimental visual acceptance belongs to the user.
 | WP4b webapp integration | Lead | Accepted | `1aa86bd`, `0f77f29`, `87ef8b3`; final control test `1cce9ad` | `2c39850`, `f7cd9c8`; 173 tests pass; saved-only browser display/pan checked | User inspection. |
 | WP5a usage documentation | Lead | Complete | Not applicable | `2c39850`: timeline guide + neural/task-decoding README updates | User usage/review. |
 | WP5b CT026 inspection | Lead + user | Numerical/browser validation complete; user acceptance pending | Not applicable | 70 fits; 715 windows/region; exact reconstruction; performance below | User inspects saved preview/summary. |
-| WP6 mode/config/alignment extension | Lead | GREEN | `2922a09`; 11 failed / 23 passed as expected | 76 focused tests; 66 prediction tests; changed-file Ruff clean | WP7 explicit masks and persistence. |
-| WP7 models/persistence extension | Lead | GREEN | `8a599c1`; 6 failed / 23 setup errors / 10 passed as expected | 39 scientific/persistence tests; 125 with package/target regressions | WP8 runner/UI/navigation. |
-| WP8 runner/inspection extension | Lead; optional Luna integration | Planned | Not started | Not started | Explicit preparation, anchored saved display, cross-configuration navigation and clear labels. |
-| WP9 extension docs/validation | Lead + user | Planned | Not applicable until code gates | Not started | Synthetic/integration gates, then separately authorized CT026 preparation/inspection. |
+| WP6 mode/config/alignment extension | Lead | GREEN | `2922a09`; 11 failed / 23 passed as expected | `5a555c1`; 76 focused tests; 66 prediction tests; changed-file Ruff clean | Complete. |
+| WP7 models/persistence extension | Lead | GREEN | `8a599c1`; 6 failed / 23 setup errors / 10 passed as expected | `1c81c84`; 39 scientific/persistence tests; 125 with package/target regressions | Complete. |
+| WP8 runner/inspection extension | Lead | GREEN | `4c6ee75` runner; `1a54eb0` UI/chart; `9732b6d` counts; `01b0cc1` actual chart position | Runner `1a466c9`; UI `5b72147`; 216 integration tests and real browser checks | Complete. |
+| WP9 extension docs/validation | Lead + user | Docs/synthetic/browser complete; experimental acceptance pending | Required code RED gates complete | Updated usage guides; 216 passed; screenshots below | Separately requested CT026 mixed preparation and user inspection. |
 
 ### 0.3 Resume and interruption procedure
 
@@ -400,6 +400,59 @@ Next exact action, owner, and any missing authority:
   experimental preparation, staging, commit, or push in this documentation turn.
 - Reference ready; next action on implementation instruction is WP6 RED,
   followed by WP7-WP9. Experimental preparation remains separately scoped.
+
+### 2026-11-03 - WP6-WP9 / mixed-outcome implementation and synthetic acceptance
+
+- Authorization: user instructed implementation of the reviewed plan. Sole
+  writer; no delegated worker or new experimental session run. Original
+  correct-rewarded results and unrelated staged/unstaged work were preserved.
+- WP6: tests committed `2922a09` after 11 expected failures/23 passes in
+  config/preparation. GREEN `5a555c1`: fixed two-mode controls, selected targets
+  before shared validation, factual correct-rewarded plus separate training
+  union, identical full-table folds. Focused targets/config/preparation 76
+  passed; prediction package 66 passed; Ruff clean.
+- WP7: RED `8a599c1` (6 failed, 23 setup errors, 10 passed) required explicit
+  membership, seeded independent state/action signals (seed 318), weighted
+  logistic gradient, additive contributions, and versioned products. GREEN
+  `1c81c84`: optional keyword-only fitter mask, v2/schema-2 publication, strict
+  mode/target/condition/fit-mask validation, read-only exact v1 compatibility.
+  Scientific/persistence tests 39 passed; package plus old targets 125 passed.
+  The v1 fixture constructs original array names without new membership/mode
+  fields and verifies original identity, predictions and unchanged archive bytes.
+- WP8 runner RED `4c6ee75`: 5 failed/4 passed. GREEN `1a466c9`: mode overrides
+  through session/batch/CLI, actual target-dependent counts/bytes, matching-PCA
+  reuse, separate immutable products and factual mode summaries/logs. All nine
+  runner tests passed, including 500/100-ms mode preparation and reuse.
+- UI/plot/chart RED `1a54eb0`: five plot failures and five UI/JS failures.
+  Additional RED `9732b6d` corrected binary-only class-count requirements and
+  approved output names. Real browser inspection then exposed a mount-position
+  reset that stable keys/revision tests alone missed: mixed captions shifted
+  the chart from tree position 7 to 8. RED `01b0cc1` captured this failure.
+  GREEN `5b72147` groups variable controls/captions in one fixed container,
+  retains one saved anchor path, scopes horizontal navigation to session/origin,
+  labels modes/training clearly and bounds the browser range transfer locally.
+- Final Section 9 integration command used
+  `MPLCONFIGDIR=.pytest_cache/matplotlib`, `UV_CACHE_DIR=.pytest_cache/uv`,
+  `uv run --frozen --no-sync --offline pytest -q` and
+  `NODE_BINARY=/home/matt/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`:
+  216 passed in 14.43 s. Changed Python Ruff and whitespace checks passed.
+  No new dependency, external-library edit, or prediction-storage framework.
+- Browser: loopback Streamlit port 8518, synthetic saved-only fixture copies
+  in ignored `.pytest_cache/mixed_preview_two_modes` and `mixed_preview_bounded`.
+  Both regions' predictions and weighted PC rows had readable identities,
+  log-odds units and true gaps. Actual panned 40-90 s ticks survived a 500-ms
+  generalization -> 100-ms mixed switch and addition of weighted rows. At
+  20 ms, an in-bounds panned range survived; a 90-140 s range outside loaded
+  -1..121 s reset to the control-selected 1..61 s. No browser pan callbacks.
+  Proof: `.pytest_cache/mixed_prediction_browser.png` (ignored synthetic image).
+- WP9 usage docs now cover both modes, controls/CLI overrides, v1/v2 copy-back,
+  scientific limits, anchored unprepared/hidden views and bounded navigation.
+  ASCII, fences, local-link and changed-path whitespace assertions passed.
+  Temporary synthetic preview stopped after inspection; original 8517 preview
+  untouched. No experimental fit, batch, transfer, push or acceptance claim.
+- Next: user review; when separately requested, prepare only the designated
+  500-ms CT026 mixed product and obtain visual/scientific acceptance. Do not
+  repeat completed implementation or infer authorization for broader processing.
 
 ## 1. Outcome and boundaries
 
@@ -1099,16 +1152,14 @@ implied. User inspection precedes processing further sessions.
 
 ## 11. Implementation authorization
 
-Scientific choices and agent divisions are confirmed. Original implementation
-is complete. This revision is authorized to edit only these existing spec/plan
-documents. The receiving task begins WP6 when instructed to implement the
-extension; no additional per-package approval loop is required within that
-scope. Record whether that instruction also includes the designated CT026
-preparation; if included, do not seek the same permission again. This document
-alone does not authorize a new experimental run, new sessions, cluster
-submissions, resource changes, or transfers. Record actual authority and
-experimental-run state in Section 0 rather than inferring them from a worker
-report or treating historical WP5b authority as a new run request.
+The user authorized extension implementation after reviewing the revised
+spec/plan and approving the bounded-loading exception. WP6-WP8 and WP9's
+documentation/synthetic/browser portions are complete. The instruction did
+not include a new experimental preparation; none was run. A later instruction
+can include the designated CT026 mixed preparation, without another approval
+loop for that same scope. No new session, batch, cluster submission, resource
+change, or transfer is implicit. Record actual authority and experimental-run
+state in Section 0; historical WP5b authority is not a new run request.
 
 ## 12. Sol/Luna execution and handoff rules
 
@@ -1151,11 +1202,11 @@ revision; no independent scientific-review agent or new worktree is required.
 
 ## 13. Mixed-outcome extension: implementation reference
 
-This section is pending work, not a claim that mode selection exists today.
-Sections 2 and 4-8 define the final contracts; preserve completed original
-behavior and evidence. Current code hard-codes seven targets in preparation,
-metadata/validation, and runner estimates, and restricts fits/validation to
-`correct_rewarded`. Changing only the visible label or fitter is insufficient.
+This section retains the test-first implementation reference for completed
+WP6-WP8 and WP9's outstanding experimental gate. Sections 2 and 4-8 define
+the implemented contracts. The extension generalized preparation, fits,
+metadata/validation, runner estimates, and UI together; original behavior and
+validation evidence are preserved.
 
 ### WP6 - fixed modes, configuration, and aligned membership (Sol)
 

@@ -505,12 +505,25 @@ alternatively set `NODE_BINARY` to its executable.
 
 ## Condition prediction tracks
 
-**Prepare predictions** fits the seven requested task readouts on the selected
-regional session PCs. It requires the session's existing
+Choose **Analysis**, then **Prepare predictions** to fit one mode on the selected
+regional session PCs:
+
+- **Correct-rewarded generalization** (default): seven task readouts trained on
+  correct-rewarded trials. Binary tracks are **State generalization** and
+  **Action generalization**.
+- **Mixed-outcome decoding**: separate **State decoding** and **Action decoding**
+  classifiers trained on the union of correct-rewarded, correct-omission, and
+  incorrect trials. It fits only these two targets, up to 20 models across
+  both regions/five folds; generalization fits up to 70.
+
+Preparation requires the session's existing
 `task_decoding_config.json`, augmented trial CSV, and behavioral feature-parameter
 JSON. The optional `session_prediction_config.json` accepts only
-`base_config_path` and `bin_width_ms`; defaults are the sibling base config and
-500 ms. The GUI's selected probes and bin width override preparation defaults.
+`base_config_path`, `bin_width_ms`, and `analysis_mode`; defaults are the sibling
+base config, 500 ms, and `correct_rewarded_generalization`. The other mode ID is
+`mixed_outcome_decoding`. The GUI's selected mode, probes, and bin width override
+preparation defaults. Mixed mode does not require the continuous source columns,
+but still requires the base config and feature-parameter JSON.
 The base loader still validates its full decoder config, including both region
 blocks; an invalid unused setting must be corrected in that input config.
 
@@ -527,7 +540,19 @@ PCA/results are reused. Missing PCA is prepared only on an explicit preparation
 request. `--rerun` creates another prediction run and retains the same compatible
 PCA; it does not overwrite either old output. The batch counterpart is
 `src.neural_analysis.task_decoding.session_prediction.run_batch --session-list
-/path/to/sessions.txt`, with the same probe/bin, dry-run and rerun options.
+/path/to/sessions.txt`, with the same mode/probe/bin, dry-run and rerun options.
+
+For mixed decoding, add `--analysis-mode mixed_outcome_decoding` to either CLI.
+For example:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.session_prediction.run_session \
+  --session-metadata /path/to/session/neural_session.json \
+  --analysis-mode mixed_outcome_decoding --bin-width-ms 500 --dry-run
+```
+
+Each saved product contains one mode; preparing mixed decoding reuses matching
+PCA and preserves the existing generalization product. It does not fit both modes.
 
 In **Session timeline and PCA**, enable **Show predictions**, select the saved
 run and target, and optionally select raw PC scores or weighted contributions.
@@ -535,9 +560,23 @@ Original order uses regional PC-rank ranges; contribution order shows the top
 N PCs by the saved, session-fixed strength ranking. Every model uses all saved
 PCs independently of visible row count. Raw-PC z-scoring is display-only;
 weighted rows retain target or log-odds units and fixed session color limits.
-Model details expose fitted-fold status, training counts and intercepts.
+Model details expose fitted-fold status, total/outcome training counts,
+binary class counts, and intercepts. Counts describe the saved training masks;
+they do not trigger balancing or subsampling.
 
-Training pools correct-rewarded bins in `[-1,+1)` seconds; predictions occupy
+The Analysis selector filters saved runs and targets. A selected mode with no
+saved result stays unprepared; the last saved behavior/PCA background remains
+visible with its actual bin width, while all predictions, actual-target overlays,
+and weighted contributions are hidden. Hiding prepared predictions also retains
+the saved background. These paths work without raw inputs and never fit.
+
+Switching modes or saved PCA configurations preserves horizontal navigation,
+including browser pan. PC controls follow the displayed saved basis. With
+**Load only visible neural interval** (default at 20 ms), a browser range outside
+the destination loaded interval resets to the control-selected interval; the
+caption identifies the loaded bounds. Use Window start or Jump to load elsewhere.
+
+Training pools the selected mode's eligible bins in `[-1,+1)` seconds; predictions occupy
 the full `[-2,+2)` choice window with intertrial gaps. One shared deterministic
 five-fold behavioral-block assignment excludes the destination block from
 supervised training. Missing actual values do not prevent predictions; missing
@@ -555,6 +594,14 @@ contributions add to log-odds rather than probability. Continuous predictions
 are not clipped. Strength ranks describe varying additive terms, not unique
 or causal importance.
 
+Mixed state decoding targets recorded task state, and action decoding targets
+choice. Incorrect trials let the labels differ; correct omissions alone do not.
+Different labels need not yield different fitted curves or establish causal
+separation. Mixed training also changes sample size: at fixed logistic C, more
+trials reduce regularization relative to average loss. Mode differences do not
+isolate outcome composition. No class/outcome balancing or penalty rescaling
+is applied.
+
 Runs live under `analysis_runs/condition_session_prediction_*`, with named-array
 `results.npz`, small `config.json`, logs, summary, runner copies and computational
 source snapshots. For a copied session, retain the prediction directory and
@@ -563,6 +610,10 @@ Saved display then needs only metadata and these products, even without raw
 behavior/spikes or the original machine paths. Current preparation widgets do
 not relabel a saved result as another resolution or basis. Viewing and target,
 event, PC or navigation changes do not refit or write analysis products.
+New products use `condition-session-prediction-v2` / schema 2 and explicitly
+record mode, ordered targets, and training membership. Original v1/schema-1
+seven-target products remain selectable as correct-rewarded generalization;
+loading them preserves their bytes and identity without raw inputs or migration.
 
 Fine-resolution viewport filtering limits contributions and browser payloads;
 the current NPZ loader still loads full regional score arrays into memory.

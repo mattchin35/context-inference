@@ -1,9 +1,10 @@
 # Condition Generalization and Mixed-Outcome Decoding on the Session Timeline
 
 Status: scientific decisions confirmed, document revision 2, 2026-11-03.
-Correct-rewarded generalization is implemented; the mixed-outcome extension
-is specified here and awaits implementation. The linked plan records the
-separate implementation and validation gates. Keep this existing filename.
+Both analysis modes are implemented and validated on synthetic data. Original
+correct-rewarded CT026 validation is recorded; mixed-outcome experimental
+preparation and user acceptance remain outstanding. The linked plan records
+the separate implementation and validation gates. Keep this existing filename.
 
 Implementation plan and validation record:
 [condition_prediction_generalization_implementation_plan.md](condition_prediction_generalization_implementation_plan.md).
@@ -540,7 +541,7 @@ models, direct-unit decoders, arbitrary training-condition/target builders,
 hyperparameter searches, new behavioral-model fits, significance testing,
 or new Slurm resource settings.
 
-Preparing this specification does not authorize experimental computation or
-implementation of the extension. The scientific settings are resolved; the
-linked implementation plan distinguishes completed original work from the
-pending mixed-outcome implementation and validation gates.
+The user subsequently authorized implementation of this extension; synthetic
+and browser checks are complete. That instruction did not include a new
+experimental preparation. The linked plan distinguishes completed code from
+the outstanding CT026 mixed-outcome run and user acceptance.
