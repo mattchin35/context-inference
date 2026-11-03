@@ -1,6 +1,7 @@
 """Saved context coefficients, fixed PC identity and coupled real-time display contracts."""
 
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import patch
 
 import numpy as np
@@ -87,6 +88,24 @@ def test_response_order_uses_original_rank_ties_and_places_nan_after_valid_zero(
     np.testing.assert_array_equal(plotting.order_responses(cell, ordering="coefficient_strength",
         sorting_predictor="signed_context"), [1, 0, 3, 2])
     np.testing.assert_array_equal(plotting.order_responses(cell, ordering="original"), [1, 3, 2, 0])
+
+
+def test_repeated_events_have_one_legend_entry_and_coefficient_scale_clears_pc_labels(plotting_data: tuple) -> None:
+    """Input saved fixture; repeated UTC/elapsed LED intervals share one legend and a separate scale, return None."""
+    prepared, cell = plotting_data
+    events = pd.concat([prepared["behavior"].events,
+        pd.DataFrame({"Time": [8.0, 9.0], "elapsed_s": [8.0, 9.0], "Event": ["LED_on", "LED_off"]})]
+        ).sort_values("Time").reset_index(drop=True)
+    prepared["behavior"] = replace(prepared["behavior"], events=events)
+    figure = plotting.plot_encoding_timeline(prepared, cell, event_tracks=("LED",), time_range_s=(0, 140))
+    names = [trace.name for trace in figure.data if trace.showlegend is not False and trace.name]
+    assert len(names) == len(set(names))
+    coefficient = trace_named(figure, "Coefficients")
+    axis = figure.layout[coefficient.xaxis.replace("x", "xaxis", 1)]
+    yaxis = figure.layout[coefficient.yaxis.replace("y", "yaxis", 1)]
+    assert coefficient.colorbar.orientation == "h"
+    assert axis.domain[0] <= coefficient.colorbar.x <= axis.domain[1]
+    assert coefficient.colorbar.y > yaxis.domain[1]
 
 
 def test_coefficients_and_activity_use_actual_consecutive_rows_pc12_pc2_pc7(plotting_data: tuple) -> None:
