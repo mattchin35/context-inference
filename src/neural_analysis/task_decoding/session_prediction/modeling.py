@@ -56,6 +56,8 @@ def fit_region_prediction_models(
     fold_ids: np.ndarray,
     training_bin_mask: np.ndarray,
     target_families: tuple[str, ...],
+    *,
+    training_condition_mask: np.ndarray | None = None,
 ) -> RegionPredictions:
     """Fit up to T*5 weighted models and predict every assigned regional bin.
 
@@ -65,10 +67,16 @@ def fit_region_prediction_models(
     correct_rewarded are bool (N,); fold_ids is integer (N,), -1 or 0..4.
     training_bin_mask is bool (B,) for [-1,+1), and families is T categorical/
     numerical strings. Return RegionPredictions; all input arrays stay unchanged.
+    Optional bool training_condition_mask (N,) selects mode-specific membership;
+    None preserves the existing correct_rewarded training rule. All other
+    eligibility intersections and equal total weight per trial are unchanged.
     """
     _validate_inputs(scores, choice_positions, target_values, target_valid,
                      baseline_valid, correct_rewarded, fold_ids, training_bin_mask,
                      target_families)
+    membership = correct_rewarded if training_condition_mask is None else training_condition_mask
+    if membership.shape != (len(target_values),) or membership.dtype != bool:
+        raise ValueError("Training condition mask must be Boolean with shape (N,)")
     values = np.asarray(scores, dtype=np.float64)
     positions = np.asarray(choice_positions)
     targets = np.asarray(target_values, dtype=np.float64)
@@ -87,7 +95,7 @@ def fit_region_prediction_models(
     regional_coverage = np.zeros(len(targets), dtype=bool)
     regional_coverage[positions] = True
     for target, family in enumerate(target_families):
-        eligible = (regional_coverage & baseline_valid & correct_rewarded
+        eligible = (regional_coverage & baseline_valid & membership
                     & target_valid[:, target] & (fold_ids >= 0))
         for fold in range(FOLD_COUNT):
             mask = eligible & (fold_ids != fold)

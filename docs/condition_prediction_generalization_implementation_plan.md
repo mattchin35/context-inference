@@ -26,15 +26,15 @@ checkpointing to this analysis.
 | Field | Current value |
 | --- | --- |
 | Date / branch / inspected HEAD | 2026-11-03 / `refactor` / `d2bdd43`; CT026 computation used `2c39850`. Local `origin/refactor` and HEAD agree (0 behind / 0 ahead). Recheck on resumption. |
-| Phase / authorization | User authorized extension implementation. WP6 GREEN; WP7 next. No new experimental processing, batch, transfer or cluster operation included. |
+| Phase / authorization | User authorized extension implementation. WP6-WP7 GREEN; WP8 next. No new experimental processing, batch, transfer or cluster operation included. |
 | Scientific settings | Two fixed modes confirmed; mixed-outcome state AND action, with the five continuous readouts retained only in correct-rewarded generalization. See Section 2. |
-| Source/tests | WP6 mode/config/alignment implemented. Focused targets/config/preparation: 76 passed; prediction package: 66 passed. WP7-WP9 pending. |
+| Source/tests | WP6-WP7 implemented. Prediction package plus existing target regressions: 125 passed. WP8-WP9 pending. |
 | Documentation | Revision 2 integrates both modes, WP6-WP9, saved-anchor UI state, cross-configuration navigation, implementation-review corrections, and the user-approved bounded-loading navigation exception. Original work is committed through `d2bdd43`; this documentation update is uncommitted. |
 | Existing user changes | Staged: added `docs/session_timeline_pca_spec_v1.md`. Unstaged tracked: `src/main.py`, `src/neural_analysis/sync_ephys.py`. Preserve these and unrelated untracked files. |
 | Team / writer | Current chat lead is the sole writer; no worker launched. Runtime model/effort identity is not exposed to the agent. |
 | Running analysis | No analysis/worker launched in this revision. Original CT026 result is published. Prior preview was port 8517 / exec 99148; its current liveness was not checked. |
 | Latest verification | Original recorded gate: 173 passed in 8.66 s with bundled Node; Ruff/whitespace clean. CT026: 70/70 fits, 715 windows/region, exact continuous reconstruction. New documentation checks are recorded below. |
-| Next action | Begin WP7 RED for explicit training masks and v1/v2 persistence, then WP8-WP9. Preserve original results and completed WP1-WP5 evidence. |
+| Next action | Begin WP8 RED for runner/mode UI and anchored display/navigation, then WP9. Preserve original results and completed WP1-WP5 evidence. |
 
 ### 0.2 Package ledger
 
@@ -53,7 +53,7 @@ experimental visual acceptance belongs to the user.
 | WP5a usage documentation | Lead | Complete | Not applicable | `2c39850`: timeline guide + neural/task-decoding README updates | User usage/review. |
 | WP5b CT026 inspection | Lead + user | Numerical/browser validation complete; user acceptance pending | Not applicable | 70 fits; 715 windows/region; exact reconstruction; performance below | User inspects saved preview/summary. |
 | WP6 mode/config/alignment extension | Lead | GREEN | `2922a09`; 11 failed / 23 passed as expected | 76 focused tests; 66 prediction tests; changed-file Ruff clean | WP7 explicit masks and persistence. |
-| WP7 models/persistence extension | Sol lead | Planned | Not started | Not started | Weighted mixed fits, v1/v2 compatibility and identity. |
+| WP7 models/persistence extension | Lead | GREEN | `8a599c1`; 6 failed / 23 setup errors / 10 passed as expected | 39 scientific/persistence tests; 125 with package/target regressions | WP8 runner/UI/navigation. |
 | WP8 runner/inspection extension | Lead; optional Luna integration | Planned | Not started | Not started | Explicit preparation, anchored saved display, cross-configuration navigation and clear labels. |
 | WP9 extension docs/validation | Lead + user | Planned | Not applicable until code gates | Not started | Synthetic/integration gates, then separately authorized CT026 preparation/inspection. |
 

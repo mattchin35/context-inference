@@ -13,11 +13,14 @@ import pandas as pd
 from scipy.special import expit
 
 from src.neural_analysis.population.session_timeline_io import load_timeline_result
-from src.neural_analysis.task_decoding.config import CONDITION_IDENTIFIERS
+from src.neural_analysis.task_decoding.config import CONDITION_IDENTIFIERS, TARGET_DEFINITION_BY_IDENTIFIER
 
-from .config import ANALYSIS_VERSION, FOLD_COUNT, LOGISTIC_C, RIDGE_ALPHA, SCHEMA_VERSION, TARGET_NAMES
+from .config import (
+    ANALYSIS_VERSION, FOLD_COUNT, GENERALIZATION_MODE, LOGISTIC_C, RIDGE_ALPHA,
+    SCHEMA_VERSION, target_names_for_mode, training_conditions_for_mode,
+)
 from .modeling import RegionPredictions
-from .preparation import PredictionInputs
+from .preparation import PredictionInputs, training_membership
 
 
 SHARED_ARRAYS = (
@@ -47,6 +50,7 @@ class PredictionRunOption:
     identity: str
     session_id: str
     display_label: str
+    analysis_mode: str = GENERALIZATION_MODE
 
 
 def build_prediction_metadata(
@@ -77,9 +81,19 @@ def build_prediction_metadata(
     }
     code["behavior_analysis/project_utils.py"] = _file_hash(repository / "src/behavior_analysis/project_utils.py")
     config = dict(effective_config)
+    scientific_mode = {
+        "analysis_mode": inputs.analysis_mode, "target_names": list(inputs.target_names),
+        "training_condition_names": list(training_conditions_for_mode(inputs.analysis_mode)),
+    }
+    if inputs.target_names != target_names_for_mode(inputs.analysis_mode):
+        raise ValueError("Target set contradicts analysis mode")
+    for key, value in scientific_mode.items():
+        if key in config and config[key] != value:
+            raise ValueError(f"Effective configuration {key} contradicts prepared mode/targets")
+    config.update(scientific_mode)
     config.update({"ridge_alpha": RIDGE_ALPHA, "logistic_C": LOGISTIC_C,
                    "training_window_s": [-1.0, 1.0], "prediction_window_s": [-2.0, 2.0],
-                   "fold_count": FOLD_COUNT, "target_names": list(TARGET_NAMES)})
+                   "fold_count": FOLD_COUNT})
     pca = file_identity(source_pca, root)
     pca["configuration_id"] = inputs.timeline.meta["configuration_id"]
     identity_payload = {
@@ -142,7 +156,11 @@ def save_prediction_result(
     if destination.exists():
         raise FileExistsError(destination)
     validate_prediction_result(inputs, regions)
+    _validate_mode_metadata(meta, inputs)
+    if (meta.get("analysis_version"), meta.get("schema_version")) != (ANALYSIS_VERSION, SCHEMA_VERSION):
+        raise ValueError("New prediction products require v2/schema-2 metadata")
     arrays = {name: getattr(inputs, name) for name in SHARED_ARRAYS}
+    arrays["training_condition_mask"] = inputs.training_condition_mask
     arrays.update({"choices": inputs.timeline.choices.to_records(index=False),
                    "target_names": np.asarray(inputs.target_names),
                    "target_families": np.asarray(inputs.target_families),
@@ -177,8 +195,10 @@ def load_prediction_result(path: Path | str, *, session_root: Path | str | None 
     root = Path(session_root).resolve() if session_root is not None else path.resolve().parents[2]
     with np.load(path, allow_pickle=True) as archive:
         meta = archive["meta"].item()
-        if meta.get("analysis_version") != ANALYSIS_VERSION or meta.get("schema_version") != SCHEMA_VERSION:
-            raise ValueError("Unsupported session prediction result version")
+        mode = _normalize_mode_metadata(meta)
+        legacy = meta["schema_version"] == 1
+        if not legacy and "training_condition_mask" not in archive:
+            raise ValueError("Schema-2 results require training_condition_mask")
         source = meta["source_pca"]
         source_path = root / source["path"]
         identity = file_identity(source_path, root)
@@ -199,8 +219,9 @@ def load_prediction_result(path: Path | str, *, session_root: Path | str | None 
             target_families=tuple(archive["target_families"]),
             condition_names=tuple(archive["condition_names"]),
             target_metadata=meta["target_metadata"], target_availability=meta["target_availability"],
-            analysis_mode="correct_rewarded_generalization",
-            training_condition_mask=archive["correct_rewarded"].copy(),
+            analysis_mode=mode,
+            training_condition_mask=(archive["correct_rewarded"].copy() if legacy
+                                     else archive["training_condition_mask"]),
             **{name: archive[name] for name in SHARED_ARRAYS},
         )
         regions = {}
@@ -211,6 +232,7 @@ def load_prediction_result(path: Path | str, *, session_root: Path | str | None 
             regions[role] = RegionPredictions(**{field.name: archive[prefix + field.name]
                                                  for field in fields(RegionPredictions)})
     validate_prediction_result(inputs, regions)
+    _validate_mode_metadata(meta, inputs)
     return SessionPredictions(inputs, regions, meta)
 
 
@@ -227,10 +249,9 @@ def discover_prediction_runs(session_root: Path | str) -> tuple[PredictionRunOpt
             continue
         try:
             meta = json.loads(path.read_text(encoding="ascii"))
-            if meta["analysis_version"] != ANALYSIS_VERSION or meta["schema_version"] != SCHEMA_VERSION:
-                continue
-            label = f"{path.parent.name} ({meta['effective_config']['bin_width_ms']} ms)"
-            options.append(PredictionRunOption(result, meta["identity"], meta["session_id"], label))
+            mode = _normalize_mode_metadata(meta)
+            label = f"{mode} - {meta['effective_config']['bin_width_ms']} ms - {path.parent.name}"
+            options.append(PredictionRunOption(result, meta["identity"], meta["session_id"], label, mode))
         except (OSError, ValueError, KeyError, TypeError):
             continue
     return tuple(options)
@@ -255,18 +276,26 @@ def validate_prediction_result(inputs: PredictionInputs, regions: dict[str, Regi
     Inputs and region records follow their documented contracts. Return None or
     raise ValueError before publication/display. No array is changed or refitted.
     """
-    n, t, b = len(inputs.timeline.choices), len(TARGET_NAMES), len(inputs.bin_edges_s) - 1
-    if inputs.target_names != TARGET_NAMES or inputs.condition_names != CONDITION_IDENTIFIERS:
+    targets = target_names_for_mode(inputs.analysis_mode)
+    n, t, b = len(inputs.timeline.choices), len(targets), len(inputs.bin_edges_s) - 1
+    if inputs.target_names != targets or inputs.condition_names != CONDITION_IDENTIFIERS:
         raise ValueError("Noncanonical target or condition order")
+    families = tuple(TARGET_DEFINITION_BY_IDENTIFIER[name].family for name in targets)
+    if inputs.target_families != families:
+        raise ValueError("Noncanonical target families for analysis mode")
     _shape(inputs.target_values, (n, t), "target values")
     for array, shape in ((inputs.target_valid, (n, t)), (inputs.baseline_valid, (n,)),
                          (inputs.correct_rewarded, (n,)), (inputs.condition_masks, (n, 6)),
+                         (inputs.training_condition_mask, (n,)),
                          (inputs.training_bin_mask, (b,))):
         _shape(array, shape, "shared mask", dtype_kind="b")
     if (not np.isfinite(inputs.target_values[inputs.target_valid]).all()
             or not np.isnan(inputs.target_values[~inputs.target_valid]).all()
             or not np.array_equal(inputs.correct_rewarded, inputs.condition_masks[:, 1])):
         raise ValueError("Target validity/condition mask conventions disagree")
+    expected_membership = training_membership(inputs.analysis_mode, inputs.condition_names, inputs.condition_masks)
+    if not np.array_equal(inputs.training_condition_mask, expected_membership):
+        raise ValueError("Training condition mask contradicts analysis mode memberships")
     _shape(inputs.fold_ids, (n,), "fold IDs", dtype_kind="iu")
     _shape(inputs.block_values_json, (n,), "block identities")
     if not np.isin(inputs.fold_ids, [-1, 0, 1, 2, 3, 4]).all():
@@ -282,6 +311,36 @@ def validate_prediction_result(inputs: PredictionInputs, regions: dict[str, Regi
 
 
 # Validation helpers keep file loading separate from scientific array checks.
+def _normalize_mode_metadata(meta: dict) -> str:
+    """Validate exact version/schema and mode metadata; normalize only v1 in memory.
+
+    meta is a saved provenance dictionary. Return its canonical mode string;
+    legacy identity/version remain unchanged and no source files are accessed.
+    """
+    pair = (meta.get("analysis_version"), meta.get("schema_version"))
+    if pair not in (("condition-session-prediction-v1", 1), (ANALYSIS_VERSION, SCHEMA_VERSION)):
+        raise ValueError("Unsupported session prediction result version/schema pair")
+    config = meta["effective_config"]
+    if pair[1] == 1:
+        config.setdefault("analysis_mode", GENERALIZATION_MODE)
+        config.setdefault("training_condition_names", ["correct_rewarded"])
+        if config["analysis_mode"] != GENERALIZATION_MODE:
+            raise ValueError("Legacy prediction mode must be correct-rewarded generalization")
+    mode = config.get("analysis_mode")
+    targets = target_names_for_mode(mode)
+    if (config.get("target_names") != list(targets)
+            or config.get("training_condition_names") != list(training_conditions_for_mode(mode))):
+        raise ValueError("Saved mode/target/condition metadata contradicts the scientific contract")
+    return mode
+
+
+def _validate_mode_metadata(meta: dict, inputs: PredictionInputs) -> None:
+    """Check saved provenance against prepared mode/target axes without changing arrays."""
+    mode = _normalize_mode_metadata(meta)
+    if mode != inputs.analysis_mode or tuple(meta["effective_config"]["target_names"]) != inputs.target_names:
+        raise ValueError("Saved mode/targets disagree with prepared inputs")
+
+
 def _validate_region(inputs: PredictionInputs, role: str, model: RegionPredictions) -> None:
     """Check one W,B,T result against N choices, K original PCs and five model folds."""
     source = inputs.timeline.regions[role]
@@ -314,7 +373,7 @@ def _validate_region(inputs: PredictionInputs, role: str, model: RegionPredictio
     for target, family in enumerate(inputs.target_families):
         for fold in range(5):
             mask = model.training_choice_mask[target, fold]
-            expected_mask = (coverage & inputs.baseline_valid & inputs.correct_rewarded & inputs.target_valid[:, target]
+            expected_mask = (coverage & inputs.baseline_valid & inputs.training_condition_mask & inputs.target_valid[:, target]
                              & (inputs.fold_ids >= 0) & (inputs.fold_ids != fold))
             if not np.array_equal(mask, expected_mask):
                 raise ValueError("Training mask disagrees with coverage, eligibility or held-out fold")

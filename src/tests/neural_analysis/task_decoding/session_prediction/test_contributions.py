@@ -6,7 +6,9 @@ import pytest
 from src.neural_analysis.task_decoding.session_prediction import modeling
 from src.neural_analysis.task_decoding.session_prediction.preparation import prepare_prediction_inputs
 from .test_modeling import fit_region
-from .test_modeling import mixed_inputs  # noqa: F401 -- shared scientific fixture
+from .test_modeling import mixed_inputs as mixed_inputs_fixture
+
+mixed_inputs = mixed_inputs_fixture
 
 
 def test_contributions_reconstruct_predictions_and_use_original_pc_ids(prediction_inputs):
