@@ -158,10 +158,16 @@ def plot_encoding_timeline(
     time_axes = sorted((name for name in figure.to_plotly_json()["layout"]
                         if name.startswith("xaxis") and name != coefficient_axis), key=_axis_number)
     primary = figure.get_subplot(1, 1).xaxis.plotly_name
+    activity_domain = figure.get_subplot(activity_row, 2).xaxis.domain
     for name in time_axes:
         figure.layout[name].update(range=visible, type="linear", showgrid=False,
+            domain=activity_domain,
             matches=None if name == primary else primary.replace("axis", ""),
             minallowed=loaded[0], maxallowed=loaded[1])
+    # Equal elapsed ranges also need equal pixel domains to align all time tracks.
+    for annotation in figure.layout.annotations:
+        if annotation.xref == "paper" and annotation.x == 0.5:
+            annotation.x = sum(activity_domain) / 2
     figure.update_xaxes(title_text="Elapsed session time (s; zero = first trial start)", row=detail_row, col=1)
     figure.update_yaxes(fixedrange=True, showgrid=False, zeroline=False)
     figure.update_layout(title={"text": _configuration_label(cell, inspection_penalty_mode), "font": {"size": 16}},
