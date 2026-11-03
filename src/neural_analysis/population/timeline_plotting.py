@@ -16,7 +16,7 @@ from src.neural_analysis.population.session_timeline import (
 from src.neural_analysis.population.window_variance import WindowVarianceSummary
 from src.neural_analysis.task_decoding.session_prediction.plotting import (
     PredictionDisplay, add_prediction_tracks, enrich_prediction_heatmap,
-    prediction_heatmap_values, selected_pc_ids,
+    prediction_display_label, prediction_heatmap_values, selected_pc_ids,
 )
 from src.mouse_behavior_preprocessing.treadmill_speed import TreadmillSpeed
 
@@ -325,7 +325,7 @@ def plot_session_timeline(
         titles.append("Signed speed (mm/s)")
         heights.append(1.1)
     if prediction_display is not None:
-        label = prediction_display.result.inputs.target_metadata[prediction_display.target_name]["display_label"]
+        label = prediction_display_label(prediction_display)
         titles.extend([f"PFC - {label}", f"HPC - {label}"])
         heights.extend([1.5, 1.5])
     display_regions = result.regions if prediction_display is None or prediction_display.pc_mode != "hidden" else {}
@@ -416,7 +416,7 @@ def plot_session_timeline(
             f"<br>{value_label} %{{z:.5g}}<extra></extra>"
         )
         if prediction_display is not None:
-            target_label = prediction_display.result.inputs.target_metadata[prediction_display.target_name]["display_label"]
+            target_label = prediction_display_label(prediction_display)
             hover = (f"{role}: {target_label}; PC%{{customdata[8]}}<br>{value_label} %{{z:.5g}}"
                      "<br>Prediction %{customdata[12]:.5g}; actual %{customdata[13]:.5g}"
                      "<br>Trial %{customdata[0]}; held-out fold %{customdata[10]}"
@@ -483,15 +483,17 @@ def plot_session_timeline(
         col=1,
         rangeslider={"visible": True, "range": full_bounds, "thickness": 0.07},
     )
-    if loaded_range_s is not None:
-        figure.update_xaxes(minallowed=loaded_range_s[0], maxallowed=loaded_range_s[1])
+    allowed = loaded_range_s or full_bounds
+    figure.update_xaxes(minallowed=allowed[0], maxallowed=allowed[1])
     identity = result.meta.get("configuration_id", result.session_id)
+    time_identity = f"{result.session_id}:{result.time_origin_s}"
     # Only time navigation persists; PC/track changes must recalculate vertical ranges.
     figure.update_yaxes(
         uirevision=f"{identity}:rows:{tuple(tracks)}:{sorted(pc_ranges.items())}:{tuple(window_variance)}:speed:{speed is not None}"
     )
     if prediction_display is not None:
-        figure.update_yaxes(uirevision=f"{identity}:prediction:{prediction_display.target_name}:"
+        saved = prediction_display.result
+        figure.update_yaxes(uirevision=f"{identity}:{saved.inputs.analysis_mode}:{saved.meta.get('identity', '')}:prediction:{prediction_display.target_name}:"
                              f"{prediction_display.pc_mode}:{prediction_display.pc_order}:{prediction_display.pc_count}:"
                              f"{sorted(pc_ranges.items())}:{tuple(tracks)}:speed:{speed is not None}")
     figure.update_layout(
@@ -503,7 +505,7 @@ def plot_session_timeline(
         font={"size": 14, "color": "black"},
         dragmode="pan",
         showlegend=False,
-        uirevision=f"{identity}:{viewport_revision}",
+        uirevision=f"{time_identity}:{viewport_revision}",
     )
     return figure
 

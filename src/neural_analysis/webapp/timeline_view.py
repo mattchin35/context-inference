@@ -54,143 +54,153 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         "timeline_"
         + hashlib.sha256(str(session.metadata_path).encode()).hexdigest()[:10]
     )
-    roles, bin_width_s = _population_controls(st_module, session, scope)
-    prediction_display = render_prediction_controls(st_module, session, scope, roles, int(round(bin_width_s * 1000)))
-    started = perf_counter()
-    if prediction_display is not None:
-        result = prediction_display.result.inputs.timeline
-        config = result.meta
-        saved = session.session_root / prediction_display.result.meta["source_pca"]["path"]
-        bin_width_s = prediction_display.result.meta["effective_config"]["bin_width_ms"] / 1000
-    else:
-        try:
-            config = timeline_io.timeline_configuration(session, roles, bin_width_s)
-        except (OSError, ValueError) as error:
-            st_module.error(str(error))
-            return
-        saved = find_saved_timeline(session.session_root, config["configuration_id"])
-        prepare = st_module.sidebar.button("Prepare", key=f"{scope}_prepare")
-        recompute = st_module.sidebar.button("Recompute", key=f"{scope}_recompute", disabled=saved is None)
-        if prepare or recompute:
-            try:
-                with st_module.spinner("Preparing session-wide PCA..."):
-                    report = run_session_timeline(session.metadata_path, roles, bin_width_s, rerun=recompute)
-                saved = report.result_path
-            except (OSError, ValueError) as error:
-                st_module.error(f"Could not prepare timeline: {error}")
-                return
+    # Keep variable captions/controls in one block so the chart never moves
+    # between Streamlit positions and loses its browser-only pan state.
+    with st_module.container(key=f"{scope}_controls"):
+        roles, bin_width_s = _population_controls(st_module, session, scope)
+        prediction_state = render_prediction_controls(st_module, session, scope, roles, int(round(bin_width_s * 1000)))
+        prediction_display = prediction_state.display
         started = perf_counter()
-        try:
-            if saved is not None:
-                info = saved.stat()
-                result = load_timeline_result_cached(str(saved), info.st_size, info.st_mtime_ns)
-                if "reward" not in result.choices:
-                    _, current_choices, _ = load_timeline_behavior_cached(
+        if prediction_state.anchor is not None:
+            anchor = prediction_state.anchor
+            result = anchor.inputs.timeline
+            config = result.meta
+            saved = session.session_root / anchor.meta["source_pca"]["path"]
+            bin_width_s = anchor.meta["effective_config"]["bin_width_ms"] / 1000
+            st_module.caption(f"Saved background PCA: {saved}; {int(round(bin_width_s * 1000))} ms. "
+                              f"Configuration: {config['configuration_id']}. "
+                              "This saved background does not prepare an unprepared analysis mode.")
+        else:
+            try:
+                config = timeline_io.timeline_configuration(session, roles, bin_width_s)
+            except (OSError, ValueError) as error:
+                st_module.error(str(error))
+                return
+            saved = find_saved_timeline(session.session_root, config["configuration_id"])
+            prepare = st_module.sidebar.button("Prepare", key=f"{scope}_prepare")
+            recompute = st_module.sidebar.button("Recompute", key=f"{scope}_recompute", disabled=saved is None)
+            if prepare or recompute:
+                try:
+                    with st_module.spinner("Preparing session-wide PCA..."):
+                        report = run_session_timeline(session.metadata_path, roles, bin_width_s, rerun=recompute)
+                    saved = report.result_path
+                except (OSError, ValueError) as error:
+                    st_module.error(f"Could not prepare timeline: {error}")
+                    return
+            started = perf_counter()
+            try:
+                if saved is not None:
+                    info = saved.stat()
+                    result = load_timeline_result_cached(str(saved), info.st_size, info.st_mtime_ns)
+                    if "reward" not in result.choices:
+                        _, current_choices, _ = load_timeline_behavior_cached(
+                            str(session.metadata_path), config["configuration_id"]
+                        )
+                        # Legacy archives lack reward flags; verify identity before attaching them.
+                        identity = ["row_position", "trial_id", "choice_time", "action"]
+                        if not result.choices[identity].equals(current_choices[identity]):
+                            raise ValueError("Saved choices do not match the current trial table for reward labels.")
+                        result = replace(result, choices=result.choices.assign(reward=current_choices.reward.to_numpy()))
+                    st_module.caption(f"Prepared result: {saved}")
+                else:
+                    origin, choices, events = load_timeline_behavior_cached(
                         str(session.metadata_path), config["configuration_id"]
                     )
-                    # Legacy archives lack reward flags; verify identity before attaching them.
-                    identity = ["row_position", "trial_id", "choice_time", "action"]
-                    if not result.choices[identity].equals(current_choices[identity]):
-                        raise ValueError("Saved choices do not match the current trial table for reward labels.")
-                    result = replace(result, choices=result.choices.assign(reward=current_choices.reward.to_numpy()))
-                st_module.caption(f"Prepared result: {saved}")
-            else:
-                origin, choices, events = load_timeline_behavior_cached(
-                    str(session.metadata_path), config["configuration_id"]
-                )
-                unavailable = {role: "Not prepared" if role in roles else "No probe assigned" for role in ("PFC", "HPC")}
-                result = SessionTimelineResult(session.session_id, origin, choices, events, {}, unavailable, config)
-                st_module.info(
-                    "Behavior is available now. Select probes and click Prepare to compute and save their session PCs."
-                )
-        except (OSError, ValueError, KeyError) as error:
-            st_module.error(f"Could not load timeline: {error}")
-            return
-    load_elapsed = perf_counter() - started
-    state_key = f"{scope}_{config['configuration_id']}"
-    summary = None
-    if prediction_display is None or prediction_display.pc_mode != "hidden":
-        summary = _window_summary_controls(st_module, saved, state_key)
-    speed = _speed_controls(st_module, session, scope)
-    visible, revision = _navigation_controls(st_module, result, state_key)
-    zscore_pcs = st_module.sidebar.checkbox(
-        "Z-score each PC",
-        value=False,
-        disabled=not result.regions or (prediction_display is not None and prediction_display.pc_mode != "raw"),
-        key=f"{state_key}_zscore_pcs",
-        help="Use each PC's mean and population SD across all prepared choice-window bins in this session.",
-    )
-    pc_ranges, limits = {}, {}
-    if prediction_display is None or (prediction_display.pc_mode != "hidden" and prediction_display.pc_order == "original"):
-        pc_ranges, limits = _pc_controls(
-            st_module, result, state_key, zscore_pcs,
-            allow_manual_limits=prediction_display is None or prediction_display.pc_mode == "raw",
+                    unavailable = {role: "Not prepared" if role in roles else "No probe assigned" for role in ("PFC", "HPC")}
+                    result = SessionTimelineResult(session.session_id, origin, choices, events, {}, unavailable, config)
+                    st_module.info(
+                        "Behavior is available now. Select probes and click Prepare to compute and save their session PCs."
+                    )
+            except (OSError, ValueError, KeyError) as error:
+                st_module.error(f"Could not load timeline: {error}")
+                return
+        load_elapsed = perf_counter() - started
+        state_key = f"{scope}_{config['configuration_id']}"
+        navigation_key = f"{scope}_{result.session_id}_{result.time_origin_s}_navigation"
+        summary = None
+        if prediction_display is None or prediction_display.pc_mode != "hidden":
+            summary = _window_summary_controls(st_module, saved, state_key)
+        speed = _speed_controls(st_module, session, scope)
+        visible, revision = _navigation_controls(st_module, result, navigation_key)
+        zscore_pcs = st_module.sidebar.checkbox(
+            "Z-score each PC",
+            value=False,
+            disabled=not result.regions or (prediction_display is not None and prediction_display.pc_mode != "raw"),
+            key=f"{state_key}_zscore_pcs",
+            help="Use each PC's mean and population SD across all prepared choice-window bins in this session.",
         )
-    context_available = not context_intervals(
-        result.events, session_time_bounds(result)[1]
-    ).empty
-    show_context = st_module.sidebar.checkbox(
-        "Show active context",
-        value=context_available,
-        disabled=not context_available,
-        key=f"{state_key}_context",
-    )
-    if not context_available:
-        st_module.caption("Active context unavailable: no logged context-entry events.")
-    elif show_context:
-        st_module.caption(
-            "Choice background: blue = left active; red = right active; gray = dark period. "
-            "Unshaded time has unknown context."
+        pc_ranges, limits = {}, {}
+        if prediction_display is None or (prediction_display.pc_mode != "hidden" and prediction_display.pc_order == "original"):
+            pc_ranges, limits = _pc_controls(
+                st_module, result, state_key, zscore_pcs,
+                allow_manual_limits=prediction_display is None or prediction_display.pc_mode == "raw",
+            )
+        context_available = not context_intervals(
+            result.events, session_time_bounds(result)[1]
+        ).empty
+        show_context = st_module.sidebar.checkbox(
+            "Show active context",
+            value=context_available,
+            disabled=not context_available,
+            key=f"{state_key}_context",
         )
-    available = available_event_tracks(result.events)
-    selected_tracks = tuple(
-        track
-        for track in EVENT_TRACKS
-        if st_module.sidebar.checkbox(
-            EVENT_LABELS[track],
-            value=track in available,
-            disabled=track not in available,
-            key=f"{state_key}_event_{track}",
+        if not context_available:
+            st_module.caption("Active context unavailable: no logged context-entry events.")
+        elif show_context:
+            st_module.caption(
+                "Choice background: blue = left active; red = right active; gray = dark period. "
+                "Unshaded time has unknown context."
+            )
+        available = available_event_tracks(result.events)
+        selected_tracks = tuple(
+            track
+            for track in EVENT_TRACKS
+            if st_module.sidebar.checkbox(
+                EVENT_LABELS[track],
+                value=track in available,
+                disabled=track not in available,
+                key=f"{state_key}_event_{track}",
+            )
         )
-    )
-    missing_tracks = [
-        EVENT_LABELS[track] for track in EVENT_TRACKS if track not in available
-    ]
-    if missing_tracks:
-        st_module.caption(
-            "No optional events available for: " + ", ".join(missing_tracks)
+        missing_tracks = [
+            EVENT_LABELS[track] for track in EVENT_TRACKS if track not in available
+        ]
+        if missing_tracks:
+            st_module.caption(
+                "No optional events available for: " + ", ".join(missing_tracks)
+            )
+        bounded = st_module.sidebar.checkbox(
+            "Load only visible neural interval",
+            value=bin_width_s == 0.02,
+            key=f"{state_key}_bounded",
+            help="Defaults on at 20 ms because full-session heatmap payloads can exceed browser transport limits. Window counts still use the whole session.",
         )
-    bounded = st_module.sidebar.checkbox(
-        "Load only visible neural interval",
-        value=bin_width_s == 0.02,
-        key=f"{state_key}_bounded",
-        help="Defaults on at 20 ms because full-session heatmap payloads can exceed browser transport limits. Window counts still use the whole session.",
-    )
-    loaded = None
-    if bounded:
-        low, high = session_time_bounds(result)
-        duration = visible[1] - visible[0]
-        loaded = (max(low, visible[0] - duration), min(high, visible[1] + duration))
-        st_module.caption(
-            f"Neural data loaded for {loaded[0]:.3f}-{loaded[1]:.3f} s. "
-            "Use Window start or Jump to load another interval; pan within the loaded interval."
+        loaded = None
+        if bounded:
+            low, high = session_time_bounds(result)
+            duration = visible[1] - visible[0]
+            loaded = (max(low, visible[0] - duration), min(high, visible[1] + duration))
+            st_module.caption(
+                f"Neural data loaded for {loaded[0]:.3f}-{loaded[1]:.3f} s. "
+                "Use Window start or Jump to load another interval; pan within the loaded interval."
+                " A browser range outside the destination loaded interval resets to the control-selected interval."
+            )
+        started = perf_counter()
+        figure = plot_session_timeline(
+            result,
+            visible,
+            pc_ranges,
+            selected_tracks,
+            loaded,
+            limits,
+            revision,
+            show_context=show_context,
+            zscore_pcs=zscore_pcs,
+            window_variance=summary.regions if summary is not None else None,
+            speed=speed,
+            prediction_display=prediction_display,
         )
-    started = perf_counter()
-    figure = plot_session_timeline(
-        result,
-        visible,
-        pc_ranges,
-        selected_tracks,
-        loaded,
-        limits,
-        revision,
-        show_context=show_context,
-        zscore_pcs=zscore_pcs,
-        window_variance=summary.regions if summary is not None else None,
-        speed=speed,
-        prediction_display=prediction_display,
-    )
-    construction_elapsed = perf_counter() - started
+        construction_elapsed = perf_counter() - started
     render_timeline_chart(figure, key=f"{scope}_chart")
     st_module.caption(
         "Completed choices and unsmoothed activity within [-2, +2) s windows. "
@@ -206,7 +216,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
     )
     if summary is not None:
         _render_window_readout(
-            st_module, summary, st_module.session_state.get(f"{state_key}_trial")
+            st_module, summary, st_module.session_state.get(f"{navigation_key}_trial")
         )
     with st_module.expander("Display timing"):
         st_module.write(

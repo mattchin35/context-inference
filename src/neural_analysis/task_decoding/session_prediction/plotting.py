@@ -7,6 +7,34 @@ import plotly.graph_objects as go
 
 from .modeling import build_pc_contributions
 from .results import SessionPredictions
+from .config import GENERALIZATION_MODE
+
+
+def analysis_mode_label(analysis_mode: str) -> str:
+    """Return the visible analysis name for a validated canonical mode identifier."""
+    return ("Correct-rewarded generalization" if analysis_mode == GENERALIZATION_MODE
+            else "Mixed-outcome decoding")
+
+
+def training_population_label(analysis_mode: str) -> str:
+    """Return the training-population caption for a validated canonical mode string."""
+    return "correct-rewarded training" if analysis_mode == GENERALIZATION_MODE else "mixed-outcome training"
+
+
+def prediction_target_label(analysis_mode: str, target_name: str, source_label: str) -> str:
+    """Return a mode-specific binary label, or retain a continuous target's source label."""
+    if target_name in ("current_state", "current_action"):
+        suffix = "generalization" if analysis_mode == GENERALIZATION_MODE else "decoding"
+        return f"{target_name.removeprefix('current_').capitalize()} {suffix}"
+    return source_label
+
+
+def prediction_display_label(display: "PredictionDisplay") -> str:
+    """Return the selected target label and training population from saved display data."""
+    inputs = display.result.inputs
+    source = inputs.target_metadata[display.target_name]["display_label"]
+    target = prediction_target_label(inputs.analysis_mode, display.target_name, source)
+    return f"{target} ({training_population_label(inputs.analysis_mode)})"
 
 
 @dataclass(frozen=True)
@@ -58,7 +86,7 @@ def add_prediction_tracks(
     inputs = display.result.inputs
     target = inputs.target_names.index(display.target_name)
     binary = inputs.target_families[target] == "categorical"
-    label = inputs.target_metadata[display.target_name]["display_label"]
+    label = prediction_display_label(display)
     for offset, role in enumerate(("PFC", "HPC")):
         row = first_row + offset
         actual_x, actual_y, actual_custom = [], [], []
@@ -71,7 +99,7 @@ def add_prediction_tracks(
             x=actual_x, y=actual_y, mode="lines", name=f"{role} actual",
             line={"color": "#111827", "width": 1.5, "dash": "dot"}, connectgaps=False,
             customdata=actual_custom,
-            hovertemplate="Actual %{y:.5g}<br>Trial %{customdata[0]}<extra></extra>",
+            hovertemplate=label + "<br>Actual %{y:.5g}<br>Trial %{customdata[0]}<extra></extra>",
         ), row=row, col=1)
         if role in display.result.regions:
             region = inputs.timeline.regions[role]

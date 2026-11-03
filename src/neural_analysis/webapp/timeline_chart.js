@@ -70,11 +70,19 @@ export default async function renderTimeline({parentElement, data}) {
     const primaryTimeAxis = figure.layout.meta?.primary_time_axis ?? "xaxis";
     const currentRange = state.chart._fullLayout?.[primaryTimeAxis]?.range;
     if (currentRange && state.revision === figure.layout.uirevision) {
+        // Bounded payloads may not cover browser-only pan; use the requested
+        // server interval when the whole previous viewport is unavailable.
+        const fitsDestination = timeAxes.every((name) => {
+            const axis = figure.layout[name];
+            return !axis || ((axis.minallowed == null || currentRange[0] >= axis.minallowed)
+                && (axis.maxallowed == null || currentRange[1] <= axis.maxallowed));
+        });
+        const range = fitsDestination ? currentRange : figure.layout[primaryTimeAxis]?.range;
         for (const name of timeAxes) {
             const axis = figure.layout[name];
-            if (axis) {
-                axis.range = [...currentRange];
-                rangeUpdate[`${name}.range`] = [...currentRange];
+            if (axis && range) {
+                axis.range = [...range];
+                rangeUpdate[`${name}.range`] = [...range];
             }
         }
     }
