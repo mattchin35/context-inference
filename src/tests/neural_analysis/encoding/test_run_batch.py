@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import shutil
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -78,6 +79,19 @@ def test_batch_runs_two_synthetic_sessions_in_capped_processes(
     assert len(report["reports"]) == 2
     assert all(item["status"] == "complete" for item in report["reports"])
     assert len({item["run_directory"] for item in report["reports"]}) == 2
+
+
+def test_batch_uses_spawn_instead_of_forking_loaded_scientific_threads(
+    batch_configs: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Input configs/patch; executor gets explicit spawn context, return None, no physical units."""
+    executor = MagicMock()
+    executor.__enter__.return_value = executor
+    executor.submit.return_value.result.return_value = {"status": "complete"}
+    factory = MagicMock(return_value=executor)
+    monkeypatch.setattr(run_batch, "ProcessPoolExecutor", factory)
+    run_batch.run_encoding_batch(batch_configs, workers=2)
+    assert factory.call_args.kwargs["mp_context"].get_start_method() == "spawn"
 
 
 def test_batch_cli_parses_config_list_and_dry_run(

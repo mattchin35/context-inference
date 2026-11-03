@@ -7,7 +7,7 @@ import subprocess
 import numpy as np
 import pytest
 
-from src.neural_analysis.encoding import pipeline, results, run_session
+from src.neural_analysis.encoding import pipeline, preparation, results, run_session
 from src.neural_analysis.encoding.configuration import EncodingConfig
 from src.neural_analysis.population import session_timeline_io
 
@@ -20,6 +20,11 @@ def forbid_loading(*args: object, **kwargs: object) -> None:
 def interrupt_before_cells(*args: object, **kwargs: object) -> None:
     """Raise a simulated interruption after preparation; arbitrary inputs, no outputs."""
     raise RuntimeError("synthetic interruption before cells")
+
+
+def interrupt_preparation(*args: object, **kwargs: object) -> None:
+    """Raise before preparation publication; arbitrary source arguments, no output arrays."""
+    raise RuntimeError("synthetic interruption during preparation")
 
 
 def config_path(config: EncodingConfig) -> Path:
@@ -52,6 +57,18 @@ def test_dry_run_reports_deferred_manual_alignment_without_spike_extrema(
     reason = report["input_blockers"]["PFC"].lower()
     assert "irig" in reason and ("manual" in reason or "deferred" in reason)
     assert not encoding_session.run_root.exists()
+
+
+def test_dry_run_counts_unique_cells_when_penalty_comparisons_share_signed_fits(
+    encoding_session: EncodingConfig,
+) -> None:
+    """Input config; both penalty modes plan 60 distinct fits, not 72 duplicate labels."""
+    path = config_path(encoding_session)
+    payload = json.loads(path.read_text())
+    payload["penalty_modes"] = ["same_numeric", "matched_context"]
+    path.write_text(json.dumps(payload))
+    report = run_session.run_encoding_session(path, command="dry-run")
+    assert report["planned_cells"] == 60
 
 
 def test_new_reuses_completed_run_and_saves_session_local_audit_files(
@@ -141,6 +158,23 @@ def test_main_parses_dry_run_and_status_errors(
     assert json.loads(capsys.readouterr().out)["status"] == "dry-run"
     assert run_session.main(["status", "--run-directory", str(encoding_session.run_root / "absent")]) == 1
     assert capsys.readouterr().err
+
+
+def test_resume_before_preparation_requires_original_inputs(
+    encoding_session: EncodingConfig, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Input config/patch; changed provenance blocks unpublished-preparation resume, return None."""
+    monkeypatch.setattr(preparation, "prepare_regional_activity", interrupt_preparation)
+    with pytest.raises(RuntimeError, match="interruption during preparation"):
+        run_session.run_encoding_session(config_path(encoding_session))
+    directory = next(encoding_session.run_root.glob("context_encoding_*"))
+    manifest = results.load_run_manifest(directory)
+    saved_path = encoding_session.session_root / manifest["preparation_path"]
+    assert not saved_path.exists()
+    encoding_session.feature_parameters.write_text('{"changed":true}')
+    with pytest.raises(ValueError, match="changed|new run"):
+        run_session.run_encoding_session(command="resume", run_directory=directory)
+    assert not saved_path.exists()
 
 
 def test_cli_limits_nested_blas_before_importing_numerical_libraries() -> None:
