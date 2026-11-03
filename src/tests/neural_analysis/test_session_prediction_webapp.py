@@ -5,6 +5,8 @@ import shutil
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from streamlit.testing.v1 import AppTest
 
 from src.neural_analysis.task_decoding.session_prediction.run_session import prepare_session_predictions
@@ -95,3 +97,99 @@ def test_hidden_pc_view_does_not_offer_invisible_window_count_tracks(runnable_se
     at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
     assert not at.exception
     assert not any(widget.label == "Show fixed-axis window counts" for widget in at.checkbox)
+
+
+@pytest.mark.parametrize("mode", ["correct_rewarded_generalization", "mixed_outcome_decoding"])
+def test_saved_only_unprepared_switch_and_hidden_predictions_keep_anchor(runnable_session, tmp_path, monkeypatch, mode):
+    """Raw-free mode switches retain saved behavior/PCA and suppress every model overlay."""
+    from src.neural_analysis.webapp import session_prediction_view, timeline_view
+
+    report = prepare_session_predictions(
+        runnable_session, probe_roles={"PFC": "A", "HPC": "B"}, analysis_mode=mode,
+    )
+    copied = tmp_path / "portable"
+    shutil.copytree(runnable_session.parent / "analysis_runs", copied / "analysis_runs")
+    shutil.copyfile(runnable_session, copied / "neural_session.json")
+
+    def forbidden(*args, **kwargs):
+        """Any preparation/raw lookup violates portable saved inspection; return never."""
+        raise AssertionError("Saved-only switching cannot use raw inputs or fit")
+
+    monkeypatch.setattr(timeline_view.timeline_io, "timeline_configuration", forbidden)
+    monkeypatch.setattr(timeline_view, "load_timeline_behavior_cached", forbidden)
+    monkeypatch.setattr(timeline_view, "run_session_timeline", forbidden)
+    monkeypatch.setattr(session_prediction_view, "prepare_session_predictions", forbidden)
+    at = AppTest.from_function(render_prediction_test_app, args=(str(copied / "neural_session.json"),)).run()
+    assert not at.exception
+    assert any(trace.get("name") == "PFC prediction" for trace in figure_spec(at)["data"])
+    assert next(widget for widget in at.selectbox if widget.label == "Analysis").value == mode
+    next(widget for widget in at.checkbox if widget.label == "Show predictions").uncheck().run()
+    assert not at.exception
+    assert not any("prediction" in trace.get("name", "") or "actual" in trace.get("name", "")
+                   for trace in figure_spec(at)["data"])
+    assert any(trace.get("name") == "PFC" for trace in figure_spec(at)["data"])
+    next(widget for widget in at.checkbox if widget.label == "Show predictions").check().run()
+    next(widget for widget in at.selectbox if widget.label == "Prediction PC view").select("weighted").run()
+    other = "mixed_outcome_decoding" if mode == "correct_rewarded_generalization" else "correct_rewarded_generalization"
+    before = figure_spec(at)["layout"]["uirevision"]
+    next(widget for widget in at.selectbox if widget.label == "Analysis").select(other).run()
+    assert not at.exception
+    spec = figure_spec(at)
+    assert spec["layout"]["uirevision"] == before
+    assert any("not prepared" in caption.value for caption in at.caption)
+    assert any("500 ms" in caption.value and "background" in caption.value.lower() for caption in at.caption)
+    assert not any("prediction" in trace.get("name", "") or "actual" in trace.get("name", "")
+                   for trace in spec["data"])
+    assert any(trace.get("name") == "PFC" for trace in spec["data"])
+    assert next(widget for widget in at.button if widget.label == "Recompute predictions").disabled
+    next(widget for widget in at.selectbox if widget.label == "Analysis").select(mode).run()
+    assert not at.exception
+    assert any(trace.get("name") == "PFC prediction" for trace in figure_spec(at)["data"])
+    assert (copied / report.result_path.relative_to(runnable_session.parent)).exists()
+
+
+def test_cross_configuration_mode_switch_retains_navigation_and_clear_labels(runnable_session, monkeypatch):
+    """500/100-ms mode switches keep time navigation while controls follow saved basis."""
+    from src.neural_analysis.webapp import session_prediction_view
+
+    roles = {"PFC": "A", "HPC": "B"}
+    reference = prepare_session_predictions(runnable_session, probe_roles=roles)
+    mixed = prepare_session_predictions(runnable_session, probe_roles=roles, bin_width_ms=100,
+                                        analysis_mode="mixed_outcome_decoding")
+    assert load_prediction_result(reference.result_path).meta["source_pca"]["configuration_id"] != load_prediction_result(mixed.result_path).meta["source_pca"]["configuration_id"]
+    monkeypatch.setattr(session_prediction_view, "prepare_session_predictions", Mock(side_effect=AssertionError("No refit")))
+    at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
+    next(widget for widget in at.number_input if widget.label == "Visible duration (s)").set_value(40.0).run()
+    next(widget for widget in at.number_input if widget.label == "Window start (s)").set_value(50.0).run()
+    next(widget for widget in at.selectbox if widget.label == "Jump to trial").select(9).run()
+    initial = figure_spec(at)
+    assert any("State generalization (correct-rewarded training)" in item["text"]
+               for item in initial["layout"]["annotations"])
+    next(widget for widget in at.selectbox if widget.label == "Analysis").select("mixed_outcome_decoding").run()
+    assert not at.exception
+    updated = figure_spec(at)
+    assert updated["layout"]["uirevision"] == initial["layout"]["uirevision"]
+    assert updated["layout"]["xaxis"]["range"] == initial["layout"]["xaxis"]["range"]
+    assert updated["layout"]["yaxis"]["uirevision"] != initial["layout"]["yaxis"]["uirevision"]
+    assert next(widget for widget in at.number_input if widget.label == "Visible duration (s)").value == 40
+    assert next(widget for widget in at.number_input if widget.label == "Window start (s)").value == 50
+    assert next(widget for widget in at.selectbox if widget.label == "Jump to trial").value == 9
+    assert next(widget for widget in at.selectbox if widget.label == "Prediction target").options == ["State decoding", "Action decoding"]
+    assert "mixed_outcome_decoding" in next(widget for widget in at.selectbox if widget.label == "Saved predictions").options[0]
+    assert any("State decoding (mixed-outcome training)" in item["text"] for item in updated["layout"]["annotations"])
+    assert any("sample size" in item.value and "regularization" in item.value for item in at.caption)
+    next(widget for widget in at.button if widget.label == "Jump").click().run()
+    assert figure_spec(at)["layout"]["uirevision"] != updated["layout"]["uirevision"]
+
+
+def test_gui_prepare_forwards_selected_mode_and_bounded_caption(runnable_session):
+    """Explicit mixed Prepare yields two-target products and explains bounded resets."""
+    at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
+    next(widget for widget in at.selectbox if widget.label == "PFC probe").select("A").run()
+    next(widget for widget in at.selectbox if widget.label == "Analysis").select("mixed_outcome_decoding").run()
+    next(widget for widget in at.button if widget.label == "Prepare predictions").click().run()
+    assert not at.exception
+    path = next(runnable_session.parent.glob("analysis_runs/condition_session_prediction_*/results.npz"))
+    assert load_prediction_result(path).inputs.target_names == ("current_state", "current_action")
+    next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval").check().run()
+    assert any("reset" in item.value.lower() and "loaded" in item.value.lower() for item in at.caption)

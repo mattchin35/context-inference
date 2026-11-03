@@ -111,3 +111,38 @@ def test_missing_region_keeps_actual_overlay_and_unavailable_panel(display_resul
     figure = plot_session_timeline(timeline, prediction_display=plotting.PredictionDisplay(saved, "current_state"))
     assert any(trace.name == "HPC actual" for trace in figure.data)
     assert any("unavailable" in annotation.text.lower() for annotation in figure.layout.annotations)
+
+
+@pytest.mark.parametrize("mode, label, training", [
+    ("correct_rewarded_generalization", "generalization", "correct-rewarded training"),
+    ("mixed_outcome_decoding", "decoding", "mixed-outcome training"),
+])
+@pytest.mark.parametrize("target", ["current_state", "current_action"])
+def test_binary_mode_labels_reach_titles_and_all_neural_hover(prediction_inputs, mode, label, training, target):
+    """Visible labels disclose selected mode/training for predictions and contributions."""
+    base, trials, timeline = prediction_inputs
+    prepared = prepare_prediction_inputs(trials, timeline, base, analysis_mode=mode)
+    saved = SessionPredictions(prepared, {role: fit_region(prepared, role, use_training_membership=True)
+                                         for role in timeline.regions}, {})
+    display = plotting.PredictionDisplay(saved, target, pc_mode="weighted")
+    figure = plot_session_timeline(timeline, prediction_display=display)
+    title = f"{target.removeprefix('current_').capitalize()} {label}"
+    assert any(f"{title} ({training})" in annotation.text for annotation in figure.layout.annotations)
+    for trace in figure.data:
+        if trace.name == "PFC prediction" or trace.type == "heatmap":
+            assert title in trace.hovertemplate
+            assert training in trace.hovertemplate
+
+
+def test_horizontal_identity_uses_session_origin_while_vertical_uses_basis(display_result):
+    """Different PCA IDs/PC counts preserve time; different origins reset coordinates."""
+    timeline = display_result.inputs.timeline
+    changed_region = replace(timeline.regions["PFC"], scores=timeline.regions["PFC"].scores[:, :, :1])
+    changed = replace(timeline, regions={**timeline.regions, "PFC": changed_region},
+                      meta={**timeline.meta, "configuration_id": "another-basis", "bin_width_s": 0.1})
+    first = plot_session_timeline(timeline, viewport_revision=2)
+    second = plot_session_timeline(changed, viewport_revision=2)
+    assert first.layout.uirevision == second.layout.uirevision
+    assert first.layout.yaxis.uirevision != second.layout.yaxis.uirevision
+    shifted = plot_session_timeline(replace(changed, time_origin_s=changed.time_origin_s + 1), viewport_revision=2)
+    assert shifted.layout.uirevision != second.layout.uirevision

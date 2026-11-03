@@ -127,6 +127,18 @@ assert.deepEqual(relayouts.at(-1).update['xaxis4.range'], [70, 130]);
 assert.ok(!('xaxis.range' in relayouts.at(-1).update));
 assert.ok(!('xaxis3.range' in relayouts.at(-1).update));
 assert.deepEqual(calls.at(-1).layout.xaxis.range, [-0.5, 0.5]);
+// Same-session 500-ms -> bounded 20-ms switch: no browser callback supplies pan to Python.
+children[0]._fullLayout.xaxis2.range = [1000, 1060];
+figure.layout.xaxis2 = {range: [0, 60], minallowed: 0, maxallowed: 120};
+figure.layout.xaxis4 = {range: [0, 60], minallowed: 0, maxallowed: 120, matches: 'x2'};
+await render({parentElement: parent, data: {figure_json: JSON.stringify(figure)}});
+assert.deepEqual(relayouts.at(-1).update['xaxis2.range'], [0, 60]);
+assert.deepEqual(relayouts.at(-1).update['xaxis4.range'], [0, 60]);
+// Bounded loading still retains pan when the destination has that whole interval.
+children[0]._fullLayout.xaxis2.range = [35, 95];
+await render({parentElement: parent, data: {figure_json: JSON.stringify(figure)}});
+assert.deepEqual(relayouts.at(-1).update['xaxis2.range'], [35, 95]);
+assert.deepEqual(relayouts.at(-1).update['xaxis4.range'], [35, 95]);
 cleanup();
 assert.equal(purges, 1);
 assert.equal(observers[0].disconnected, true);
