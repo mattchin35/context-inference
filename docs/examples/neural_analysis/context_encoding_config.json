@@ -1,0 +1,14 @@
+{
+  "session_metadata": "neural_session.json",
+  "augmented_trials": "processed/augmented_trials.csv",
+  "feature_parameters": "processed/trial_feature_params.json",
+  "probe_roles": null,
+  "timeline_result": null,
+  "bin_width_ms": 500,
+  "windows": ["before", "after", "whole"],
+  "timing_modes": ["choice_updated", "trial_window"],
+  "encodings": ["signed_context", "separate_context"],
+  "estimators": ["ridge", "ols"],
+  "alpha": 1.0,
+  "penalty_modes": ["same_numeric", "matched_context"]
+}
