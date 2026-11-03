@@ -108,7 +108,9 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
             return
     load_elapsed = perf_counter() - started
     state_key = f"{scope}_{config['configuration_id']}"
-    summary = _window_summary_controls(st_module, saved, state_key)
+    summary = None
+    if prediction_display is None or prediction_display.pc_mode != "hidden":
+        summary = _window_summary_controls(st_module, saved, state_key)
     speed = _speed_controls(st_module, session, scope)
     visible, revision = _navigation_controls(st_module, result, state_key)
     zscore_pcs = st_module.sidebar.checkbox(
