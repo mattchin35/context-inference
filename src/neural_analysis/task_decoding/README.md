@@ -354,6 +354,14 @@ At fixed C, mixed training changes sample size and regularization relative to
 average loss as well as outcome composition; it is not a controlled comparison
 of composition alone.
 
+`scoring.py` derives selected-target trial-mean performance from these saved
+products, averaging probabilities/values over `[-1,+1)` s. It reports binary
+accuracy/balanced accuracy, numerical R2/RMSE, exact per-fold training/matching
+test scores, pooled held-out outcome summaries, and left/right choice and
+state/context scores/counts/differences. The existing timeline performance
+panel caches only the small summaries; no fitting, raw reads, archive rewrite,
+or change to scientific fit identity is required.
+
 This path preserves the existing decoder's models, pooled `full` window and
 saved schemas. Existing target-loader callers remain strict by default;
 keyword-only missing-block/empty-numerical-target options are enabled only

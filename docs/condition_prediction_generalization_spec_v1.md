@@ -1,10 +1,12 @@
 # Condition Generalization and Mixed-Outcome Decoding on the Session Timeline
 
-Status: scientific decisions confirmed, document revision 2, 2026-11-03.
+Status: scientific decisions confirmed, document revision 3, 2026-11-03.
 Both analysis modes are implemented and validated on synthetic data. Original
 correct-rewarded CT026 validation is recorded; mixed-outcome experimental
 preparation and user acceptance remain outstanding. The linked plan records
 the separate implementation and validation gates. Keep this existing filename.
+Trial-mean training/held-out performance and both left/right splits are
+implemented as saved-model summaries; model fitting and archive versions are unchanged.
 
 Implementation plan and validation record:
 [condition_prediction_generalization_implementation_plan.md](condition_prediction_generalization_implementation_plan.md).
@@ -277,6 +279,49 @@ Display probability on `[0, 1]`, with class 1 explicitly labeled as left
 state or left action. Weighted PC contributions are additive log-odds terms,
 not additive probability contributions. The continuous HMM log-odds target
 remains a separate numerical regression target.
+
+### Training, held-out performance, and laterality
+
+For both modes, summarize the selected target with one prediction per trial:
+average its bin predictions over the existing `[-1,+1)` training interval.
+For binary targets, average probabilities first, then classify as left when
+the mean is at least 0.5. Do not classify an averaged logit or count bins as
+independent trials. Continuous means retain native target units.
+
+Report binary accuracy and balanced accuracy (fractions displayed as
+percentages); continuous R2 and RMSE (RMSE in target units). Empty groups have
+zero trials and unavailable metrics, not zero performance. Single-class groups
+retain ordinary accuracy but balanced accuracy is unavailable. Constant or
+singleton continuous groups retain RMSE but R2 is unavailable; negative R2
+values remain visible.
+
+Training scores apply each fold's saved coefficients to that model's exact
+saved training-choice mask. Present these per fold: the training sets overlap
+and must not be pooled into an inflated independent trial count. Held-out
+scores use each choice's own saved held-out predictions, pooled with every
+trial counted once per region. Require baseline/target validity, an assigned
+fold, regional coverage and complete finite predictions in the scoring interval.
+Scoring availability does not change prediction availability or model fitting.
+
+Show held-out performance for the mode's training outcomes and all eligible
+choices, plus correct-rewarded, correct-omission and incorrect breakdowns.
+This separates fit quality from generalization to other outcomes. The per-fold
+training/test comparison uses matching training outcomes. Report trial counts.
+
+For held-out laterality, show both independent splits: actual left/right choice
+and recorded left/right task state/context, using saved trial-i target values.
+They differ on incorrect trials. Each split has left/right metrics, counts,
+and left-minus-right differences, separately for each region. The selected
+held-out population also controls these comparisons. Missing side labels are
+excluded from that split only. Higher accuracy/R2 is better; lower RMSE is
+better. Laterality differences alone do not establish a hemisphere effect:
+outcome composition, class balance and behavior can also differ by side.
+
+Compute scores from saved models/PCA in a pure scoring module, with cached
+small UI summaries for the selected target. No refitting, new archive schema,
+raw-source requirement, significance test, or hemisphere metadata is added.
+These summaries describe the entire saved session, independent of viewport
+or displayed PC count. Existing v1 and v2 products remain unchanged.
 
 ### Optional PC rows
 

@@ -1,7 +1,8 @@
 # Condition Generalization and Mixed-Outcome Decoding: Implementation Handoff
 
-Status: both analysis modes implemented, 2026-11-03. WP6-WP8 and WP9
-documentation/synthetic/browser gates are complete (216 integration tests).
+Status: both analysis modes and saved-model performance/laterality summaries
+implemented, 2026-11-03. WP6-WP8, WP10 and WP9 documentation/synthetic/browser
+gates are complete (237 integration tests).
 Original CT026 generalization validation is recorded; user acceptance and a
 new CT026 mixed-outcome preparation remain outstanding. No experimental run
 or batch was included in the extension implementation instruction.
@@ -25,15 +26,15 @@ checkpointing to this analysis.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-03 / `refactor`; validated extension source commit `5b72147`, original CT026 computation `2c39850`. Baseline was `d2bdd43`; extension commits are local, not pushed. Recheck on resumption. |
-| Phase / authorization | User authorized extension implementation; code and synthetic/browser gates complete. No new experimental processing, batch, transfer or cluster operation included. |
-| Scientific settings | Two fixed modes confirmed; mixed-outcome state AND action, with the five continuous readouts retained only in correct-rewarded generalization. See Section 2. |
-| Source/tests | WP6-WP8 implemented. Full Section 9 integration gate: 216 passed in 14.43 s, including Node frontend checks. Changed Python Ruff and whitespace checks clean. |
-| Documentation | Spec/plan revision 2 and existing timeline/neural/task-decoding usage guides describe both modes, v1/v2 products, anchored inspection, navigation, and the bounded-loading exception. |
+| Date / branch / inspected HEAD | 2026-11-03 / `refactor`; scoring source `86b7131`, UI `c315ef4`, mode implementation `5b72147`, original CT026 computation `2c39850`. Commits are local, not pushed. Recheck on resumption. |
+| Phase / authorization | User requested training/test performance and confirmed trial means over [-1,+1) plus both left/right choice/context splits. Implementation and synthetic/browser gates complete; no new experimental preparation, batch, transfer or cluster operation. |
+| Scientific settings | Two fixed modes retained. New display scores average probabilities/values per trial over [-1,+1); binary accuracy/balanced accuracy, numerical R2/RMSE; per-fold training and unique pooled held-out trials; both lateralities with counts. |
+| Source/tests | WP6-WP8 and WP10 implemented. Full Section 9 integration gate: 237 passed in 17.73 s, including Node frontend checks. Changed Python Ruff and whitespace checks clean. |
+| Documentation | Spec document revision 3 and existing usage guides describe both modes, v1/v2 archives, navigation, and saved-model performance/laterality. Fit and archive versions are unchanged by scoring. |
 | Existing user changes | Staged: added `docs/session_timeline_pca_spec_v1.md`. Unstaged tracked: `src/main.py`, `src/neural_analysis/sync_ephys.py`. Preserve these and unrelated untracked files. |
 | Team / writer | Current chat lead is the sole writer; no worker launched. Runtime model/effort identity is not exposed to the agent. |
 | Running analysis | No experimental analysis/worker launched. Temporary synthetic browser preview used port 8518; stopped after inspection. Original port-8517 preview was left untouched. |
-| Latest verification | Extension: 216 passed in 14.43 s; browser preserved 40-90 s ticks across 500/100-ms modes and weighted rows. Bounded 20-ms retained an in-bounds pan and reset an out-of-bounds pan. Original CT026 evidence remains unchanged. |
+| Latest verification | 237 passed in 17.73 s. Synthetic saved-only browser displayed outcome scores, training/test folds, choice/context laterality and differences, and continuous R2/RMSE. Previous mode/navigation and original CT026 evidence remain unchanged. |
 | Next action | User review and, when requested, the designated 500-ms CT026 mixed preparation/inspection portion of WP9. Preserve original results and completed evidence; no implementation work remains. |
 
 ### 0.2 Package ledger
@@ -56,6 +57,7 @@ experimental visual acceptance belongs to the user.
 | WP7 models/persistence extension | Lead | GREEN | `8a599c1`; 6 failed / 23 setup errors / 10 passed as expected | `1c81c84`; 39 scientific/persistence tests; 125 with package/target regressions | Complete. |
 | WP8 runner/inspection extension | Lead | GREEN | `4c6ee75` runner; `1a54eb0` UI/chart; `9732b6d` counts; `01b0cc1` actual chart position | Runner `1a466c9`; UI `5b72147`; 216 integration tests and real browser checks | Complete. |
 | WP9 extension docs/validation | Lead + user | Docs/synthetic/browser complete; experimental acceptance pending | Required code RED gates complete | Updated usage guides; 216 passed; screenshots below | Separately requested CT026 mixed preparation and user inspection. |
+| WP10 performance/laterality | Lead | GREEN | `c381dda` scoring collection error; `beb4770` three UI failures; `05d0011` continuous caption failure | `86b7131` scoring; `c315ef4` UI; 237 integrated tests, Ruff and synthetic browser checks | Complete; no fits/archive migration required. |
 
 ### 0.3 Resume and interruption procedure
 
@@ -453,6 +455,43 @@ Next exact action, owner, and any missing authority:
 - Next: user review; when separately requested, prepare only the designated
   500-ms CT026 mixed product and obtain visual/scientific acceptance. Do not
   repeat completed implementation or infer authorization for broader processing.
+
+### 2026-11-03 - WP10 / trial-mean training/test performance and laterality
+
+- User requested accuracy and left/right comparisons for both modes, then
+  selected trial means over `[-1,+1)` and both actual choice and recorded
+  state/context splits. Continued the proposed small scoring/UI implementation;
+  no experimental preparation or additional scientific model was requested.
+- RED `c381dda`: new scoring module absent (one expected collection error).
+  GREEN `86b7131`: 18 scoring tests passed; prediction package plus existing
+  target-loader regressions 152 passed. Oracles cover probability-before-class
+  averaging, independent fold reconstruction, unique held-out counts, exact
+  outcome/side masks, negative/undefined R2, native RMSE, and unavailable groups.
+- Training reconstruction uses the exact saved training mask and coefficients,
+  processing one bin's window/PC slice at a time. It applies sigmoid before
+  averaging for binary models. Training sets overlap and remain per-fold;
+  pooled held-out metrics count each eligible trial once per region. No fits,
+  source-array changes, NPZ writes or schema/fit-identity changes.
+- UI RED `beb4770`: three expected missing-panel/cache failures. Caption RED
+  `05d0011` required continuous targets to avoid binary threshold/class advice.
+  GREEN `c315ef4`: saved-only tests pass for both modes, correct units/labels,
+  outcome selection, small-summary caching and fixed chart position/revision.
+  Changing populations/PC displays reuses scores; changing target computes the
+  new target once. Synthetic archived files remain byte-unchanged, with no raw
+  inputs or preparation calls during display.
+- Full Section 9 integration gate with offline/frozen/no-sync uv, bundled
+  NODE_BINARY and MPLCONFIGDIR=.pytest_cache/matplotlib: 237 passed in 17.73 s.
+  Changed Python Ruff and whitespace checks passed. No dependency added.
+- Browser used loopback port 8518 and ignored saved-only synthetic fixture
+  copies in `.pytest_cache/performance_preview_*`. Verified readable binary
+  outcome scores, per-fold training/held-out metrics, both left/right grouping
+  tables/counts and percentage-point differences. Continuous generalization
+  displayed negative R2 and native-unit RMSE. Screenshot:
+  `.pytest_cache/prediction_laterality_browser.png` (synthetic values only).
+  Temporary server/tab stopped after inspection; original port 8517 untouched.
+- Spec/plan and three existing usage guides updated; document checks verify
+  ASCII, local links, fenced blocks and scoring contracts. Unrelated user work
+  remains staged/unstaged as before. No new experimental processing or push.
 
 ## 1. Outcome and boundaries
 
@@ -1387,3 +1426,50 @@ paths. Inspect both modes' titles and traces; original generalization remains
 available and byte-unchanged. Scientific differences are observations, not a
 requirement that curves differ. User visual/scientific acceptance precedes any
 broader rollout. No cluster/resource change or new session is implicit.
+
+## 14. WP10 - saved-model performance and laterality
+
+The user requested training/test accuracy and left/right comparisons, then
+confirmed trial-mean predictions over `[-1,+1)` and both actual choice and
+recorded task-state/context splits. This package is implemented and validated
+as recorded in Section 0; the following retains its test-first reference.
+No experimental preparation is included.
+
+- Add pure `session_prediction/scoring.py` functions for trial-level metrics
+  and selected-target regional summaries. Reuse the existing undefined-R2
+  convention and installed NumPy/scikit-learn metrics; add no dependency.
+- Reconstruct training trial probabilities/values from each model's saved
+  coefficients and exact training mask. Average probabilities after sigmoid.
+  Read test values from each trial's own held-out predictions. Score only the
+  saved training interval and retain baseline, target and fit availability.
+- Return small records: per-fold training/matching-test metrics, pooled
+  held-out metrics by population, left/right choice and context metrics/counts,
+  and left-minus-right differences. Never pool overlapping training sets.
+- Add a performance expander to the existing timeline controls. Show binary
+  accuracy/balanced accuracy or continuous R2/RMSE with counts. Provide a
+  held-out population selector for laterality. Keep the fixed controls
+  container/chart position and saved-only routing. Cache by selected product
+  identity/file stats, target and scoring version, without hashing PCA arrays.
+- Keep source archives and fitting identity unchanged. Read training scores
+  in bounded slices (one bin's windows/PCs at a time), without a new full
+  trial/bin/PC prediction or contribution tensor. Score the selected target
+  only; do not add a scheduler or performance framework.
+
+Tests first, confirm RED, commit tests, then implement:
+
+1. Known binary accuracy/balanced accuracy and continuous R2/RMSE oracles;
+   missing classes, empty groups, singleton/constant targets and negative R2.
+2. Average probabilities rather than logits/class votes; exact interval;
+   one trial per test observation and correct per-fold training reconstruction.
+3. Exclude invalid baseline/actuals, missing blocks, unavailable fits and absent
+   regional windows without modifying saved inputs or prediction availability.
+4. Distinct choice/context splits on incorrect trials; exact left/right counts,
+   metric differences, outcome populations, and independent regional coverage.
+5. Saved-only real UI for both modes and continuous targets: readable metrics,
+   population selection, caching, no fits/raw reads/writes, stable chart position
+   and navigation. Confirm existing v1/v2 loading remains valid.
+
+Focused gates: new scoring tests, existing prediction tests and affected webapp
+tests; then the existing Section 9 integrated command, changed-file Ruff,
+whitespace checks and a synthetic browser inspection. Update Section 0 with
+RED/GREEN commits, exact counts and remaining experimental authority.

@@ -564,6 +564,35 @@ Model details expose fitted-fold status, total/outcome training counts,
 binary class counts, and intercepts. Counts describe the saved training masks;
 they do not trigger balancing or subsampling.
 
+Open **Prediction performance** for the selected saved target. Scores use one
+value per trial: mean prediction over `[-1,+1)` s. State/action use mean left
+probability followed by a 0.5 threshold, with accuracy and balanced accuracy
+shown as percentages. Continuous targets show R2 and RMSE in target units.
+The panel covers the whole saved session, independently of pan or visible PCs.
+
+The held-out table separates all eligible choices, the mode's training
+outcomes, correct-rewarded, correct-omission and incorrect trials. Expand
+**Training / test by fold** to compare each fit's exact training trials with
+its held-out training outcomes. Training sets overlap, so their counts and
+scores are shown per fold rather than pooled as independent trials. Pooled
+held-out scores use each trial's own held-out model and count it once per region.
+
+For laterality, select **Laterality scoring population** and compare left/right
+**Choice** and **State/context** rows separately for PFC and HPC. Counts and
+left-minus-right differences accompany the scores. A positive accuracy
+difference is in percentage points and favors left; a positive RMSE difference
+means larger left errors. Choice and context can disagree on incorrect trials.
+Side differences can also reflect behavior/outcome composition, so they alone
+do not identify a hemisphere effect.
+
+Undefined metrics remain unavailable: single-class groups still have ordinary
+accuracy, constant/singleton targets still have RMSE, and zero-trial groups
+are not assigned zero performance. Missing actual targets, invalid baseline,
+missing blocks and unavailable models are excluded from scoring; missing side
+labels affect only that split. This does not remove otherwise usable timeline
+predictions. Performance is cached from existing v1/v2 products and saved
+coefficients/PCA, without refitting, raw inputs, new files or schema migration.
+
 The Analysis selector filters saved runs and targets. A selected mode with no
 saved result stays unprepared; the last saved behavior/PCA background remains
 visible with its actual bin width, while all predictions, actual-target overlays,

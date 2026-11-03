@@ -124,6 +124,9 @@ Preparation requires the existing task-decoding behavioral config; saved
 display requires only metadata, the prediction run and its exact referenced
 PCA archive. Modes are saved separately; legacy v1 products remain readable.
 Mixed comparisons also change sample size and relative regularization at fixed C.
+The **Prediction performance** panel adds trial-mean training/held-out scores,
+outcome breakdowns, and separate left/right choice and state/context comparisons
+with counts. It uses existing saved models without refitting.
 See [prediction usage](SESSION_TIMELINE.md#condition-prediction-tracks).
 
 Select **Session timeline and PCA** in the metadata-driven webapp to inspect
