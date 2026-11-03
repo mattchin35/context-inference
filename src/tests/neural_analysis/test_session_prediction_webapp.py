@@ -8,6 +8,8 @@ from unittest.mock import Mock
 from streamlit.testing.v1 import AppTest
 
 from src.neural_analysis.task_decoding.session_prediction.run_session import prepare_session_predictions
+from src.neural_analysis.task_decoding.session_prediction.results import load_prediction_result
+from src.neural_analysis.population.run_window_variance import run_window_variance
 from src.neural_analysis.webapp import app, session_inputs
 from src.tests.neural_analysis.task_decoding.session_prediction.test_scripts import (
     runnable_session as runnable_fixture, synthetic_timeline_session as timeline_fixture,
@@ -83,3 +85,13 @@ def test_relocated_saved_display_and_actual_app_dispatch_without_raw_sources(run
     names = [trace.get("name") for trace in figure_spec(at)["data"]]
     assert "PFC prediction" in names and "HPC prediction" in names
     assert (copied / report.result_path.relative_to(runnable_session.parent)).is_file()
+
+
+def test_hidden_pc_view_does_not_offer_invisible_window_count_tracks(runnable_session):
+    """Controls for heatmap-attached variance rows stay hidden when PC rows are hidden."""
+    report = prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"})
+    saved = load_prediction_result(report.result_path)
+    run_window_variance(runnable_session.parent / saved.meta["source_pca"]["path"])
+    at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
+    assert not at.exception
+    assert not any(widget.label == "Show fixed-axis window counts" for widget in at.checkbox)
