@@ -203,24 +203,27 @@ def _validate_cur_trial(trial_df: pd.DataFrame) -> None:
         raise ValueError("cur_trial must equal the complete zero-based row sequence.")
 
 
-def _validate_blocks(block_values: pd.Series) -> None:
+def _validate_blocks(block_values: pd.Series, *, allow_missing_blocks: bool = False) -> None:
     """Validate present block labels occur in one chronological segment each.
 
     Parameters
     ----------
     block_values : pd.Series
         Block identity column with shape ``(n_trials,)`` in chronological order.
+    allow_missing_blocks : bool
+        If True, ignore project-missing entries when checking contiguity.
 
     Returns
     -------
     None
         Raises ValueError for project-missing labels or noncontiguous reuse.
     """
-    if not is_present_value(block_values).all():
+    present = is_present_value(block_values)
+    if not allow_missing_blocks and not present.all():
         raise ValueError("cur_block must be present for every row.")
     seen_blocks: set[tuple[str, str]] = set()
     previous_block: tuple[str, str] | None = None
-    for block_value in block_values:
+    for block_value in block_values.loc[present]:
         block_key = (type(block_value).__name__, repr(block_value))
         if block_key != previous_block:
             if block_key in seen_blocks:
@@ -229,7 +232,13 @@ def _validate_blocks(block_values: pd.Series) -> None:
             previous_block = block_key
 
 
-def validate_augmented_trials(trial_df: pd.DataFrame, config: TaskDecodingConfig) -> None:
+def validate_augmented_trials(
+    trial_df: pd.DataFrame,
+    config: TaskDecodingConfig,
+    *,
+    allow_missing_blocks: bool = False,
+    allow_empty_numerical_targets: bool = False,
+) -> None:
     """Validate a selected run's small augmented behavioral input table.
 
     Parameters
@@ -240,6 +249,9 @@ def validate_augmented_trials(trial_df: pd.DataFrame, config: TaskDecodingConfig
         and ``config.alignment``.
     config : TaskDecodingConfig
         Validated decoding configuration defining selected target sources.
+    allow_missing_blocks, allow_empty_numerical_targets : bool
+        Explicit prediction-analysis opt-ins. Defaults preserve strict decoder
+        validation. Neither option permits malformed present source values.
 
     Returns
     -------
@@ -257,7 +269,7 @@ def validate_augmented_trials(trial_df: pd.DataFrame, config: TaskDecodingConfig
     if missing_columns:
         raise ValueError(f"Augmented trial table is missing required columns: {missing_columns}")
     _validate_cur_trial(trial_df)
-    _validate_blocks(trial_df["cur_block"])
+    _validate_blocks(trial_df["cur_block"], allow_missing_blocks=allow_missing_blocks)
     _action_values_and_validity(trial_df["action"])
     _manual_reward_mask(trial_df[EXPERIMENTER_REWARD_GIVEN_COLUMN])
     alignment_values = _raise_if_invalid_numeric_column(
@@ -291,7 +303,8 @@ def validate_augmented_trials(trial_df: pd.DataFrame, config: TaskDecodingConfig
             _raise_if_invalid_numeric_column(source, definition.source_column)
             continue
         numeric = _raise_if_invalid_numeric_column(source, definition.source_column)
-        if definition.family == "numerical" and not np.isfinite(numeric).any():
+        if (definition.family == "numerical" and not allow_empty_numerical_targets
+                and not np.isfinite(numeric).any()):
             raise ValueError(f"{definition.source_column} must contain at least one finite value.")
 
 
@@ -362,7 +375,13 @@ def _numeric_source_column(
     return numeric_cache[column_name]
 
 
-def build_target_table(trial_df: pd.DataFrame, config: TaskDecodingConfig) -> pd.DataFrame:
+def build_target_table(
+    trial_df: pd.DataFrame,
+    config: TaskDecodingConfig,
+    *,
+    allow_missing_blocks: bool = False,
+    allow_empty_numerical_targets: bool = False,
+) -> pd.DataFrame:
     """Build unfiltered chronological encoded targets and target-specific masks.
 
     Parameters
@@ -373,6 +392,8 @@ def build_target_table(trial_df: pd.DataFrame, config: TaskDecodingConfig) -> pd
         dataframe is not modified.
     config : TaskDecodingConfig
         Validated configuration naming targets and alignment source.
+    allow_missing_blocks, allow_empty_numerical_targets : bool
+        Forwarded validation opt-ins; defaults retain existing strict behavior.
 
     Returns
     -------
@@ -384,7 +405,10 @@ def build_target_table(trial_df: pd.DataFrame, config: TaskDecodingConfig) -> pd
         ``baseline_invalid_reason`` fields. Numerical target values retain
         their source units without normalization.
     """
-    validate_augmented_trials(trial_df, config)
+    validate_augmented_trials(
+        trial_df, config, allow_missing_blocks=allow_missing_blocks,
+        allow_empty_numerical_targets=allow_empty_numerical_targets,
+    )
     working_df = trial_df.reset_index(drop=True).copy(deep=True)
     n_trials = working_df.shape[0]
     action_values, action_is_choice = _action_values_and_validity(working_df["action"])
