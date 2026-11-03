@@ -53,6 +53,7 @@ def test_explicit_prepare_and_display_changes_never_refit(runnable_session, monk
     count = len(list(runnable_session.parent.glob("analysis_runs/*")))
     next(widget for widget in at.selectbox if widget.label == "Prediction target").select("relative_doubt").run()
     next(widget for widget in at.selectbox if widget.label == "Prediction PC view").select("weighted").run()
+    assert any(widget.label == "PFC PC ranks" for widget in at.slider)
     before = figure_spec(at)["layout"]["uirevision"]
     next(widget for widget in at.selectbox if widget.label == "Prediction PC order").select("contribution").run()
     assert not at.exception
