@@ -178,6 +178,10 @@ def test_constant_response_has_finite_fit_mse_and_unavailable_display_r2(
     assert np.isfinite(result["mse"]).all()
     assert np.isfinite(result["r2"][0]) and np.isnan(result["r2"][1])
     assert result["r2_reason"][1]
+    assert np.asarray(result["fold_r2_reason"]).shape == (5, 2)
+    assert all(row[1] for row in result["fold_r2_reason"])
+    assert result["fold_valid"].all()  # Undefined R2 does not invalidate finite fold fits/MSE.
+    assert np.isfinite(result["fold_mse"]).all()
     assert np.isfinite(display[:, 0]).all() and np.isnan(display[:, 1]).all()
     np.testing.assert_allclose(result["reference_fit"].slopes[:, 1], 0, atol=1e-12)
     np.testing.assert_allclose(result["reference_fit"].intercept[1], constant, atol=1e-12)
@@ -200,6 +204,9 @@ def test_cv_uses_supplied_block_map_and_saves_one_oof_prediction_per_bin(
     np.testing.assert_array_equal(result["fold_test_counts"], [1, 2, 3, 4, 5])
     np.testing.assert_array_equal(result["fold_train_counts"], [14, 13, 12, 11, 10])
     assert np.isnan(result["fold_r2"][0]).all()  # One held-out row has zero SST.
+    assert np.asarray(result["fold_r2_reason"]).shape == (5, 2)
+    assert all(result["fold_r2_reason"][0])
+    assert result["fold_valid"][0]  # Finite one-row predictions still define MSE.
     for fold in range(5):
         fit = (modeling.fit_ridge_responses(predictors[folds != fold], responses[folds != fold])
                if estimator == "ridge" else modeling.fit_ols_responses(predictors[folds != fold], responses[folds != fold]))
@@ -283,6 +290,29 @@ def test_unusable_fold_map_preserves_reference_without_primary_partial_scores(
     assert np.isnan(result["mse"]).all() and np.isnan(result["r2"]).all()
     assert not result["fold_valid"][4]
     assert result["fold_reasons"][4]
+
+
+def test_unassigned_rows_are_excluded_from_training_but_retained_in_reference(model_data: tuple) -> None:
+    """Input X(15,1)/PC Y(15,2)/folds; mixed -1 rows train no fold, return None."""
+    predictors, responses, original_folds = model_data
+    folds = original_folds.copy()
+    folds[-1] = -1
+    result = modeling.evaluate_block_cv(predictors, responses, folds)
+    reference = modeling.fit_ridge_responses(predictors, responses)
+    np.testing.assert_allclose(result["reference_fit"].slopes, reference.slopes)
+    np.testing.assert_allclose(result["reference_predictions"], modeling.predict_responses(predictors, reference))
+    assert not result["cv_available"] and result["cv_reason"]
+    assert np.isnan(result["held_out_predictions"][-1]).all()
+    assert np.isnan(result["mse"]).all() and np.isnan(result["r2"]).all()
+    np.testing.assert_array_equal(result["fold_test_counts"], [1, 2, 3, 4, 4])
+    np.testing.assert_array_equal(result["fold_train_counts"], [13, 12, 11, 10, 10])
+    for fold in range(5):
+        train = (folds >= 0) & (folds != fold)
+        fitted = modeling.fit_ridge_responses(predictors[train], responses[train])
+        np.testing.assert_allclose(result["fold_fits"][fold].slopes, fitted.slopes)
+        np.testing.assert_allclose(result["fold_fits"][fold].intercept, fitted.intercept)
+        np.testing.assert_allclose(result["held_out_predictions"][folds == fold],
+                                   modeling.predict_responses(predictors[folds == fold], fitted))
 
 
 def test_failed_fold_preserves_reference_and_completed_fold_results(
