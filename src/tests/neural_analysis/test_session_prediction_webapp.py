@@ -36,6 +36,18 @@ def figure_spec(test_app):
     return json.loads(json.loads(component.proto.json)["figure_json"])
 
 
+def component_path(block):
+    """Return tuple[int,...] chart position in an AppTest Block tree, or None if absent."""
+    for index, child in block.children.items():
+        if child.type == "bidi_component":
+            return (index,)
+        if hasattr(child, "children"):
+            path = component_path(child)
+            if path is not None:
+                return (index, *path)
+    return None
+
+
 def test_explicit_prepare_and_display_changes_never_refit(runnable_session, monkeypatch):
     """Buttons prepare; subsequent target/mode/event changes load only saved arrays."""
     from src.neural_analysis.webapp import session_prediction_view
@@ -163,11 +175,13 @@ def test_cross_configuration_mode_switch_retains_navigation_and_clear_labels(run
     next(widget for widget in at.number_input if widget.label == "Window start (s)").set_value(50.0).run()
     next(widget for widget in at.selectbox if widget.label == "Jump to trial").select(9).run()
     initial = figure_spec(at)
+    initial_component_path = component_path(at.main)
     assert any("State generalization (correct-rewarded training)" in item["text"]
                for item in initial["layout"]["annotations"])
     next(widget for widget in at.selectbox if widget.label == "Analysis").select("mixed_outcome_decoding").run()
     assert not at.exception
     updated = figure_spec(at)
+    assert component_path(at.main) == initial_component_path
     assert updated["layout"]["uirevision"] == initial["layout"]["uirevision"]
     assert updated["layout"]["xaxis"]["range"] == initial["layout"]["xaxis"]["range"]
     assert updated["layout"]["yaxis"]["uirevision"] != initial["layout"]["yaxis"]["uirevision"]
@@ -193,13 +207,18 @@ def test_cross_configuration_mode_switch_retains_navigation_and_clear_labels(run
 
 def test_gui_prepare_forwards_selected_mode_and_bounded_caption(runnable_session):
     """Explicit mixed Prepare yields two-target products and explains bounded resets."""
+    prepare_session_predictions(runnable_session, probe_roles={"PFC": "A"})
     at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
     next(widget for widget in at.selectbox if widget.label == "PFC probe").select("A").run()
+    next(widget for widget in at.selectbox if widget.label == "Timeline bin width (ms)").select(20).run()
     next(widget for widget in at.selectbox if widget.label == "Analysis").select("mixed_outcome_decoding").run()
     next(widget for widget in at.button if widget.label == "Prepare predictions").click().run()
     assert not at.exception
-    path = next(runnable_session.parent.glob("analysis_runs/condition_session_prediction_*/results.npz"))
-    assert load_prediction_result(path).inputs.target_names == ("current_state", "current_action")
+    products = [load_prediction_result(path) for path in runnable_session.parent.glob("analysis_runs/condition_session_prediction_*/results.npz")]
+    mixed = next(product for product in products if product.inputs.analysis_mode == "mixed_outcome_decoding")
+    assert mixed.inputs.target_names == ("current_state", "current_action")
+    assert mixed.meta["effective_config"]["bin_width_ms"] == 20
+    assert next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval").value
     next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval").check().run()
     assert any("reset" in item.value.lower() and "loaded" in item.value.lower() for item in at.caption)
 
