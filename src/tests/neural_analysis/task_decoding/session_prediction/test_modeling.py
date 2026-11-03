@@ -11,13 +11,15 @@ from src.neural_analysis.task_decoding.session_prediction import modeling
 from src.neural_analysis.task_decoding.session_prediction.preparation import prepare_prediction_inputs
 
 
-def fit_region(prepared, role="PFC"):
+def fit_region(prepared, role="PFC", *, use_training_membership=False):
     """Fit prepared N-choice targets to regional (W,B,K) original scores; return records."""
     region = prepared.timeline.regions[role]
     return modeling.fit_region_prediction_models(
         region.scores, region.choice_positions, prepared.target_values,
         prepared.target_valid, prepared.baseline_valid, prepared.correct_rewarded,
         prepared.fold_ids, prepared.training_bin_mask, prepared.target_families,
+        **({"training_condition_mask": prepared.training_condition_mask}
+           if use_training_membership else {}),
     )
 
 
@@ -127,3 +129,83 @@ def test_invalid_structural_inputs_raise_before_model_fitting(prediction_inputs)
     prepared = prepare_prediction_inputs(*prediction_inputs[1:], prediction_inputs[0])
     with pytest.raises(ValueError):
         fit_region(replace(prepared, target_values=prepared.target_values[:-1]))
+
+
+@pytest.fixture
+def mixed_inputs(prediction_inputs):
+    """Return N-choice mixed inputs with seeded independent state/action PC signals."""
+    base, trials, timeline = prediction_inputs
+    trials["state_int"] = np.arange(len(trials)) % 2
+    trials["correct"] = (trials.state_int == trials.action).astype(int)
+    prepared = prepare_prediction_inputs(trials, timeline, base, analysis_mode="mixed_outcome_decoding")
+    generator = np.random.default_rng(318)
+    regions = {}
+    for role, source in timeline.regions.items():
+        labels = prepared.target_values[source.choice_positions]
+        scores = generator.normal(0, 0.1, source.scores.shape)
+        scores[:, :, :2] += 3 * (2 * labels[:, None, :] - 1)
+        regions[role] = replace(source, scores=scores)
+    return replace(prepared, timeline=replace(timeline, regions=regions))
+
+
+def test_mixed_training_masks_signal_recovery_and_logistic_objective(mixed_inputs):
+    """Two classifiers recover separate labels using every eligible trial once."""
+    for role, source in mixed_inputs.timeline.regions.items():
+        model = fit_region(mixed_inputs, role, use_training_membership=True)
+        assert model.predictions.shape == (*source.scores.shape[:2], 2)
+        assert np.all(model.fit_status == "ok")
+        coverage = np.isin(np.arange(len(mixed_inputs.fold_ids)), source.choice_positions)
+        for target in range(2):
+            actual = mixed_inputs.target_values[source.choice_positions, target]
+            assert np.mean((model.predictions[:, :, target] >= 0.5) == actual[:, None]) > 0.95
+            for fold in range(5):
+                expected = (coverage & mixed_inputs.baseline_valid & mixed_inputs.target_valid[:, target]
+                            & mixed_inputs.training_condition_mask & (mixed_inputs.fold_ids >= 0)
+                            & (mixed_inputs.fold_ids != fold))
+                np.testing.assert_array_equal(model.training_choice_mask[target, fold], expected)
+                assert np.any(expected & ~mixed_inputs.correct_rewarded)
+                matrix = source.scores[expected[source.choice_positions]][:, mixed_inputs.training_bin_mask]
+                matrix = matrix.reshape(-1, source.scores.shape[2])
+                labels = np.repeat(mixed_inputs.target_values[expected, target], 4)
+                beta = model.coefficients[target, fold]
+                probability = 1 / (1 + np.exp(-(matrix @ beta + model.intercepts[target, fold])))
+                residual = (probability - labels) / 4
+                np.testing.assert_allclose(matrix.T @ residual + beta, 0, atol=0.003)
+                assert abs(residual.sum()) < 0.003
+                assert model.training_row_count[target, fold] == 4 * expected.sum()
+
+
+def test_mixed_mask_exclusions_and_local_failures(mixed_inputs):
+    """Membership never overrides coverage/baseline/label/block masks; failures stay local."""
+    baseline = mixed_inputs.baseline_valid.copy()
+    baseline[0] = False
+    valid = mixed_inputs.target_valid.copy()
+    valid[1, 0] = False
+    values = mixed_inputs.target_values.copy()
+    values[1, 0] = np.nan
+    folds = mixed_inputs.fold_ids.copy()
+    folds[2] = -1
+    prepared = replace(mixed_inputs, baseline_valid=baseline, target_valid=valid,
+                       target_values=values, fold_ids=folds)
+    model = fit_region(prepared, use_training_membership=True)
+    assert not model.training_choice_mask[:, :, [0, 2]].any()
+    assert not model.training_choice_mask[0, :, 1].any()
+    source = prepared.timeline.regions["PFC"]
+    missing = source.choice_positions == 2
+    assert np.isnan(model.predictions[missing]).all()
+    values[:, 0] = 1
+    single = fit_region(replace(prepared, target_values=values), use_training_membership=True)
+    assert np.all(single.fit_reason[0] == "single_class_training")
+    assert np.all(single.fit_status[1] == "ok")
+    empty = fit_region(replace(prepared, training_condition_mask=np.zeros(len(values), dtype=bool)),
+                       use_training_membership=True)
+    assert np.all(empty.fit_reason == "empty_training")
+
+
+@pytest.mark.parametrize("defect", ["shape", "dtype"])
+def test_explicit_membership_is_validated(mixed_inputs, defect):
+    """An explicit membership mask must have exactly N Boolean entries."""
+    mask = mixed_inputs.training_condition_mask
+    mask = mask[:-1] if defect == "shape" else mask.astype(float)
+    with pytest.raises(ValueError, match="mask"):
+        fit_region(replace(mixed_inputs, training_condition_mask=mask), use_training_membership=True)

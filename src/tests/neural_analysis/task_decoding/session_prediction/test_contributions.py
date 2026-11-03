@@ -1,10 +1,12 @@
 """Signed additive contributions retain model/PC identity through selection."""
 
 import numpy as np
+import pytest
 
 from src.neural_analysis.task_decoding.session_prediction import modeling
 from src.neural_analysis.task_decoding.session_prediction.preparation import prepare_prediction_inputs
 from .test_modeling import fit_region
+from .test_modeling import mixed_inputs  # noqa: F401 -- shared scientific fixture
 
 
 def test_contributions_reconstruct_predictions_and_use_original_pc_ids(prediction_inputs):
@@ -52,3 +54,19 @@ def test_color_limit_is_global_and_missing_fold_never_borrows_weights(prediction
     contributions = modeling.build_pc_contributions(region.scores, folds, result, 2, (1, 2, 3))
     assert np.isnan(contributions[folds == -1]).all()
     assert result.contribution_color_limit[2] == np.nanmax(abs(contributions))
+
+
+@pytest.mark.parametrize("role", ["PFC", "HPC"])
+def test_mixed_contributions_reconstruct_own_classifiers(mixed_inputs, role):
+    """Both mixed target axes reconstruct logits and retain their own global PC ranks."""
+    source = mixed_inputs.timeline.regions[role]
+    model = fit_region(mixed_inputs, role, use_training_membership=True)
+    folds = mixed_inputs.fold_ids[source.choice_positions]
+    for target in range(2):
+        contributions = modeling.build_pc_contributions(source.scores, folds, model, target, (3, 1, 2))
+        linear = contributions.sum(axis=2) + model.intercepts[target, folds, None]
+        np.testing.assert_allclose(1 / (1 + np.exp(-linear)), model.predictions[:, :, target])
+        assert model.contribution_color_limit[target] == np.max(abs(contributions))
+        mean = model.contribution_strength[target].mean(axis=0)
+        np.testing.assert_array_equal(model.contribution_pc_order[target],
+                                      np.lexsort((np.arange(3), -mean)) + 1)

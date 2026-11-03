@@ -1,6 +1,6 @@
 """Saved predictions bind the exact PCA archive while remaining relocatable."""
 
-from dataclasses import replace
+from dataclasses import fields, replace
 import json
 import shutil
 
@@ -14,13 +14,16 @@ from .test_modeling import fit_region
 
 
 @pytest.fixture
-def saved_prediction(prediction_inputs):
+def saved_prediction(prediction_inputs, request):
     """Return root, saved NPZ, inputs, models, metadata; scientific axes retain W,B,T/F,K."""
     base, trials, timeline = prediction_inputs
-    prepared = prepare_prediction_inputs(trials, timeline, base)
+    mode = getattr(request, "param", "correct_rewarded_generalization")
+    trials.loc[105, "correct"] = 0
+    trials.loc[105, "state_int"] = 1 - trials.loc[105, "action"]
+    prepared = prepare_prediction_inputs(trials, timeline, base, analysis_mode=mode)
     source = base.session_root / "analysis_runs/session_timeline_pca_fixture/results.npz"
     save_timeline_result(source, timeline)
-    regions = {role: fit_region(prepared, role) for role in timeline.regions}
+    regions = {role: fit_region(prepared, role, use_training_membership=True) for role in timeline.regions}
     meta = results.build_prediction_metadata(
         prepared, base.session_root, source,
         {"augmented_trials": base.augmented_trial_path,
@@ -133,3 +136,104 @@ def test_discovery_reads_small_metadata_and_ignores_partial_runs(saved_predictio
 
     monkeypatch.setattr(results.np, "load", forbid_array_load)
     assert len(results.discover_prediction_runs(root)) == 1
+
+
+@pytest.mark.parametrize("saved_prediction", ["mixed_outcome_decoding", "correct_rewarded_generalization"], indirect=True)
+def test_v2_mode_roundtrip_and_cross_mode_identity(saved_prediction):
+    """New products persist selected membership and fixed mode metadata with correct T."""
+    root, path, prepared, regions, meta = saved_prediction
+    assert (meta["analysis_version"], meta["schema_version"]) == ("condition-session-prediction-v2", 2)
+    config = meta["effective_config"]
+    assert config["analysis_mode"] == prepared.analysis_mode
+    assert config["target_names"] == list(prepared.target_names)
+    expected = (["correct_rewarded"] if len(prepared.target_names) == 7
+                else ["correct_rewarded", "omission", "incorrect"])
+    assert config["training_condition_names"] == expected
+    loaded = results.load_prediction_result(path, session_root=root)
+    assert loaded.inputs.analysis_mode == prepared.analysis_mode
+    np.testing.assert_array_equal(loaded.inputs.training_condition_mask, prepared.training_condition_mask)
+    option = results.discover_prediction_runs(root)[0]
+    assert option.analysis_mode == prepared.analysis_mode
+    with np.load(path, allow_pickle=True) as archive:
+        np.testing.assert_array_equal(archive["training_condition_mask"], prepared.training_condition_mask)
+    if len(prepared.target_names) == 2:
+        np.testing.assert_array_equal(loaded.regions["PFC"].predictions, regions["PFC"].predictions)
+        original = replace(prepared, analysis_mode="correct_rewarded_generalization")
+        # Different scientific modes cannot share identity even on the same PCA/target source bytes.
+        sources = {name: root / info["path"] for name, info in meta["target_sources"].items()}
+        with pytest.raises(ValueError, match="mode|target"):
+            results.build_prediction_metadata(original, root, root / meta["source_pca"]["path"], sources, config)
+
+
+@pytest.mark.parametrize("defect", ["mode", "target_set", "conditions", "mask", "missing_mode", "missing_mask", "version"])
+def test_v2_rejects_mode_and_mask_contradictions(saved_prediction, defect):
+    """New-schema products require explicit consistent mode, target, and mask contracts."""
+    root, path, _, _, _ = saved_prediction
+    with np.load(path, allow_pickle=True) as archive:
+        arrays = {name: archive[name] for name in archive.files}
+    meta = arrays["meta"].item()
+    if defect == "mode":
+        meta["effective_config"]["analysis_mode"] = "mixed_outcome_decoding"
+    elif defect == "target_set":
+        meta["effective_config"]["target_names"] = ["current_action"]
+    elif defect == "conditions":
+        meta["effective_config"]["training_condition_names"] = ["all"]
+    elif defect == "mask":
+        arrays["training_condition_mask"] = ~arrays["correct_rewarded"]
+    elif defect == "missing_mode":
+        meta["effective_config"].pop("analysis_mode", None)
+    elif defect == "missing_mask":
+        arrays.pop("training_condition_mask", None)
+    else:
+        meta["schema_version"] = 1
+    arrays["meta"] = np.asarray(meta, dtype=object)
+    # Mutate a synthetic archive directly to exercise the loader independently of publication.
+    np.savez_compressed(path, **arrays)
+    with pytest.raises(ValueError):
+        results.load_prediction_result(path, session_root=root)
+
+
+def test_legacy_v1_shaped_product_loads_without_rewrite_or_raw_data(saved_prediction):
+    """Build the original schema explicitly, omitting every new mode/membership field."""
+    root, path, prepared, regions, meta = saved_prediction
+    legacy_shared = (
+        "target_values", "target_valid", "baseline_valid", "correct_rewarded",
+        "fold_ids", "block_values_json", "condition_masks", "training_bin_mask", "bin_edges_s",
+    )
+    meta = {**meta, "analysis_version": "condition-session-prediction-v1", "schema_version": 1,
+            "identity": "original-v1-fixture", "effective_config": dict(meta["effective_config"])}
+    for key in ("analysis_mode", "target_names", "training_condition_names"):
+        meta["effective_config"].pop(key, None)
+    meta["effective_config"]["target_names"] = list(prepared.target_names)
+    arrays = {name: getattr(prepared, name) for name in legacy_shared}
+    arrays.update({"choices": prepared.timeline.choices.to_records(index=False),
+                   "target_names": np.asarray(prepared.target_names),
+                   "target_families": np.asarray(prepared.target_families),
+                   "condition_names": np.asarray(prepared.condition_names),
+                   "meta": np.asarray(meta, dtype=object)})
+    for role, model in regions.items():
+        arrays[role.lower() + "_choice_positions"] = prepared.timeline.regions[role].choice_positions
+        arrays.update({role.lower() + "_" + field.name: getattr(model, field.name)
+                       for field in fields(results.RegionPredictions)})
+    np.savez_compressed(path, **arrays)
+    (path.parent / "config.json").write_text(json.dumps(meta))
+    before = path.read_bytes()
+    loaded = results.load_prediction_result(path, session_root=root)
+    assert loaded.meta["identity"] == "original-v1-fixture"
+    assert loaded.meta["analysis_version"] == "condition-session-prediction-v1"
+    assert loaded.inputs.analysis_mode == "correct_rewarded_generalization"
+    assert loaded.meta["effective_config"]["analysis_mode"] == loaded.inputs.analysis_mode
+    np.testing.assert_array_equal(loaded.inputs.training_condition_mask, prepared.correct_rewarded)
+    np.testing.assert_array_equal(loaded.regions["PFC"].predictions, regions["PFC"].predictions)
+    assert path.read_bytes() == before
+    assert results.discover_prediction_runs(root)[0].analysis_mode == loaded.inputs.analysis_mode
+
+
+def test_publication_rejects_effective_mode_mismatch(saved_prediction):
+    """Metadata must agree with arrays before a new product is published."""
+    root, _, prepared, regions, meta = saved_prediction
+    meta = {**meta, "effective_config": {**meta["effective_config"], "analysis_mode": "mixed_outcome_decoding"}}
+    path = root / "analysis_runs/condition_session_prediction_bad_mode/results.npz"
+    with pytest.raises(ValueError, match="mode|target"):
+        results.save_prediction_result(path, prepared, regions, meta)
+    assert not path.exists()
