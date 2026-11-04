@@ -191,6 +191,10 @@ def diagnose_context_events(trials: pd.DataFrame, events: pd.DataFrame) -> list[
     list[str]
         Advisory messages, empty for matching state order. Absent/invalid logs
         and differing state order are reported, never repaired or made fatal.
+        A fully matching trial sequence may have surplus logged segments strictly
+        after the latest trial start/finite choice; these unused terminal events
+        are silent. Delayed matching entries are retained. Genuine mismatches
+        report only the first differing segment and counts, not full sequences.
         This diagnostic does not supply terminal or invalid predictor values.
     """
     _validate_trial_sequence(trials)
@@ -204,14 +208,34 @@ def diagnose_context_events(trials: pd.DataFrame, events: pd.DataFrame) -> list[
     if not np.isfinite(times).all():
         return ["Context event timestamps contain invalid UTC seconds"]
     entries = entries.assign(_time=times).sort_values("_time", kind="stable")
-    logged = _state_order(entries["Event"].map(event_codes).to_numpy(dtype=float))
+    event_states = entries["Event"].map(event_codes).to_numpy(dtype=int)
+    new_segment = np.r_[True, event_states[1:] != event_states[:-1]]
+    logged = event_states[new_segment].tolist()
+    segment_times = entries["_time"].to_numpy()[new_segment]
     states = _numeric(trials["state_int"])
     messages = []
     if not np.isin(states, [0, 1, 2]).all():
         messages.append("Trial context contains unavailable states; event-order comparison is incomplete")
     expected = _state_order(states[np.isin(states, [0, 1, 2])])
-    if logged != expected:
-        messages.append(f"Context state order differs: trial states {expected}; logged states {logged}")
+    if logged == expected:
+        return messages
+    first_difference = 0
+    while (first_difference < min(len(expected), len(logged))
+           and expected[first_difference] == logged[first_difference]):
+        first_difference += 1
+    # Only an exact trial-context prefix permits ignoring unused terminal events.
+    # The last start also protects a represented final trial without a choice.
+    choices = _numeric(trials["choice_time"])
+    boundary = max(_numeric(trials["start_time"])[-1], choices[np.isfinite(choices)].max(initial=-np.inf))
+    if (expected and first_difference == len(expected)
+            and np.all(segment_times[first_difference:] > boundary)):
+        return messages
+    labels = ("right", "left", "dark")
+    trial_state = labels[expected[first_difference]] if first_difference < len(expected) else "missing"
+    logged_state = labels[logged[first_difference]] if first_difference < len(logged) else "missing"
+    messages.append(f"Context state order differs at segment {first_difference + 1}: "
+                    f"trial={trial_state}, logged={logged_state} "
+                    f"({len(expected)} trial segments, {len(logged)} logged segments)")
     return messages
 
 

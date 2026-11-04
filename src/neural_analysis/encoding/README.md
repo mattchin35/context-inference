@@ -135,6 +135,12 @@ Exports preserve existing files and use light-mode opaque PNGs.
   unfiltered `state_int[i+1]` after choice. A missing/dark/invalid adjacent state,
   including the absent terminal state, makes post bins unavailable. `trial_window`
   holds the entering state throughout. Logged events are diagnostic only.
+- Context-order diagnostics allow a fully matching trial-state sequence to
+  have surplus logged switches strictly after the latest trial start or finite
+  choice. These unused terminal events are silent. Delayed matching entries
+  remain supported; missing/wrong/internal-extra states still report the first
+  differing segment and counts. Events are never edited or used to fill a
+  missing terminal predictor.
 - Ridge minimizes summed SSE plus `alpha * sum(slopes**2)`, with an unpenalized
   intercept and no predictor/response scaler. `matched_context` uses alpha/2 for
   the two-indicator fit; `same_numeric` uses alpha unchanged. OLS uses centered
