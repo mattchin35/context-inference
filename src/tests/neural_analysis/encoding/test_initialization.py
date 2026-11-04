@@ -8,7 +8,7 @@ import pytest
 
 from src.neural_analysis.encoding import initialization, run_session
 from src.neural_analysis.encoding.configuration import load_encoding_config
-from .test_configuration import config_file as config_file_fixture
+from src.tests.neural_analysis.encoding.test_configuration import config_file as config_file_fixture
 
 config_file = config_file_fixture
 

@@ -8,9 +8,48 @@ and the tests-first record are in `docs/single_unit_plan.md`.
 
 ## Inputs
 
-Copy `docs/examples/neural_analysis/context_encoding_config.json` beside a
-session's `neural_session.json` and edit its relative input paths. The augmented
-trial CSV and feature-parameter JSON must already exist. This analysis does not
+Create the session's controls with:
+
+```bash
+uv run python -m src.neural_analysis.encoding.run_session init-config \
+  --session-metadata /path/to/session/neural_session.json
+```
+
+This creates `context_encoding_config.json` beside the metadata, using input
+locators from the existing `task_decoding_config.json`. Only those locator
+fields are read; unrelated decoder settings do not need to validate. Existing
+encoding configs are preserved byte-for-byte, including user edits; use the
+separate `dry-run` command to validate them. Initialization never runs an analysis.
+
+Without a task config, supply the two input paths explicitly:
+
+```bash
+uv run python -m src.neural_analysis.encoding.run_session init-config \
+  --session-metadata /path/to/session/neural_session.json \
+  --augmented-trials processed/augmented_trials.csv \
+  --feature-parameters processed/trial_feature_params.json
+```
+
+Relative override paths resolve from the metadata directory, independently of
+the shell's working directory. Either override can replace its task-config
+locator individually. Contained paths are saved session-relative; explicitly
+selected inputs outside the session retain absolute paths. Missing/invalid
+inputs produce actionable errors before writing a new config; filenames are
+not guessed from directory contents.
+
+The generated settings match the reviewed example: 500-ms bins, all three
+windows, both timing modes and context encodings, ridge/OLS, alpha=1, and both
+penalty modes. `--bin-width-ms 100` (also 50/20) changes the initial resolution.
+Version-3 probe roles are used automatically; `--pfc-probe`/`--hpc-probe` supply
+explicit overrides or the required version-2 roles. A single region is allowed.
+Other scientific settings remain editable in JSON. The existing config-loader
+defaults for omitted fields and all numerical models are unchanged.
+
+The initializer is in `initialization.py`, outside the numerical source
+fingerprint, so this setup addition does not invalidate existing runs. The
+reviewed `docs/examples/neural_analysis/context_encoding_config.json` remains
+available as a manual template. The augmented trial CSV and feature-parameter
+JSON must already exist. This analysis does not
 generate behavioral features or refit behavioral models. The source and augmented
 trial tables must describe the same complete chronological trial sequence.
 
@@ -26,8 +65,9 @@ coverage. Existing good/mua unit and channel-quality selection rules apply.
 Run commands from the repository with the existing UV environment:
 
 ```bash
-uv run python -m src.neural_analysis.encoding.run_session dry-run --config /path/to/session/encoding.json
-uv run python -m src.neural_analysis.encoding.run_session new --config /path/to/session/encoding.json
+uv run python -m src.neural_analysis.encoding.run_session init-config --session-metadata /path/to/session/neural_session.json
+uv run python -m src.neural_analysis.encoding.run_session dry-run --config /path/to/session/context_encoding_config.json
+uv run python -m src.neural_analysis.encoding.run_session new --config /path/to/session/context_encoding_config.json
 uv run python -m src.neural_analysis.encoding.run_session status --run-directory /path/to/session/analysis_runs/context_encoding_RUN
 uv run python -m src.neural_analysis.encoding.run_session resume --run-directory /path/to/session/analysis_runs/context_encoding_RUN
 ```

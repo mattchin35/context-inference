@@ -111,10 +111,17 @@ def main(argv: list[str] | None = None) -> int:
     """Parse CLI string arguments; print a JSON report and return integer exit status.
 
     argv is a sequence of command/control strings, or None for sys.argv.
-    No units apply to arguments except the saved configuration's bin width.
+    Units apply only to the millisecond bin width in initialization or saved controls.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    initialize = commands.add_parser("init-config", help="Create missing context encoding controls without fitting")
+    initialize.add_argument("--session-metadata", type=Path, required=True)
+    initialize.add_argument("--augmented-trials", type=Path)
+    initialize.add_argument("--feature-parameters", type=Path)
+    initialize.add_argument("--bin-width-ms", type=int, choices=(500, 100, 50, 20), default=500)
+    initialize.add_argument("--pfc-probe")
+    initialize.add_argument("--hpc-probe")
     for command in ("new", "dry-run", "resume", "status"):
         subparser = commands.add_parser(command)
         if command in ("new", "dry-run"):
@@ -125,9 +132,20 @@ def main(argv: list[str] | None = None) -> int:
             subparser.add_argument("--rerun", action="store_true")
     args = parser.parse_args(argv)
     try:
-        report = run_encoding_session(getattr(args, "config", None), command=args.command,
-                                      run_directory=getattr(args, "run_directory", None),
-                                      rerun=getattr(args, "rerun", False))
+        if args.command == "init-config":
+            from .initialization import initialize_encoding_config
+
+            roles = {role: probe for role, probe in (("PFC", args.pfc_probe), ("HPC", args.hpc_probe))
+                     if probe is not None}
+            report = initialize_encoding_config(
+                args.session_metadata, augmented_trials=args.augmented_trials,
+                feature_parameters=args.feature_parameters, bin_width_ms=args.bin_width_ms,
+                probe_roles=roles or None,
+            )
+        else:
+            report = run_encoding_session(getattr(args, "config", None), command=args.command,
+                                          run_directory=getattr(args, "run_directory", None),
+                                          rerun=getattr(args, "rerun", False))
     except (OSError, ValueError, KeyError, RuntimeError) as error:
         print(f"Context encoding failed: {error}", file=sys.stderr)
         return 1
