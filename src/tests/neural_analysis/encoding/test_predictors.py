@@ -251,3 +251,86 @@ def test_absent_events_are_reported_without_terminal_fallback(
     values, valid = build_context_values(trials, bin_edges_s, "choice_updated")
     assert not valid[-1, 4:].any()
     assert np.isnan(values[-1, 4:]).all()
+
+
+@pytest.fixture
+def context_sequence() -> pd.DataFrame:
+    """Return four trials with right/right/left/left contexts and UTC-second boundaries."""
+    return pd.DataFrame({"cur_trial": [10, 11, 12, 13],
+                         "start_time": [100., 110., 120., 130.],
+                         "choice_time": [105., 115., 125., 135.],
+                         "state_int": [0, 0, 1, 1]})
+
+
+@pytest.mark.parametrize("terminal_states", [["enter_right_patch"], ["enter_right_patch", "enter_left_patch", "enter_dark_period"]])
+def test_unused_terminal_switches_are_silent_without_changing_predictors(context_sequence, bin_edges_s, terminal_states):
+    """Matching context prefixes allow surplus events after the final represented trial/choice."""
+    events = pd.DataFrame({"Time": [99., 115.2] + [139.2 + index for index in range(len(terminal_states))],
+                           "Event": ["enter_right_patch", "enter_left_patch", *terminal_states]})
+    original_trials, original_events = context_sequence.copy(deep=True), events.copy(deep=True)
+    before = {mode: build_context_values(context_sequence, bin_edges_s, mode)
+              for mode in ("choice_updated", "trial_window")}
+    assert diagnose_context_events(context_sequence, events) == []
+    for mode, (values, valid) in before.items():
+        after_values, after_valid = build_context_values(context_sequence, bin_edges_s, mode)
+        np.testing.assert_array_equal(values, after_values)
+        np.testing.assert_array_equal(valid, after_valid)
+    assert not before["choice_updated"][1][-1, 4:].any()
+    pd.testing.assert_frame_equal(context_sequence, original_trials)
+    pd.testing.assert_frame_equal(events, original_events)
+
+
+@pytest.mark.parametrize("event_time, warn", [(134.9, True), (135., True), (135.1, False)])
+def test_terminal_switch_must_follow_last_choice(context_sequence, event_time, warn):
+    """A matching prefix does not hide extra state changes during the represented trials."""
+    events = pd.DataFrame({"Time": [99., 115.2, event_time],
+                           "Event": ["enter_right_patch", "enter_left_patch", "enter_right_patch"]})
+    assert bool(diagnose_context_events(context_sequence, events)) is warn
+
+
+@pytest.mark.parametrize("event_time, warn", [(138., True), (141., False)])
+def test_incomplete_final_trial_still_extends_the_represented_boundary(context_sequence, event_time, warn):
+    """A final trial without a choice remains represented through its start time."""
+    trials = pd.concat([context_sequence, pd.DataFrame({"cur_trial": [14], "start_time": [140.],
+                                                      "choice_time": [np.nan], "state_int": [1]})], ignore_index=True)
+    events = pd.DataFrame({"Time": [99., 115.2, event_time],
+                           "Event": ["enter_right_patch", "enter_left_patch", "enter_right_patch"]})
+    assert bool(diagnose_context_events(trials, events)) is warn
+
+
+def test_delayed_last_matching_entry_is_not_removed_by_terminal_filter(context_sequence):
+    """Matching entries may lag trial boundaries; only surplus terminal segments are ignored."""
+    events = pd.DataFrame({"Time": [99., 135.5, 139.2],
+                           "Event": ["enter_right_patch", "enter_left_patch", "enter_right_patch"]})
+    assert diagnose_context_events(context_sequence, events) == []
+
+
+@pytest.mark.parametrize("names, times", [
+    (["enter_right_patch"], [99.]),
+    (["enter_left_patch", "enter_right_patch"], [99., 115.2]),
+    (["enter_right_patch", "enter_dark_period", "enter_left_patch"], [99., 110., 115.2]),
+    (["enter_right_patch", "enter_left_patch", "enter_right_patch", "enter_left_patch"], [99., 115.2, 120., 125.]),
+    (["enter_left_patch", "enter_right_patch", "enter_left_patch"], [99., 139.2, 140.]),
+])
+def test_genuine_context_mismatches_keep_a_short_actionable_message(context_sequence, names, times):
+    """Missing/wrong/internal-extra states, including bad prefixes, still identify the first discrepancy."""
+    diagnostics = diagnose_context_events(context_sequence, pd.DataFrame({"Time": times, "Event": names}))
+    assert len(diagnostics) == 1
+    assert "segment" in diagnostics[0].lower()
+    assert "trial" in diagnostics[0].lower() and "logged" in diagnostics[0].lower()
+    assert len(diagnostics[0]) < 240
+    assert "[" not in diagnostics[0]
+
+
+def test_long_sequence_mismatch_reports_counts_not_full_state_lists():
+    """Session-length sequences yield a bounded diagnostic with the first differing segment."""
+    rows = np.arange(200)
+    trials = pd.DataFrame({"cur_trial": rows, "start_time": 100. + 10 * rows,
+                           "choice_time": 105. + 10 * rows, "state_int": rows % 2})
+    names = np.where(rows % 2 == 0, "enter_right_patch", "enter_left_patch").astype(object)
+    names[100] = "enter_dark_period"
+    events = pd.DataFrame({"Time": 99. + 10 * rows, "Event": names})
+    message = diagnose_context_events(trials, events)[0]
+    assert "101" in message and "200" in message
+    assert "right" in message and "dark" in message
+    assert len(message) < 240 and "[" not in message
