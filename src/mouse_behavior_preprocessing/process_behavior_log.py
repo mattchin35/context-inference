@@ -376,7 +376,9 @@ def make_trial_df(cleaned_data: pd.DataFrame, session_id: str, save_name: str, o
         probability, and session identifier.
     """
     _assert_supported_missing_value(missing_value)
-    df = cleaned_data.sort_values(by=['Time'])
+    # Timestamp ties must retain source order: context entry relative to
+    # trial_start determines which block/context is snapshotted for that trial.
+    df = cleaned_data.sort_values(by=['Time'], kind='stable')
     context_events = collect_events.get_context_events(df)
     choice_events = collect_events.get_choice_events(df)
     reward_events = collect_events.get_reward_events(df)
