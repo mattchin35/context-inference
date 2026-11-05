@@ -300,3 +300,29 @@ def test_loading_rejects_relabelled_phase_frequency_identity(tmp_path, scientifi
     rewrite_archive_meta(path, metadata)
     with pytest.raises(ValueError):
         results.load_product(path, expected_identity=changed)
+
+
+def test_coherence_publication_cannot_change_actual_notch_setting(tmp_path, scientific_records):
+    """Dimensionless coherence retains actual continuous preprocessing, separately from Welch settings."""
+    config, _, records = scientific_records
+    identity = identity_for("coherence", replace(config, notch_enabled=True), records)
+    with pytest.raises(ValueError):
+        results.save_product(tmp_path / "coherence.npz", records["coherence"], identity,
+                             run_id="bad", completed_utc="2030-01-02T03:04:05Z")
+
+
+@pytest.mark.parametrize("family", ["lfp-phase", "spike-ppc"])
+def test_derived_phase_publication_retains_actual_notch_quality(tmp_path, scientific_records, family):
+    """A phase-derived record computed from Q=30 notched uV cannot be labelled as Q=20."""
+    config, choices, records = scientific_records
+    actual_config = replace(config, notch_enabled=True, notch_quality_factor=30.0)
+    phase = preparation.prepare_site_phase(records["native-lfp"], choices, actual_config)
+    changed_records = dict(records, phase=phase)
+    if family == "lfp-phase":
+        record = computation.compute_lfp_phase_summary(phase, replace(phase, site_id="SiteB"), actual_config)
+    else:
+        record = computation.compute_selected_unit_ppc(records["unit-spikes"], phase, actual_config)
+    identity = identity_for(family, replace(actual_config, notch_quality_factor=20.0), changed_records)
+    with pytest.raises(ValueError):
+        results.save_product(tmp_path / f"{family}.npz", record, identity,
+                             run_id="bad", completed_utc="2030-01-02T03:04:05Z")
