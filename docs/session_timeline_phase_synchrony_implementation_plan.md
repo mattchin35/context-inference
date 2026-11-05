@@ -25,13 +25,13 @@ and before handoff. Append exact evidence to Section 10.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `ca6ee10f7332d3ad9b466942b0fa45ab1ae4481e`. Recheck; never reset to this observation. |
-| Package / authority | WP1 RED authorized by user: "alright, then begin implementation". Full approved Round 1 scope retained. |
-| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`. WP1 RED only; no experimental jobs/browser server. |
-| Feature files | Plan untracked; synchrony spec staged as an addition with unstaged refinements. No commits by this chat. Preserve the actual workspace files when handing off; HEAD alone omits them. |
+| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `cd046db` (WP3 tests). Recheck; never reset to this observation. |
+| Package / authority | WP3 GREEN; full Round 1 authorized by user: "alright, then begin implementation". |
+| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`. WP3 GREEN; no experimental jobs/browser server. |
+| Feature files | WP1/WP2 source and tests committed; WP3 tests committed, implementation in progress. Plan maintained in working tree. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
-| Evidence | No feature RED/GREEN runs or measured runtimes in this chat. Metadata/source/doc checks in Section 10; no experimental arrays loaded here. Implementation-chat loader/validity checks are reported evidence, not this chat's analysis runs. |
-| Next action | WP2 RED tests for shared PSD/power/coherence; WP1 source commit `ba44366`. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
+| Evidence | WP1/WP2 RED/GREEN/regressions and commits in Section 10; WP3 RED committed. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
+| Next action | Review WP3 GREEN, then WP4 RED. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
 
 Approval of the full Round 1 sequence includes its synthetic and designated
 single-session validation unless the user limits that approval. Record scope
@@ -48,7 +48,7 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | WP0 spec/handoff | Lead | Implementation approved | Not applicable | Section 10 doc checks |
 | WP1 inputs/config/preparation contracts | Sol worker, high | GREEN reviewed; complete | `0726ee1`; fixture/acceptance follow-up `ef27189` | 44 feature tests passed; 44 metadata/loading regressions passed; source reviewed by lead |
 | WP2 shared PSD/power/coherence | Sol worker, high | GREEN reviewed; complete | `705f8d8`; 1 expected missing-feature collection error, 0.52 s | Worker 107 passed; lead 96 plus 11 runtime regressions; source reviewed |
-| WP3 phase/LFP metrics/spike PPC | Sol worker, high | Not started; accept drift-corrected phases, thresholds, validity/sampling/estimands | Not run | Not run |
+| WP3 phase/LFP metrics/spike PPC | Sol worker, high | GREEN reviewed; complete | `14fc7ea`, `cd046db`; review RED `87952d2` (6 failures) | 165 passed, no warnings; lead reviewed and reproduced |
 | WP4 persistence/discovery | Sol worker, high | Not started; accept identities/publication | Not run | Not run |
 | WP5a execution/timing core | Sol worker, high | Not started; freeze stage contracts | Not run | Not run |
 | WP5b thin CLI/batch | Optional Luna, medium, or lead | Not started; wrappers match frozen contracts | Not run | Not run |
@@ -772,3 +772,72 @@ Exact next action, owner, and remaining authority or user-inspection gate:
 - No experimental arrays/jobs or feature timing claims. Lead commits only
   computation.py, results.py and this handoff. Next: WP3 RED for strict phase
   preparation, within-window LFP PLV/PPC, and selected-unit spike PPC.
+
+### 2026-11-04 20:49 America/New_York - WP3 / RED dispatch
+
+- Baseline/source commit `75ff0e0`; same Sol/high scientific worker.
+  Exact new writable tests: test_phase_metrics.py and test_spike_ppc.py under
+  src/tests/neural_analysis/phase_synchrony/. No source changes released.
+- Require independent numerical drift/phase/spike oracles, explicit 0.0
+  thresholds, complete metric counts excluding real guards, local gap validity,
+  primary/secondary independence, normalized phase interpolation and per-unit
+  counts/polar histograms. Existing bounded Morlet method remains the reference.
+- Next: review/commit substantive RED, then release WP3 GREEN.
+
+### 2026-11-04 20:56 America/New_York - WP3 / RED reviewed and committed
+
+- Lead read both scientific test files and reproduced 2 expected missing
+  SitePhase collection errors (1.15 s), then committed 396 lines as `14fc7ea`.
+  Worker added two final RED checks before seeing the gate message; source
+  writes remained stopped until lead reviewed and committed them as `cd046db`
+  after repeating RED (2 errors, 1.12 s).
+- Corrected the undefined-midpoint fixture before implementation to use UTC
+  origin zero while retaining the 500-Hz grid/mask, rather than relabeling a
+  4-Hz fixture with an inconsistent metric mask. No estimand/test weakening.
+- GREEN writable sources: results.py, preparation.py, computation.py only;
+  same Sol/high worker. Explicit drift-aware pre-Morlet sampling, real guard
+  support, gap validity, complete LFP counts and per-trial/unit PPC required.
+- Existing public phase metric helper can provide per-trial PPC/histograms;
+  sampled phase dtype must not lose +/-pi histogram endpoints. No experimental
+  reads/jobs or new dependencies. Next: inspect WP3 GREEN and regressions.
+
+### 2026-11-04 20:58 America/New_York - WP3 / selected-unit metadata preflight
+
+- Read only CT026 ProbeB cluster_info.tsv and channel-quality CSV through the
+  existing metadata/selection functions. ProbeB:8 is group good, sorter channel
+  201, eligible under existing quality rules. HPC1 is ProbeB saved LFP channel
+  222. No aligned spike arrays, raw LFP traces, or experimental analyses loaded.
+- WP3 GREEN remains with the same worker; no other source ownership changed.
+
+### 2026-11-04 21:01 America/New_York - WP3 / review correction RED
+
+- Initial WP3 implementation passed 26 new tests, then 161 feature/existing
+  phase/spike/spectrogram/synchrony tests in 2.12 s. Lead read all 421 source
+  additions and found missing metric-grid validation: matching malformed pair
+  masks could include the guard and redefine M. Source edits stopped.
+- Lead added four guard/grid/rate/bounds rejection cases, plus block-coordinate
+  provenance assertions retaining UTC clock origin and small relative bounds.
+  Focused pytest -k 'incompatible_metric_grid or real_guard_and_provenance'
+  produced 6 behavioral failures, 12 deselected, in 1.26 s (no import failures).
+- Committed tests alone as `87952d2`, then released narrow GREEN in
+  computation.py phase validator and preparation.py block metadata. Numerical
+  estimators remain unchanged. Same worker; no experimental work.
+- Next: reproduce corrected GREEN/regressions and commit WP3 before WP4 RED.
+
+### 2026-11-04 21:02 America/New_York - WP3 / corrected GREEN reviewed
+
+- Lead reviewed the narrow validator/coordinate fix. Both lead and worker ran
+  all feature tests plus test_lfp_phase_clustering.py,
+  test_spike_lfp_phase_locking.py, test_lfp_spectrogram.py, and
+  test_lfp_synchrony_summary.py: lead 165 passed in 2.12 s; worker 165 passed
+  in 2.13 s, no warnings. Focused review corrections: 6 passed.
+- Accepted scientific code performs bounded drift-corrected native waveform
+  preparation before Morlet, frequency-specific real support around gaps,
+  guarded 500-Hz trial extraction, complete-support PLV/PPC, and independent
+  selected-unit PPC through the existing public estimator. Polar counts and
+  selected UTC spikes are retained; negative PPC and valid zeros preserved.
+- New source remains confined to the phase_synchrony package. Existing
+  metadata, loaders, numerical APIs and dependencies unchanged. No experimental
+  signal arrays or feature performance benchmarks yet.
+- Lead commits results.py/preparation.py/computation.py and this handoff only.
+  Next gate: WP4 tests for atomic persistence, compatibility and discovery.

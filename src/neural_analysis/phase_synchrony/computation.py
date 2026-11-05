@@ -9,10 +9,14 @@ from scipy import signal
 
 from src.neural_analysis.lfp.config import FrequencyBandConfig, PowerAnalysisConfig
 from src.neural_analysis.lfp.power import compute_welch_psd, mean_band_power_linear
+from src.neural_analysis.spike_lfp.phase_locking import compute_frequency_phase_metrics
 
+from .preparation import sample_site_phase_at_spikes, select_unit_window_spikes
 from .results import (
     ANALYSIS_VERSION, INTERVAL_BOUNDS_S, WAVEFORM_ALIGNMENT_SEMANTICS,
+    PHASE_ALIGNMENT_SEMANTICS, PHASE_SUPPORT_SEMANTICS,
     BandPower, PhaseSynchronyConfig, SitePSD, SiteWaveforms, WelchCoherence,
+    SitePhase, LFPPhaseSummary, SelectedUnitSpikes, SelectedUnitPPC,
 )
 
 
@@ -198,7 +202,162 @@ def strict_band_mean(
     return means, valid, masks
 
 
+def compute_lfp_phase_summary(
+    site_a: SitePhase, site_b: SitePhase, config: PhaseSynchronyConfig,
+) -> LFPPhaseSummary:
+    """Reduce paired unit phases within each trial's half-open metric window.
+
+    Site inputs are complex (frequency,trial,time) phase and bool validity,
+    sharing actual Hz, relative seconds, metric mask and original trial axes.
+    Return (trial,frequency) PLV/PPC/A-minus-B offset and actual sample counts,
+    with strict fixed-frequency (trial,band) summaries. Require complete support
+    and M>1; guards never enter M. Preserve negative PPC and report a vanishing
+    resultant's direction as NaN. Complex sums avoid explicit pairwise matrices;
+    this descriptive statistic does not correct temporal dependence.
+    """
+    _validate_phase_contract(site_a)
+    _validate_phase_contract(site_b)
+    for name in ("frequency_hz", "relative_time_s", "metric_mask", "trial_ids", "row_positions", "choice_times_s"):
+        if not np.array_equal(getattr(site_a, name), getattr(site_b, name)):
+            raise ValueError(f"LFP phase pair requires identical {name}")
+    if site_a.sample_rate_hz != site_b.sample_rate_hz:
+        raise ValueError("LFP phase pair requires the same actual rate")
+    metric = site_a.metric_mask
+    left = np.asarray(site_a.phase[:, :, metric], dtype=np.complex128)
+    right = np.asarray(site_b.phase[:, :, metric], dtype=np.complex128)
+    supported = (site_a.valid[:, :, metric] & site_b.valid[:, :, metric]
+                 & np.isfinite(left) & np.isfinite(right) & (np.abs(left) > 0) & (np.abs(right) > 0))
+    differences = np.zeros(left.shape, dtype=np.complex128)
+    differences[supported] = (
+        left[supported] / np.abs(left[supported]) * np.conj(right[supported] / np.abs(right[supported]))
+    )
+    vector_sum = differences.sum(axis=2).T
+    count = supported.sum(axis=2, dtype=np.int64).T
+    valid = (count == np.count_nonzero(metric)) & (count > 1)
+    plv = np.full(count.shape, np.nan)
+    ppc = np.full(count.shape, np.nan)
+    plv[valid] = np.abs(vector_sum[valid]) / count[valid]
+    ppc[valid] = (np.abs(vector_sum[valid]) ** 2 - count[valid]) / (count[valid] * (count[valid] - 1))
+    offset = np.full(count.shape, np.nan)
+    direction = valid & (np.abs(vector_sum) > np.finfo(float).eps * np.maximum(count, 1))
+    offset[direction] = np.angle(vector_sum[direction])
+    band_plv, band_valid, _ = strict_band_mean(plv, site_a.frequency_hz, config.bands)
+    band_ppc, _, _ = strict_band_mean(ppc, site_a.frequency_hz, config.bands)
+    return LFPPhaseSummary(
+        site_a.frequency_hz.copy(), plv, ppc, offset, count, valid,
+        band_plv, band_ppc, band_valid, tuple(b.name for b in config.bands),
+        site_a.trial_ids.copy(), site_a.row_positions.copy(), site_a.choice_times_s.copy(),
+        {"analysis_version": ANALYSIS_VERSION, "sites": (site_a.site_id, site_b.site_id),
+         "phase_difference_convention": "A minus B", "units": "dimensionless; phase offset radians",
+         "source_phase": (site_a.meta, site_b.meta),
+         "interval": site_a.meta["interval"], "interval_bounds_s": site_a.meta["interval_bounds_s"],
+         "bands": [asdict(b) for b in config.bands], "axes": ("trial", "frequency"),
+         "interpretation": "Descriptive phase consistency over time within one trial; temporal dependence is not corrected."},
+    )
+
+
+def compute_selected_unit_ppc(
+    unit: SelectedUnitSpikes, site_phase: SitePhase, config: PhaseSynchronyConfig,
+) -> SelectedUnitPPC:
+    """Compute one selected unit's all-spike-pairs PPC independently per trial.
+
+    Input unit has (spike,) synchronized UTC seconds and a probe-qualified ID;
+    SitePhase retains complex (frequency,trial,time) unit phase with real guard.
+    Select the saved half-open interval, sample phase without another clock
+    correction, and call the existing public all-pairs metric per trial. Return
+    (trial,frequency) dimensionless PPC/counts/exclusions, strict band summaries
+    and min/max frequency counts, fixed (frequency,trial,24) polar histograms,
+    original trial identities and selected UTC spike timestamps for inspection.
+    Counts below two are undefined; no 50-spike cutoff or pooling is applied.
+    """
+    _validate_phase_contract(site_phase)
+    trial_count = len(site_phase.trial_ids)
+    frequency_count = len(site_phase.frequency_hz)
+    counts = np.zeros((trial_count, frequency_count), dtype=np.int64)
+    excluded = np.zeros(counts.shape, dtype=np.int64)
+    ppc = np.full(counts.shape, np.nan)
+    edges = np.linspace(-np.pi, np.pi, 25)
+    histograms = np.zeros((frequency_count, trial_count, 24), dtype=np.int64)
+    selected_times = []
+    interval = site_phase.meta["interval"]
+    for trial, choice in enumerate(site_phase.choice_times_s):
+        spikes = select_unit_window_spikes(unit, choice, interval=interval)
+        vectors, valid = sample_site_phase_at_spikes(site_phase, trial, spikes)
+        # Complex128 angle coordinates keep +/-pi inside the float64 bin edges;
+        # casting angles to float32 can otherwise drop endpoint observations.
+        metrics = compute_frequency_phase_metrics(
+            vectors.astype(np.complex128), valid, site_phase.frequency_hz, spikes,
+            unit.cluster_id, site_phase.site_id, phase_bin_edges_rad=edges,
+        )
+        ppc[trial] = metrics.ppc
+        counts[trial] = metrics.n_spikes
+        excluded[trial] = len(spikes) - metrics.n_spikes
+        histograms[:, trial] = metrics.phase_spike_counts
+        selected_times.append(spikes)
+    valid = (counts >= 2) & np.isfinite(ppc)
+    means, band_valid, masks = strict_band_mean(ppc, site_phase.frequency_hz, config.bands)
+    minimum = np.zeros((trial_count, len(config.bands)), dtype=np.int64)
+    maximum = np.zeros(minimum.shape, dtype=np.int64)
+    for index, mask in enumerate(masks):
+        if mask.any():
+            minimum[:, index] = counts[:, mask].min(axis=1)
+            maximum[:, index] = counts[:, mask].max(axis=1)
+    return SelectedUnitPPC(
+        unit.unit_id, site_phase.site_id, site_phase.frequency_hz.copy(), ppc,
+        counts, excluded, valid, means, band_valid, minimum, maximum,
+        tuple(b.name for b in config.bands), edges, histograms, tuple(selected_times),
+        site_phase.trial_ids.copy(), site_phase.row_positions.copy(), site_phase.choice_times_s.copy(),
+        {"analysis_version": ANALYSIS_VERSION, "unit_id": unit.unit_id,
+         "unit_sources": unit.meta, "source_phase": site_phase.meta,
+         "interval": interval, "interval_bounds_s": site_phase.meta["interval_bounds_s"],
+         "units": "dimensionless PPC; histogram counts; UTC Unix seconds; phase radians",
+         "axes": ("trial", "frequency"), "polar_axes": ("frequency", "trial", "phase_bin"),
+         "bands": [asdict(b) for b in config.bands], "estimator": "within_trial_all_pairs"},
+    )
+
+
 # Small validation/identity helpers; no estimators or numerical source loading.
+def _validate_phase_contract(site_phase: SitePhase) -> None:
+    """Validate (frequency,trial,time) phase and exact 500-Hz centered metric/guard grid.
+
+    Frequency coordinates are positive increasing Hz; trial axes retain IDs,
+    integer source rows and finite UTC seconds. Return None or raise ValueError;
+    no axes, masks, units or interval boundaries are inferred or changed.
+    """
+    frequencies = np.asarray(site_phase.frequency_hz)
+    if (frequencies.ndim != 1 or not frequencies.size or not np.isfinite(frequencies).all()
+            or np.any(frequencies <= 0) or np.any(np.diff(frequencies) <= 0)):
+        raise ValueError("Phase frequency grid must be finite, positive and increasing")
+    if site_phase.sample_rate_hz != 500.0:
+        raise ValueError("Phase metric grid requires the actual 500-Hz rate")
+    interval = site_phase.meta.get("interval")
+    if interval not in INTERVAL_BOUNDS_S:
+        raise ValueError("Phase metric interval must be primary or secondary")
+    start, stop = INTERVAL_BOUNDS_S[interval]
+    if tuple(site_phase.meta.get("interval_bounds_s", ())) != (start, stop):
+        raise ValueError("Phase interval bounds disagree with its centered metric interval")
+    metric_count = round((stop - start) * 500)
+    expected_time = start + np.arange(metric_count + 1) / 500
+    expected_mask = np.arange(metric_count + 1) < metric_count
+    if (not np.array_equal(site_phase.relative_time_s, expected_time)
+            or not np.array_equal(site_phase.metric_mask, expected_mask)
+            or site_phase.metric_mask.dtype != np.dtype(bool)):
+        raise ValueError("Phase grid/metric mask must retain exact half-open samples and one excluded real guard")
+    expected = (len(site_phase.frequency_hz), len(site_phase.trial_ids), len(site_phase.relative_time_s))
+    if (site_phase.phase.shape != expected or site_phase.valid.shape != expected
+            or site_phase.valid.dtype != np.dtype(bool)):
+        raise ValueError("Site phase must preserve (frequency,trial,time) axes and metric mask")
+    for array in (site_phase.trial_ids, site_phase.row_positions, site_phase.choice_times_s):
+        if np.asarray(array).shape != (expected[1],):
+            raise ValueError("Phase trial ID/row/UTC axes must match the trial dimension")
+    if (not np.isfinite(site_phase.choice_times_s).all()
+            or not np.issubdtype(site_phase.row_positions.dtype, np.integer)):
+        raise ValueError("Phase trial axes require finite UTC seconds and integer source rows")
+    if (site_phase.meta.get("phase_support_semantics") != PHASE_SUPPORT_SEMANTICS
+            or site_phase.meta.get("phase_alignment_semantics") != PHASE_ALIGNMENT_SEMANTICS):
+        raise ValueError("Site phase has incompatible scientific support/alignment semantics")
+
+
 def _waveform_welch_settings(waveforms: SiteWaveforms, config: PhaseSynchronyConfig) -> tuple[dict, int]:
     """Validate (trial,time) native uV/grid/config; return Welch settings and segment count."""
     values = np.asarray(waveforms.values_uv)

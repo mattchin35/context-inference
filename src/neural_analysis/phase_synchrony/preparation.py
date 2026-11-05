@@ -9,7 +9,10 @@ import pandas as pd
 
 from src.external_tools import readSGLX
 from src.neural_analysis.lfp import loading as lfp_loading
-from src.neural_analysis.lfp.spectrogram import apply_optional_60_hz_notch
+from src.neural_analysis.lfp import phase as lfp_phase
+from src.neural_analysis.lfp.spectrogram import (
+    apply_optional_60_hz_notch, compute_decimation_factor, compute_wavelet_padding_s,
+)
 from src.neural_analysis.session_metadata import (
     ResolvedSession, SiteMetadata, resolve_probe_sources,
 )
@@ -17,7 +20,8 @@ from src.neural_analysis.spike_behavior import loading as spike_loading
 
 from .results import (
     INTERVAL_BOUNDS_S, WAVEFORM_ALIGNMENT_SEMANTICS,
-    ContinuousSiteLFP, PhaseSynchronyConfig, SelectedUnitSpikes, SiteWaveforms,
+    PHASE_ALIGNMENT_SEMANTICS, PHASE_SUPPORT_SEMANTICS,
+    ContinuousSiteLFP, PhaseSynchronyConfig, SelectedUnitSpikes, SiteWaveforms, SitePhase,
     parse_unit_id,
 )
 
@@ -274,6 +278,159 @@ def prepare_site_lfp(source: ContinuousSiteLFP, choices: pd.DataFrame, *, interv
     )
 
 
+def prepare_site_phase(
+    source: ContinuousSiteLFP,
+    choices: pd.DataFrame,
+    config: PhaseSynchronyConfig,
+    *,
+    interval: str = "primary",
+) -> SitePhase:
+    """Prepare drift-corrected Morlet unit phase before extracting choice windows.
+
+    Input is bounded calibrated native (sample,) uV with independent IRIG clock,
+    real padding and masks, plus original trial IDs/rows/UTC-second choices.
+    Apply/reuse the configured continuous notch once. Resample each bounded
+    block onto uniform UTC native-rate voltages BEFORE existing integer
+    decimation/Morlet. Split invalid source gaps into independent valid runs;
+    frequency-specific real wavelet padding excludes run edges. Return complex64
+    (frequency,trial,time) unit phase and validity on the exact 500-Hz choice
+    grid, with one real right guard outside the half-open metric mask.
+
+    No phase values are manufactured outside real source/transform support.
+    Boundary trials/secondary support loss never discard other supported data.
+    Morlet settings are the established Gaussian 1.5/window 1/precision 16/L1;
+    all actual support, clocks and amplitude settings are retained in metadata.
+    """
+    source = preprocess_site_lfp(source, config)
+    origin, anchor_time, anchor_indices = _clock_coordinates(source)
+    start, stop = interval_bounds(interval)
+    frequencies = np.asarray(config.phase_frequencies_hz, dtype=float)
+    factor = compute_decimation_factor(source.sample_rate_hz, config.phase_rate_hz, float(frequencies.max()))
+    actual_rate = source.sample_rate_hz / factor
+    if actual_rate != config.phase_rate_hz or actual_rate != 500.0:
+        raise ValueError("Actual integer-decimated phase rate must be exactly 500 Hz")
+    times = choices.choice_time.to_numpy(dtype=float)
+    positions = np.arange(len(choices), dtype=int)
+    padding = compute_wavelet_padding_s(float(frequencies.min()), 1.0)
+    frequency_padding = 8.0 / frequencies
+    metric_count = round((stop - start) * actual_rate)
+    relative = start + np.arange(metric_count + 1) / actual_rate
+    metric_mask = np.arange(metric_count + 1) < metric_count
+    shape = (len(frequencies), len(choices), len(relative))
+    phase = np.full(shape, np.nan + 1j * np.nan, dtype=np.complex64)
+    valid = np.zeros(shape, dtype=bool)
+    blocks = lfp_phase.plan_continuous_processing_blocks(
+        times - origin, positions, (start, stop + 1 / actual_rate), padding, 120.0,
+    )
+    block_metadata = []
+    for block in blocks:
+        native_count = int(np.ceil((block.load_end_s - block.load_start_s) * source.sample_rate_hz)) + 1
+        block_time = np.arange(native_count) / source.sample_rate_hz
+        voltages, support = _sample_relative_utc(
+            source, block.load_start_s + block_time, anchor_time, anchor_indices,
+        )
+        for first, last in _valid_runs(support):
+            # The existing IIR anti-alias decimator needs at least 28 native
+            # samples. Short fragments cannot supply real wavelet support.
+            if last - first <= 27 or block_time[last - 1] - block_time[first] <= 2 * frequency_padding.min():
+                continue
+            run_origin = block_time[first]
+            run_time = np.arange(last - first) / source.sample_rate_hz
+            transformed = lfp_phase.compute_wavelet_coefficients(
+                run_time, voltages[first:last], source.sample_rate_hz, frequencies,
+                gaussian_width=1.5, window_length=1.0, precision=16, norm="l1",
+                target_sample_rate_hz=actual_rate, notch_60_hz=False,
+            )
+            if transformed.sample_rate_hz != actual_rate:
+                raise ValueError("Morlet returned an incompatible actual phase rate")
+            vectors, coefficient_valid = lfp_phase.normalize_wavelet_phase(
+                transformed.coefficients,
+                minimum_relative_magnitude=config.numerical_amplitude_threshold,
+            )
+            coefficient_valid &= np.abs(transformed.coefficients) >= config.absolute_amplitude_threshold
+            # Only real continuous run support can justify a coefficient. A
+            # source gap excludes its wavelet footprint, not merely one sample.
+            coefficient_time = transformed.time_s
+            coefficient_valid &= (
+                (coefficient_time[None, :] >= frequency_padding[:, None])
+                & (coefficient_time[None, :] <= run_time[-1] - frequency_padding[:, None])
+            )
+            for position in block.trial_indices:
+                target = (times[position] - origin) - block.load_start_s - run_origin + relative
+                sampled, sampled_valid = _interpolate_phase_vectors(
+                    coefficient_time, vectors, coefficient_valid, target,
+                )
+                phase[:, position][sampled_valid] = sampled[sampled_valid].astype(np.complex64)
+                valid[:, position] |= sampled_valid
+            block_metadata.append({
+                "clock_utc_origin_s": origin,
+                "origin_relative_s": block.load_start_s + run_origin,
+                "support_relative_bounds_s": (block.load_start_s + run_origin,
+                                              block.load_start_s + block_time[last - 1]),
+                "utc_origin_s": origin + (block.load_start_s + run_origin),
+                "support_bounds_s": (origin + (block.load_start_s + run_origin),
+                                     origin + (block.load_start_s + block_time[last - 1])),
+                "native_rate_hz": source.sample_rate_hz, "phase_rate_hz": actual_rate,
+                "native_sample_count": last - first,
+            })
+    metadata = dict(source.meta)
+    metadata.update({
+        "phase_support_semantics": PHASE_SUPPORT_SEMANTICS,
+        "phase_alignment_semantics": PHASE_ALIGNMENT_SEMANTICS,
+        "numerical_amplitude_threshold": config.numerical_amplitude_threshold,
+        "absolute_amplitude_threshold": config.absolute_amplitude_threshold,
+        "absolute_amplitude_unit": "uV Morlet coefficient magnitude with L1 normalization",
+        "morlet": {"gaussian_width": 1.5, "window_length": 1.0, "precision": 16, "norm": "l1"},
+        "padding_s": padding, "frequency_padding_s": frequency_padding.tolist(),
+        "blocks": block_metadata, "phase_rate_hz": actual_rate,
+        "native_rate_hz": source.sample_rate_hz, "decimation_factor": factor,
+        "interval": interval, "interval_bounds_s": (start, stop),
+        "synchronization_anchors": source.irig_df[["sample_ix", "utc_unix"]].to_dict("list"),
+        "operation_order": ("native_calibration", "continuous_notch", "irig_uniform_utc_sampling",
+                            "anti_alias_decimation", "morlet", "unit_phase", "choice_grid_sampling"),
+        "axes": ("frequency", "trial", "time"), "guard_samples": 1,
+    })
+    return SitePhase(
+        source.site_id, source.probe_id, source.saved_channel_index, frequencies,
+        phase, valid, relative, metric_mask, actual_rate,
+        choices.trial_id.to_numpy(copy=True), choices.row_position.to_numpy(dtype=np.int64, copy=True),
+        times.copy(), metadata,
+    )
+
+
+def sample_site_phase_at_spikes(
+    site_phase: SitePhase, trial_position: int, spike_times_s: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample prepared unit phase at already synchronized (spike,) UTC seconds.
+
+    ``trial_position`` indexes the saved trial axis. Return complex128 unit
+    vectors and bool validity (frequency,spike), with NaN vectors outside real
+    support. Exact source timestamps require only their own validity; fractional
+    timestamps need both neighbors. Interpolate normalized vectors and normalize
+    again; never interpolate wrapped angles or fabricate coefficient amplitudes.
+    The right guard is usable support but window selection remains half-open.
+    Forward UTC equality recovers representable exact hits without snapping
+    distinct fractional timestamps. No second LFP/spike clock correction occurs.
+    """
+    spikes = np.asarray(spike_times_s, dtype=float)
+    if spikes.ndim != 1 or not np.isfinite(spikes).all():
+        raise ValueError("Spike timestamps must be a finite (spike,) UTC-second vector")
+    if not 0 <= trial_position < len(site_phase.choice_times_s):
+        raise ValueError("trial_position is outside the saved trial axis")
+    origin = site_phase.choice_times_s[trial_position]
+    source_time = site_phase.relative_time_s
+    targets = spikes - origin
+    nearest = np.rint((targets - source_time[0]) * site_phase.sample_rate_hz).astype(np.int64)
+    inside = (nearest >= 0) & (nearest < len(source_time))
+    candidate = np.clip(nearest, 0, len(source_time) - 1)
+    exact_utc = inside & (origin + source_time[candidate] == spikes)
+    targets[exact_utc] = source_time[candidate[exact_utc]]
+    return _interpolate_phase_vectors(
+        source_time, site_phase.phase[:, trial_position],
+        site_phase.valid[:, trial_position], targets,
+    )
+
+
 def validate_pair_sample_rates(site_a: ContinuousSiteLFP, site_b: ContinuousSiteLFP) -> None:
     """Require equal finite native Hz rates for two sources; return None or raise.
 
@@ -349,6 +506,51 @@ def interval_bounds(interval: str) -> tuple[float, float]:
 
 
 # Source/clock helpers: validation and sampling preserve every native axis.
+def _valid_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Return half-open integer (start,stop) runs of a bool (time,) support vector."""
+    starts = np.flatnonzero(mask & np.concatenate(([True], ~mask[:-1])))
+    stops = np.flatnonzero(mask & np.concatenate((~mask[1:], [True]))) + 1
+    return list(zip(starts.tolist(), stops.tolist()))
+
+
+def _interpolate_phase_vectors(
+    source_time_s: np.ndarray, vectors: np.ndarray, valid: np.ndarray, targets_s: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Interpolate relative-second phase (frequency,time) at (target,); return unit vectors/mask.
+
+    This narrow mask-aware adapter follows the existing complex-vector sampler's
+    normalization, with the exact-hit validity contract used by PPC kernels.
+    Inputs are already normalized phase, never amplitude-weighted coefficients.
+    """
+    times = np.asarray(source_time_s, dtype=float)
+    phase = np.asarray(vectors, dtype=np.complex128)
+    source_valid = np.asarray(valid, dtype=bool) & np.isfinite(phase) & (np.abs(phase) > 0)
+    if (times.ndim != 1 or not times.size or not np.isfinite(times).all()
+            or np.any(np.diff(times) <= 0) or phase.shape != source_valid.shape
+            or phase.ndim != 2 or phase.shape[1] != times.size):
+        raise ValueError("Phase vectors/validity must share an increasing (frequency,time) axis")
+    right = np.searchsorted(times, targets_s)
+    safe = np.clip(right, 0, times.size - 1)
+    tolerance = 8 * np.finfo(float).eps * max(1.0, np.max(np.abs(times)))
+    exact = (right < times.size) & np.isclose(times[safe], targets_s, rtol=0, atol=tolerance)
+    output = np.full((phase.shape[0], len(targets_s)), np.nan + 1j * np.nan)
+    supported = np.zeros(output.shape, dtype=bool)
+    if exact.any():
+        supported[:, exact] = source_valid[:, safe[exact]]
+        output[:, exact] = phase[:, safe[exact]]
+    between = ~exact & (right > 0) & (right < times.size)
+    if between.any():
+        left = right[between] - 1
+        upper = right[between]
+        weight = (targets_s[between] - times[left]) / (times[upper] - times[left])
+        output[:, between] = phase[:, left] * (1 - weight) + phase[:, upper] * weight
+        supported[:, between] = source_valid[:, left] & source_valid[:, upper]
+    magnitude = np.abs(output)
+    supported &= np.isfinite(magnitude) & (magnitude > 0)
+    output = np.divide(output, magnitude, out=np.full_like(output, np.nan + 1j * np.nan), where=supported)
+    return output, supported
+
+
 def _validate_source(source: ContinuousSiteLFP) -> None:
     """Validate native (sample,) values/mask/indices and positive Hz; return None."""
     indices = np.asarray(source.sample_indices)

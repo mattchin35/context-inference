@@ -15,6 +15,8 @@ from src.neural_analysis.lfp.config import FrequencyBandConfig
 
 ANALYSIS_VERSION = "session-timeline-phase-synchrony-v1"
 WAVEFORM_ALIGNMENT_SEMANTICS = "irig_uniform_utc_v1"
+PHASE_SUPPORT_SEMANTICS = "strict_support_v1"
+PHASE_ALIGNMENT_SEMANTICS = "irig_uniform_utc_pre_morlet_v1"
 INTERVAL_BOUNDS_S = {"primary": (-1.0, 1.0), "secondary": (-2.0, 2.0)}
 COMPONENTS = ("power", "coherence", "lfp-phase", "spike-ppc")
 
@@ -192,6 +194,96 @@ class WelchCoherence:
     band_names: tuple[str, ...]
     sample_count: np.ndarray
     segment_count: np.ndarray
+    trial_ids: np.ndarray
+    row_positions: np.ndarray
+    choice_times_s: np.ndarray
+    meta: dict
+
+
+@dataclass(frozen=True)
+class SitePhase:
+    """One site's unit phase, complex64 (frequency,trial,time), with bool validity.
+
+    ``frequency_hz`` is float (frequency,); ``relative_time_s`` is float (time,)
+    choice-relative seconds including a real right guard. Boolean ``metric_mask``
+    selects exactly the half-open metric samples, excluding guards. Actual rate
+    is ``sample_rate_hz``. Original categorical IDs, integer rows and UTC-second
+    choices retain (trial,) axes. Metadata records real transform/source support,
+    synchronization, amplitude gates and operation order. Invalid vectors are
+    complex NaN; phase carries no physical units or amplitude information.
+    """
+
+    site_id: str
+    probe_id: str
+    saved_channel_index: int
+    frequency_hz: np.ndarray
+    phase: np.ndarray
+    valid: np.ndarray
+    relative_time_s: np.ndarray
+    metric_mask: np.ndarray
+    sample_rate_hz: float
+    trial_ids: np.ndarray
+    row_positions: np.ndarray
+    choice_times_s: np.ndarray
+    meta: dict
+
+
+@dataclass(frozen=True)
+class LFPPhaseSummary:
+    """Within-window dimensionless PLV/PPC on (trial,frequency) axes.
+
+    ``phase_offset_rad`` is A-minus-B circular mean in radians or NaN for a
+    vanishing resultant. ``sample_count`` is integer actual paired sample count;
+    ``valid`` requires complete metric support and M>1. ``band_plv``,
+    ``band_ppc`` and ``band_valid`` have (trial,band) axes, with fixed retained
+    frequency centers. Frequencies are Hz; original IDs/rows/UTC-second choices
+    retain (trial,) axes. No guards or observations from another trial enter M.
+    """
+
+    frequency_hz: np.ndarray
+    plv: np.ndarray
+    ppc: np.ndarray
+    phase_offset_rad: np.ndarray
+    sample_count: np.ndarray
+    valid: np.ndarray
+    band_plv: np.ndarray
+    band_ppc: np.ndarray
+    band_valid: np.ndarray
+    band_names: tuple[str, ...]
+    trial_ids: np.ndarray
+    row_positions: np.ndarray
+    choice_times_s: np.ndarray
+    meta: dict
+
+
+@dataclass(frozen=True)
+class SelectedUnitPPC:
+    """One probe-qualified unit/site's within-trial dimensionless spike PPC.
+
+    Frequency results, bool ``valid`` and integer spike/exclusion counts have
+    (trial,frequency) axes. Band PPC/validity and min/max retained-frequency
+    spike counts have (trial,band) axes. ``polar_histogram_count`` is integer
+    (frequency,trial,phase_bin); fixed float bin edges are radians. Selected
+    UTC-second ``spike_times_by_trial`` is a tuple of (spike,) arrays, preserving
+    input precision. Original trial IDs/rows/UTC choices retain (trial,) axes.
+    Metadata identifies source phase settings/support; units are never pooled.
+    """
+
+    unit_id: str
+    site_id: str
+    frequency_hz: np.ndarray
+    ppc: np.ndarray
+    spike_count: np.ndarray
+    excluded_spike_count: np.ndarray
+    valid: np.ndarray
+    band_ppc: np.ndarray
+    band_valid: np.ndarray
+    band_spike_count_min: np.ndarray
+    band_spike_count_max: np.ndarray
+    band_names: tuple[str, ...]
+    phase_bin_edges_rad: np.ndarray
+    polar_histogram_count: np.ndarray
+    spike_times_by_trial: tuple[np.ndarray, ...]
     trial_ids: np.ndarray
     row_positions: np.ndarray
     choice_times_s: np.ndarray
