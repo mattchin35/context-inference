@@ -165,6 +165,47 @@ def test_pc_join_rejects_original_trial_identity_mismatches(pc_inputs, column: s
         select_pc_activity(trials, changed, regional, 1)
 
 
+@pytest.mark.parametrize("identity", [np.nan, "None"])
+def test_matching_missing_trial_ids_preserve_eligible_pc_reference(pc_inputs, identity) -> None:
+    """Input: fixture tuple/supported missing ID scalar. Return None; all three eligible windows survive.
+
+    Missing trial IDs break behavioral motif adjacency, but do not remove an
+    otherwise ordinary complete choice from the session-wide neural reference.
+    """
+    trials, choices, regional = pc_inputs
+    trials = trials.copy(deep=True)
+    choices = choices.copy(deep=True)
+    trials.iloc[3, trials.columns.get_loc("cur_trial")] = identity
+    choices.iloc[1, choices.columns.get_loc("trial_id")] = identity
+    source = select_pc_activity(trials, choices, regional, 1)
+    np.testing.assert_array_equal(source.row_positions, [3, 4, 6])
+    np.testing.assert_array_equal(source.values, regional.scores[:, :, 0])
+    scaled = scale_activity(source)
+    assert scaled["session_mean"] == pytest.approx(regional.scores[:, :, 0].mean())
+    assert scaled["session_sd"] == pytest.approx(regional.scores[:, :, 0].std(ddof=0))
+
+
+@pytest.mark.parametrize("source_id,saved_id,compatible", [
+    (104, "104", True), ("104", 104, True),
+    ("invalid-source", "invalid-saved", False), ("None", "invalid-saved", False),
+])
+def test_pc_trial_id_comparison_preserves_numeric_and_missing_semantics(
+    pc_inputs, source_id, saved_id, compatible: bool,
+) -> None:
+    """Input: fixture/ID scalars/expected bool. Return None; numeric strings agree, distinct bad tokens do not."""
+    trials, choices, regional = pc_inputs
+    trials = trials.copy(deep=True)
+    choices = choices.copy(deep=True)
+    trials.iloc[3, trials.columns.get_loc("cur_trial")] = source_id
+    choices.iloc[1, choices.columns.get_loc("trial_id")] = saved_id
+    if compatible:
+        source = select_pc_activity(trials, choices, regional, 1)
+        np.testing.assert_array_equal(source.row_positions, [3, 4, 6])
+    else:
+        with pytest.raises(ValueError, match="trial_id|identity"):
+            select_pc_activity(trials, choices, regional, 1)
+
+
 @pytest.mark.parametrize("corruption", ["map_bounds", "map_float", "map_duplicate", "score_shape", "nonfinite", "edges"])
 def test_pc_selection_rejects_invalid_saved_axes(pc_inputs, corruption: str) -> None:
     """Input: fixture tuple/corruption name. Return None; malformed (W,B,K) and (W,) mappings fail."""

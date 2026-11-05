@@ -437,6 +437,44 @@ def test_regional_full_pool_is_coverage_specific_not_all_shared_choices(
     assert storage.find_compatible_regional_timeline(session, "PFC", "A", 0.5) == report.result_path
 
 
+@pytest.mark.parametrize("identity_case", [
+    "missing_nan", "missing_none", "numeric_string", "malformed_different", "malformed_vs_missing",
+])
+def test_regional_reuse_preserves_missing_and_numeric_trial_id_semantics(
+    synthetic_timeline_session: ResolvedSession, monkeypatch: pytest.MonkeyPatch,
+    identity_case: str,
+) -> None:
+    """Input: session/patch fixture/ID case. Return None; exact eligible (3,8,2) PCA retains paired missing IDs.
+
+    Numeric strings compare to numeric identities. Different malformed strings,
+    or a malformed string versus a missing sentinel, must not collapse to a
+    shared NaN and authorize reuse. Missing IDs still break motif adjacency.
+    """
+    session = synthetic_timeline_session
+    trials = pd.read_csv(session.behavior.trial_table_file).astype(object)
+    source_id = {
+        "missing_nan": np.nan, "missing_none": "None", "numeric_string": 101,
+        "malformed_different": "invalid-source", "malformed_vs_missing": "None",
+    }[identity_case]
+    trials.iloc[0, trials.columns.get_loc("cur_trial")] = source_id
+    trials.to_csv(session.behavior.trial_table_file, index=False)
+    report = runner.run_session_timeline(session.metadata_path, {"PFC": "A", "HPC": "B"})
+    path = report.result_path
+    result = storage.load_timeline_result(path)
+    assert result.regions["PFC"].scores.shape == (3, 8, 2)
+    if identity_case in {"numeric_string", "malformed_different", "malformed_vs_missing"}:
+        with np.load(path, allow_pickle=True) as archive:
+            arrays = {name: archive[name] for name in archive.files}
+        choices = pd.DataFrame.from_records(arrays["choices"])
+        choices["trial_id"] = choices["trial_id"].astype(object)
+        choices.loc[0, "trial_id"] = "101" if identity_case == "numeric_string" else "invalid-saved"
+        arrays["choices"] = choices.to_records(index=False)
+        np.savez_compressed(path, **arrays)
+    _forbid_raw_work(monkeypatch)
+    expected = None if identity_case.startswith("malformed") else path
+    assert storage.find_compatible_regional_timeline(session, "PFC", "A", 0.5) == expected
+
+
 def test_default_fallback_extra_unit_prevents_strict_population_reuse(
     synthetic_timeline_session: ResolvedSession,
 ) -> None:
