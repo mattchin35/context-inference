@@ -137,6 +137,8 @@ def test_display_changes_and_refresh_never_prepare_signals(runnable_session, con
     at = AppTest.from_function(_render_for_test, args=(str(runnable_session),)).run()
     assert not at.exception
     first_id, first = _figure_spec(at)
+    payload = json.loads(at.get("bidi_component")[0].proto.json)["figure_json"]
+    assert any(f"JSON payload: {len(payload.encode('utf-8'))} bytes" in element.value for element in at.caption)
     interval = next(widget for widget in at.selectbox if widget.label == "Centered interval")
     interval.select("secondary").run()
     assert not at.exception
