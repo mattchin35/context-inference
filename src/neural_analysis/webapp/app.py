@@ -27,6 +27,7 @@ from src.neural_analysis.lfp.loading import (
     sha256_file_content,
 )
 from src.neural_analysis.population import pca as population_pca
+from src.neural_analysis.event_sequences import io as event_sequence_io
 from src.neural_analysis.spike_behavior import loading as spike_behavior_pynapple
 from src.neural_analysis.spike_behavior import loading as unit_spike_loading
 from src.neural_analysis.spike_lfp import hilbert as spike_lfp_hilbert_phase
@@ -157,6 +158,8 @@ from src.neural_analysis.webapp.session_inputs import (
     PLOT_VIEW_INTERREGIONAL,
     PLOT_VIEW_CONTEXT_ENCODING,
     PLOT_VIEW_SESSION_TIMELINE,
+    PLOT_VIEW_EVENT_SEQUENCE_CENTRAL,
+    PLOT_VIEW_EVENT_SEQUENCE_TRANSITION,
     PLOT_VIEW_PHASE_SYNCHRONY,
     PLOT_VIEW_LFP_PHASE_CLUSTERING,
     PLOT_VIEW_LFP_SUMMARY,
@@ -206,6 +209,7 @@ from src.neural_analysis.webapp.condition_generalization_views import (
 from src.neural_analysis.webapp.task_decoding_views import render_task_decoding_view
 from src.neural_analysis.webapp.timeline_view import render_session_timeline_view
 from src.neural_analysis.webapp.phase_synchrony_view import render_phase_synchrony_view
+from src.neural_analysis.webapp.event_sequence_views import render_event_sequence_view
 from src.neural_analysis.webapp.unit_views import (
     PAGE_SIZE_OPTIONS,
     POPULATION_PSTH_UNIT_SCOPE_OPTIONS,
@@ -686,6 +690,12 @@ def _start_metadata_webapp(session: ResolvedSession) -> str | None:
     if plot_view == PLOT_VIEW_SESSION_TIMELINE:
         render_session_timeline_view(st, session)
         return None
+    if plot_view == PLOT_VIEW_EVENT_SEQUENCE_CENTRAL:
+        render_event_sequence_view(st, session, kind="central")
+        return None
+    if plot_view == PLOT_VIEW_EVENT_SEQUENCE_TRANSITION:
+        render_event_sequence_view(st, session, kind="transition")
+        return None
     if plot_view == PLOT_VIEW_PHASE_SYNCHRONY:
         render_phase_synchrony_view(st, session)
         return None
@@ -715,6 +725,7 @@ def main(argv: Sequence[str] = ()) -> None:
     if st.sidebar.button("Clear cached data"):
         st.cache_resource.clear()
         st.cache_data.clear()
+        event_sequence_io.clear_probe_spike_cache()
         st.rerun()
 
     arguments = parse_webapp_arguments(argv)
@@ -740,6 +751,13 @@ def main(argv: Sequence[str] = ()) -> None:
         sess_id_full = metadata_session.session_id
         metadata_lfp_sites = metadata_lfp_site_inputs(metadata_session)
     else:
+        plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+        if plot_view in {PLOT_VIEW_EVENT_SEQUENCE_CENTRAL, PLOT_VIEW_EVENT_SEQUENCE_TRANSITION}:
+            st.info(
+                "Event-sequence heatmaps need session metadata. Launch this webapp "
+                "with `--session-metadata <session_root>/neural_session.json`."
+            )
+            return
         _initialize_path_input_state()
         st.sidebar.header("Session")
         session_data_home = st.sidebar.text_input(
@@ -777,7 +795,6 @@ def main(argv: Sequence[str] = ()) -> None:
             key="pfc_lfp_path_input",
         )
         _render_path_browser()
-        plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
 
     if plot_view == PLOT_VIEW_PHASE_SYNCHRONY:
         st.info("Session LFP power and synchrony uses session metadata. Launch with --session-metadata <session_root>/neural_session.json.")

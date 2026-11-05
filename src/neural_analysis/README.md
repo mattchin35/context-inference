@@ -102,6 +102,33 @@ retain their existing view-specific loading behavior; selecting a cached
 summary keeps the existing saved provenance. A missing optional source
 disables the affected view and explains which source is unavailable.
 
+### Event-sequence heatmaps
+
+Choose **Event sequences: central trials** or **Event sequences: ideal
+transitions** in the metadata-driven app. Saved products are listed by source,
+probe, population, bin width, and run, and display from their saved trial
+identities and activity arrays. Saved unit views do not need current behavior,
+spike, sorter, or quality files. Saved PC views also require their exact
+referenced session-timeline PCA archive; a missing or changed archive is
+reported. Each view remains available when an unrelated probe is unavailable.
+
+To create a new product, configure a probe-qualified manual-good unit or a
+PFC/HPC PC population, choose 500-ms or 100-ms bins, then click **Prepare**.
+Unit choices use explicit Phy `group=good` labels. PC populations offer strict
+`good_mua` (explicit `group=good` or `group=mua`) and strict `good`; blank or
+missing labels are excluded. Metadata probe roles are used for PC regions by
+default, with an optional probe override. Recompute creates a fresh run without
+replacing prior results. These settings stay in the app and saved provenance;
+they add no fields to `neural_session.json`.
+
+Outcome, side, transition direction, repeat count, PC rank, and z-scoring are
+display controls. They reuse the selected saved source and fixed PCA basis.
+Z-scoring is disabled for constant activity; raw silence remains a valid heatmap.
+Click **Export PNG** to save an additive light-mode image in the selected run's
+`figures/` directory. The callable Python batch entry point is
+`src.neural_analysis.event_sequences.run_batch.run_batch`; there is no public
+CLI or JSON batch-request format in this workflow.
+
 For version-3 metadata, **Cached LFP Summary** defaults to the read-only
 `session cache` source. It inspects only the declared preview and final cache
 directories. A final cache is selected first only after Power, Synchrony, and

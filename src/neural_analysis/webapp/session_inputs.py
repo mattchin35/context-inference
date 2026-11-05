@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from src.neural_analysis.session_metadata import ResolvedSession
+from src.neural_analysis.event_sequences import io as event_sequence_io
 from src.neural_analysis.session_metadata import (
     load_session_metadata,
     resolve_probe_sources,
@@ -66,6 +67,10 @@ PLOT_VIEW_SESSION_TIMELINE = "Session timeline and PCA"
 
 PLOT_VIEW_PHASE_SYNCHRONY = "Session timeline: LFP power and synchrony"
 
+PLOT_VIEW_EVENT_SEQUENCE_CENTRAL = "Event sequences: central trials"
+
+PLOT_VIEW_EVENT_SEQUENCE_TRANSITION = "Event sequences: ideal transitions"
+
 PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_UNIT_RASTER,
     PLOT_VIEW_TRIAL_SPIKES,
@@ -82,6 +87,8 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_CONTEXT_ENCODING,
     PLOT_VIEW_SESSION_TIMELINE,
     PLOT_VIEW_PHASE_SYNCHRONY,
+    PLOT_VIEW_EVENT_SEQUENCE_CENTRAL,
+    PLOT_VIEW_EVENT_SEQUENCE_TRANSITION,
 ]
 
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
@@ -182,6 +189,8 @@ def metadata_view_availability(
     dict[str, MetadataViewAvailability]
         One entry for every value in ``PLOT_VIEW_OPTIONS``.
     """
+    # Saved event products establish view availability before current-source checks.
+    saved_event_products = event_sequence_io.discover_event_sequences(session.session_root)
     behavior_ready = (
         session.behavior.session_directory is not None
         and session.behavior.session_directory.is_dir()
@@ -241,6 +250,24 @@ def metadata_view_availability(
             availability[view] = MetadataViewAvailability(False, spike_reason)
         else:
             availability[view] = MetadataViewAvailability(True, "available")
+
+    ready_probe_ids = [
+        probe.probe_id for probe in session.probes
+        if probe.sorter_directory is not None
+        and probe.sorter_directory.is_dir()
+        and probe.aligned_spike_file is not None
+        and probe.aligned_spike_file.is_file()
+    ]
+    if saved_event_products:
+        event_availability = MetadataViewAvailability(True, "saved event-sequence products are available")
+    elif behavior_ready and ready_probe_ids:
+        event_availability = MetadataViewAvailability(True, "at least one metadata probe can be configured")
+    else:
+        event_availability = MetadataViewAvailability(
+            False, "no saved event-sequence products or behavior/spike inputs are available"
+        )
+    availability[PLOT_VIEW_EVENT_SEQUENCE_CENTRAL] = event_availability
+    availability[PLOT_VIEW_EVENT_SEQUENCE_TRANSITION] = event_availability
     return availability
 
 def resolve_region_channels_for_source(
