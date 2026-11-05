@@ -116,7 +116,9 @@ def test_run_batch_reuses_existing_worker_policy(event_session, tmp_path, monkey
     monkeypatch.setattr(batch_module, "prepare_event_sequences", Mock(return_value={}), raising=False)
     batch_module.run_batch(requests, workers=9)
     policy.assert_called_once_with(2, 9)
-    executor_factory.assert_called_once_with(max_workers=choose_worker_count(2, 9))
+    executor_factory.assert_called_once()
+    assert executor_factory.call_args.kwargs["max_workers"] == choose_worker_count(2, 9)
+    assert executor_factory.call_args.kwargs["mp_context"].get_start_method() == "spawn"
 
 
 @pytest.mark.parametrize("workers", [0, -1])
@@ -132,6 +134,9 @@ def test_run_batch_rejects_nonpositive_workers_before_work(event_session, worker
     executor.assert_not_called()
 
 
+@pytest.mark.filterwarnings(
+    r"error:This process .* is multi-threaded, use of fork\(\) may lead to deadlocks in the child\.:DeprecationWarning"
+)
 def test_run_batch_parallel_prepares_two_synthetic_sessions(event_session, tmp_path):
     """Input: session/temp fixtures; return None after checking two parallel results and script snapshots."""
     first = _copy_session(event_session, tmp_path / "first")
