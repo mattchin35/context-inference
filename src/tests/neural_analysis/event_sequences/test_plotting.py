@@ -504,6 +504,7 @@ def test_interactive_labels_fit_the_app_grid_without_wide_colorbar_titles() -> N
     figure = plotting.plotly_figure(central)
     assert figure.layout.coloraxis.colorbar.title.side == "right"
     assert all(12 <= annotation.font.size <= 14 for annotation in figure.layout.annotations[:6])
+    assert figure.layout.xaxis2.domain[0] - figure.layout.xaxis.domain[1] >= 0.20
     transition = plotting.build_transition_view(packet, source, repeats=4)
     assert all(max(map(len, label.splitlines())) <= 10 for label in transition["segment_labels"])
     figure = plotting.plotly_figure(transition)
