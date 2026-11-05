@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import json
 from pathlib import Path
@@ -22,7 +23,6 @@ from src.neural_analysis.event_sequences.run_session import (
 )
 from src.neural_analysis.webapp import app, session_inputs
 from src.neural_analysis.population import session_timeline as timeline
-from src.neural_analysis.webapp.session_inputs import load_webapp_session
 from src.tests.neural_analysis.event_sequences.conftest import (
     event_session as event_session_fixture,
 )
@@ -48,6 +48,7 @@ def _render_event_view(metadata_path: str, kind: str) -> None:
     import streamlit as st
 
     from src.neural_analysis.webapp.event_sequence_views import render_event_sequence_view
+    from src.neural_analysis.webapp.session_inputs import load_webapp_session
 
     render_event_sequence_view(st, load_webapp_session(metadata_path), kind=kind)
 
@@ -57,6 +58,7 @@ def _render_event_tool(metadata_path: str) -> None:
     import streamlit as st
 
     from src.neural_analysis.webapp.event_sequence_views import render_event_sequence_view
+    from src.neural_analysis.webapp.session_inputs import load_webapp_session
 
     session = load_webapp_session(metadata_path)
     kind = st.selectbox("Test tool", options=("central", "transition"))
@@ -216,9 +218,48 @@ def test_display_selectors_do_not_prepare_bin_fit_or_publish(event_session, monk
     _assert_selector(at, "selectbox", "Central outcome", "omission")
     _assert_selector(at, "selectbox", "Central side", "right")
     checkbox = next(item for item in at.checkbox if item.label == "Z-score")
+    assert not checkbox.disabled
     checkbox.check().run()
     assert not at.exception
     _assert_plotly_output(at)
+    assert "session-wide z-score" in _plotly_spec(at)["layout"]["meta"]["caption"]
+
+
+def test_open_source_editor_does_not_reread_quality_on_live_motif_changes(event_session, monkeypatch):
+    """Input: saved unit with its source editor open. Return None; live motif changes reuse curated metadata."""
+    _prepare_unit_product(event_session)
+    at = AppTest.from_function(_render_event_view, args=(str(event_session.metadata_path), "central")).run()
+    next(item for item in at.checkbox if item.label == "Configure a new source").check().run()
+    assert not at.exception
+    _assert_plotly_output(at)
+    monkeypatch.setattr(pd, "read_csv", _forbidden_display_operation)
+    _assert_selector(at, "selectbox", "Central outcome", "omission")
+    _assert_selector(at, "selectbox", "Central side", "right")
+    _assert_plotly_output(at)
+
+
+def test_legacy_metadata_requires_explicit_pc_probe_override(event_session, monkeypatch):
+    """Input: version-2 metadata without roles. Return None; only an explicitly selected probe can prepare a PC source."""
+    from src.neural_analysis.webapp import event_sequence_views
+
+    metadata = json.loads(event_session.metadata_path.read_text())
+    metadata["schema_version"] = "2"
+    metadata.pop("analysis")
+    event_session.metadata_path.write_text(json.dumps(metadata))
+    prepare = Mock(wraps=prepare_event_sequences)
+    monkeypatch.setattr(event_sequence_views, "prepare_event_sequences", prepare)
+    at = AppTest.from_function(_render_event_view, args=(str(event_session.metadata_path), "central")).run()
+    _assert_selector(at, "selectbox", "Neural source", "pc")
+    assert next(item for item in at.selectbox if item.label == "PC probe override").value == "Use metadata role"
+    assert not any(item.label == "Prepare" for item in at.button)
+    prepare.assert_not_called()
+    _assert_selector(at, "selectbox", "PC region", "HPC")
+    _assert_selector(at, "selectbox", "PC probe override", "B")
+    next(item for item in at.button if item.label == "Prepare").click().run()
+    assert not at.exception
+    prepare.assert_called_once()
+    request = prepare.call_args.args[0]
+    assert request.region == "HPC" and request.probe_id == "B"
 
 
 def test_prepare_and_recompute_are_the_only_preparation_actions(event_session, monkeypatch):
