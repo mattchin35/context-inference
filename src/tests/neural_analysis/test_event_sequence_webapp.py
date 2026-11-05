@@ -195,7 +195,7 @@ def test_missing_part_ii_fields_explain_only_transition_view(event_session, monk
     ).run()
     assert not central.exception
     assert not transition.exception
-    assert any("Part II" in item.value for item in transition.info + transition.warning)
+    assert any("Part II" in item.value for item in list(transition.info) + list(transition.warning))
 
 
 def test_display_selectors_do_not_prepare_bin_fit_or_publish(event_session, monkeypatch):
@@ -406,7 +406,7 @@ def test_zero_spike_good_unit_keeps_raw_plot_and_disables_zscore(event_session):
     assert zscore.disabled and zscore.value is False
     assert any(
         "zero" in item.value.lower() or "sd" in item.value.lower()
-        for item in at.info + at.caption + at.warning
+        for item in list(at.info) + list(at.caption) + list(at.warning)
     )
     _assert_plotly_output(at)
     assert result_path.is_file()
@@ -452,9 +452,9 @@ def test_pc_saved_cache_invalidates_when_referenced_archive_disappears(event_ses
     at.run()
     assert any(
         "PCA" in item.value and "changed" in item.value.lower()
-        for item in at.error + at.warning
+        for item in list(at.error) + list(at.warning)
     )
     pca_path.unlink()
     at.run()
-    assert any("PCA" in item.value and "missing" in item.value.lower() for item in at.error + at.warning)
+    assert any("PCA" in item.value and "missing" in item.value.lower() for item in list(at.error) + list(at.warning))
 
