@@ -252,14 +252,17 @@ def matplotlib_figure(view: dict) -> MatplotlibFigure:
             axis.set_xlabel("Local time from each choice (s); gaps are display separators", fontsize=13, color="black")
             for zero, label in zip(view["zero_positions"], view["segment_labels"]):
                 axis.text(zero, 1.02, label, transform=axis.get_xaxis_transform(), ha="center", va="bottom", fontsize=12, color="black")
-    figure.subplots_adjust(left=.13, right=.88, top=.92 if central else .83, bottom=.18 if central else .26, hspace=.65, wspace=.43)
+    figure.subplots_adjust(left=.13, right=.88, top=.92 if central else .83, bottom=.18 if central else .30, hspace=.65, wspace=.43)
     if view["color_limits"] is not None:
         mappable = ScalarMappable(norm=Normalize(*view["color_limits"]), cmap="viridis" if _positive_colors(view) else "RdBu_r")
         colorbar = figure.colorbar(mappable, ax=axes, fraction=.025, pad=.035)
         colorbar.set_label(view["value_units"], fontsize=13, color="black")
         colorbar.ax.tick_params(labelsize=12, colors="black")
         colorbar.ax.set_facecolor("white")
-    figure.text(.03, .025, "\n".join(_caption_lines(view["caption"])), fontsize=12, color="black", va="bottom")
+    # A conservative character budget follows the physical canvas width;
+    # narrow transition exports must also fit long source and unit identities.
+    figure.text(.03, .025, "\n".join(_caption_lines(view["caption"], width=round(width * 8))),
+                fontsize=12, color="black", va="bottom")
     return figure
 
 
@@ -398,8 +401,11 @@ def _hover_template(fields: tuple[str, ...], units: str) -> str:
 
 
 def _row_ticks(count: int) -> np.ndarray:
-    """Input: nonnegative displayed-row count. Return up to twelve integer chronological tick positions (T,)."""
-    return np.unique(np.linspace(0, count - 1, min(count, 12), dtype=int)) if count else np.empty(0, dtype=int)
+    """Input: nonnegative row count. Return up to ten uniformly spaced integer trial ticks (T,)."""
+    # Integer stride avoids adjacent labels when an uneven count (e.g. 17)
+    # cannot support twelve large tick labels without overlap.
+    stride = max(1, int(np.ceil(count / 10)))
+    return np.arange(0, count, stride, dtype=int)
 
 
 def _transition_ticks(view: dict) -> tuple[np.ndarray, list[str]]:
