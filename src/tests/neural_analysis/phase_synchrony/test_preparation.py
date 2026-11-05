@@ -151,6 +151,24 @@ def test_oe_known_acquisition_rate_preserves_irig_clock_drift(binary_session):
     assert valid.tolist() == [True]
 
 
+def test_missing_nominal_ap_rate_cannot_be_inferred_from_the_drifting_clock(binary_session):
+    """Without the nominal AP-to-LFP rate ratio, drift-aware native indices are unverifiable.
+
+    Remove only the nominal AP Hz metadata from a known drifting-clock fixture;
+    reject it instead of changing native sample coordinates using the UTC slope.
+    """
+    session, _ = binary_session
+    path = session.probes[0].alignment_file
+    with np.load(path, allow_pickle=True) as archive:
+        arrays = {name: archive[name] for name in archive.files}
+    metadata = dict(arrays["meta"].item())
+    metadata.pop("sample_rate_hz")
+    arrays["meta"] = np.asarray(metadata, dtype=object)
+    np.savez(path, **arrays)
+    with pytest.raises(ValueError, match="nominal|acquisition|sample_rate_hz"):
+        load_site_lfp(session, "NamedSite", start_sample=0, stop_sample=25_000)
+
+
 def test_clock_offset_changes_lfp_anchors_once(binary_session):
     """A configured hour offset is applied once to LFP anchor UTC seconds only."""
     session, _ = binary_session
