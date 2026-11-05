@@ -514,3 +514,14 @@ def test_interactive_labels_fit_the_app_grid_without_wide_colorbar_titles() -> N
     caption = figure.layout.annotations[-1]
     assert caption.y <= -0.20
     assert max(len(line) for line in caption.text.split("<br>")) <= 90
+
+
+def test_empty_panel_explanations_wrap_inside_the_app_grid() -> None:
+    """No inputs. Return None; empty-panel explanations stay readable within each narrow central panel."""
+    packet = _packet(trials=_trials([1, 1, 1], [1, 1, 0], [1, 1, 0]))
+    view = plotting.build_central_view(packet, plotting.prepare_display_source(packet))
+    figure = plotting.plotly_figure(view)
+    explanations = [annotation for annotation in figure.layout.annotations if "no matching" in annotation.text.lower()]
+    assert len(explanations) == 5
+    assert all("<br>" in annotation.text for annotation in explanations)
+    assert all(max(len(line) for line in annotation.text.split("<br>")) <= 34 for annotation in explanations)

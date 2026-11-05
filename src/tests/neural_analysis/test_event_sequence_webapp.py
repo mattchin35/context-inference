@@ -458,3 +458,26 @@ def test_pc_saved_cache_invalidates_when_referenced_archive_disappears(event_ses
     at.run()
     assert any("PCA" in item.value and "missing" in item.value.lower() for item in list(at.error) + list(at.warning))
 
+
+@pytest.mark.parametrize("width", [0.05, 0.02])
+def test_fine_bin_controls_prepare_only_after_explicit_request(event_session, width: float) -> None:
+    """Input: synthetic session/accepted fine width seconds. Return None; selecting 50/20 ms waits for Prepare."""
+    original = _prepare_unit_product(event_session)
+    at = AppTest.from_function(_render_event_view, args=(str(event_session.metadata_path), "central")).run()
+    next(item for item in at.checkbox if item.label == "Configure a new source").check().run()
+    selector = next(item for item in at.selectbox if item.label == "Preparation bin width")
+    assert f"{width * 1000:g} ms" in selector.options
+    selector.select(width).run()
+    assert not at.exception
+    paths = list(event_session.session_root.glob("analysis_runs/event_sequence_heatmaps_*/results.npz"))
+    assert paths == [original]
+    next(item for item in at.button if item.label == "Prepare").click().run()
+    assert not at.exception
+    paths = list(event_session.session_root.glob("analysis_runs/event_sequence_heatmaps_*/results.npz"))
+    assert len(paths) == 2
+    created = next(path for path in paths if path != original)
+    packet = event_io.load_event_sequences(created)
+    assert packet["meta"]["parameters"]["bin_width_s"] == width
+    assert packet["unit_rates_hz"].shape[1] == round(4 / width)
+    _assert_plotly_output(at)
+
