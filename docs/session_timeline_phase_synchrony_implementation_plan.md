@@ -31,7 +31,7 @@ and before handoff. Append exact evidence to Section 10.
 | Feature files | Plan untracked; synchrony spec staged as an addition with unstaged refinements. No commits by this chat. Preserve the actual workspace files when handing off; HEAD alone omits them. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
 | Evidence | No feature RED/GREEN runs or measured runtimes in this chat. Metadata/source/doc checks in Section 10; no experimental arrays loaded here. Implementation-chat loader/validity checks are reported evidence, not this chat's analysis runs. |
-| Next action | WP1 tests first, meaningful RED, lead-only test commit, then GREEN. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
+| Next action | WP2 RED tests for shared PSD/power/coherence; WP1 source commit `ba44366`. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
 
 Approval of the full Round 1 sequence includes its synthetic and designated
 single-session validation unless the user limits that approval. Record scope
@@ -47,7 +47,7 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | --- | --- | --- | --- | --- |
 | WP0 spec/handoff | Lead | Implementation approved | Not applicable | Section 10 doc checks |
 | WP1 inputs/config/preparation contracts | Sol worker, high | GREEN reviewed; complete | `0726ee1`; fixture/acceptance follow-up `ef27189` | 44 feature tests passed; 44 metadata/loading regressions passed; source reviewed by lead |
-| WP2 shared PSD/power/coherence | Sol worker, high | Not started; accept quadrature/segments/reuse | Not run | Not run |
+| WP2 shared PSD/power/coherence | Sol worker, high | GREEN reviewed; complete | `705f8d8`; 1 expected missing-feature collection error, 0.52 s | Worker 107 passed; lead 96 plus 11 runtime regressions; source reviewed |
 | WP3 phase/LFP metrics/spike PPC | Sol worker, high | Not started; accept drift-corrected phases, thresholds, validity/sampling/estimands | Not run | Not run |
 | WP4 persistence/discovery | Sol worker, high | Not started; accept identities/publication | Not run | Not run |
 | WP5a execution/timing core | Sol worker, high | Not started; freeze stage contracts | Not run | Not run |
@@ -734,3 +734,41 @@ Exact next action, owner, and remaining authority or user-inspection gate:
 - No signal data/experimental analyses or feature performance measurements.
   Lead commits accepted source and this handoff only; user staging preserved.
   Next gate: WP2 shared PSD/integrated power/coherence tests first.
+
+### 2026-11-04 20:40 America/New_York - WP2 / RED dispatch
+
+- Accepted WP1 source/handoff commit `ba44366`; unrelated staged user files
+  remain untouched. Same Sol/high worker, baseline HEAD `ba44366`.
+- Exact writable path: new phase_synchrony/test_power_coherence.py under
+  src/tests/neural_analysis/. Tests cover independent voltage/PSD/segment
+  oracles, trusted SciPy coherence, strict band support, and exact shared-PSD
+  compatibility. No source changes released before lead test commit.
+- Next: lead reviews/reproduces WP2 RED, commits tests, releases GREEN.
+
+### 2026-11-04 20:44 America/New_York - WP2 / RED reviewed and committed
+
+- Lead read the complete 322-line estimator test file and reproduced RED:
+  1 collection error in 0.52 s for missing phase_synchrony.computation, with
+  installed SciPy available. Independently checked the zero-DC fixture has
+  exactly zero DC and positive retained band bins in this SciPy version.
+- Lead-only test commit `705f8d8`; user staging preserved. Released GREEN to
+  same Sol/high worker, exact writable sources computation.py and results.py.
+  Tests frozen; no experimental work. Next: review focused/regression GREEN.
+
+### 2026-11-04 20:48 America/New_York - WP2 / GREEN reviewed
+
+- Lead read complete computation.py and added records in results.py. Actual
+  Welch grid and density helper preserved, no per-window notch, exact shared
+  PSD identity excludes bands, cross spectra matched within each trial.
+  Coherence validity is per frequency and counts use common finite support.
+- Worker command: uv/cache environment as above, pytest -q
+  src/tests/neural_analysis/phase_synchrony plus existing
+  test_lfp_power_summary.py, test_lfp_synchrony_summary.py and
+  test_lfp_synchrony_runtime.py: 107 passed in 2.00 s, no warnings.
+- Lead independently ran feature/power/synchrony tests: 96 passed in 1.56 s,
+  then 11 synchrony-runtime regressions. No tests weakened or dependencies
+  changed. Guards for representable intervals and consistent supplied PSD
+  support implement the existing package contract; no separate RED claimed.
+- No experimental arrays/jobs or feature timing claims. Lead commits only
+  computation.py, results.py and this handoff. Next: WP3 RED for strict phase
+  preparation, within-window LFP PLV/PPC, and selected-unit spike PPC.

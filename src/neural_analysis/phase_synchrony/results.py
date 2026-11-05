@@ -126,6 +126,79 @@ class SiteWaveforms:
 
 
 @dataclass(frozen=True)
+class SitePSD:
+    """Reusable within-trial Welch density with physical uV^2/Hz units.
+
+    ``psd_uv2_per_hz`` is float (trial,frequency); ``frequency_hz`` is (frequency,).
+    ``valid`` is bool (trial,), requiring complete waveform support. Integer
+    ``sample_count`` counts supported samples and ``segment_count`` counts
+    contributing complete segments, each (trial,). Original categorical
+    ``trial_ids``, integer ``row_positions`` and UTC-second ``choice_times_s``
+    retain (trial,) axes. ``identity`` includes exact waveforms/axes/preprocessing
+    and Welch settings, excluding bands. Metadata records site and unit details.
+    """
+
+    frequency_hz: np.ndarray
+    psd_uv2_per_hz: np.ndarray
+    valid: np.ndarray
+    sample_count: np.ndarray
+    segment_count: np.ndarray
+    trial_ids: np.ndarray
+    row_positions: np.ndarray
+    choice_times_s: np.ndarray
+    identity: str
+    meta: dict
+
+
+@dataclass(frozen=True)
+class BandPower:
+    """Per-site integrated power: float (trial,band) uV^2 and bool validity.
+
+    ``bandwidth_hz`` is float (band,) retained Hz; ``band_names`` identifies
+    that axis. Sample/segment counts are integer (trial,). Original trial IDs,
+    row positions and UTC-second choices retain (trial,) axes. Metadata records
+    the source auto-PSD identity, band definitions and integration convention.
+    """
+
+    band_power_integrated: np.ndarray
+    valid: np.ndarray
+    bandwidth_hz: np.ndarray
+    band_names: tuple[str, ...]
+    sample_count: np.ndarray
+    segment_count: np.ndarray
+    trial_ids: np.ndarray
+    row_positions: np.ndarray
+    choice_times_s: np.ndarray
+    meta: dict
+
+
+@dataclass(frozen=True)
+class WelchCoherence:
+    """Dimensionless magnitude-squared coherence on (trial,frequency) axes.
+
+    ``frequency_hz`` is float (frequency,); ``coherence`` is float and ``valid``
+    bool (trial,frequency), allowing zero-denominator bins to be unavailable
+    independently. ``band_mean``/``band_valid`` have (trial,band) axes;
+    ``band_names`` names that axis. ``sample_count``/``segment_count`` and
+    original categorical IDs, row positions and UTC choices are (trial,).
+    Metadata records ordered sites, actual settings and reused auto-PSD IDs.
+    """
+
+    frequency_hz: np.ndarray
+    coherence: np.ndarray
+    valid: np.ndarray
+    band_mean: np.ndarray
+    band_valid: np.ndarray
+    band_names: tuple[str, ...]
+    sample_count: np.ndarray
+    segment_count: np.ndarray
+    trial_ids: np.ndarray
+    row_positions: np.ndarray
+    choice_times_s: np.ndarray
+    meta: dict
+
+
+@dataclass(frozen=True)
 class SelectedUnitSpikes:
     """One explicit unit's float (spike,) synchronized UTC-second ``times_s``.
 
