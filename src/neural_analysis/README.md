@@ -105,15 +105,23 @@ disables the affected view and explains which source is unavailable.
 ### Event-sequence heatmaps
 
 Choose **Event sequences: central trials** or **Event sequences: ideal
-transitions** in the metadata-driven app. Saved products are listed by source,
-probe, population, bin width, and run, and display from their saved trial
-identities and activity arrays. Saved unit views do not need current behavior,
+transitions** in the metadata-driven app. Choose **Single unit** under
+**Neural source** to use the dedicated **Probe**, **Unit**, and **Bin width**
+selectors. The searchable unit list contains every eligible manual-good unit
+on that probe, including units not yet prepared. Selecting a unit loads its
+saved result or calculates and saves it automatically, reusing loaded probe
+spikes. Changing bins calculates only the selected unit. Changing motifs or
+z-scoring does not repeat that work. Saved unit views do not need current behavior,
 spike, sorter, or quality files. Saved PC views also require their exact
 referenced session-timeline PCA archive; a missing or changed archive is
 reported. Each view remains available when an unrelated probe is unavailable.
 
-To create a new product, configure a probe-qualified manual-good unit or a
-PFC/HPC PC population, choose 500-ms, 100-ms, 50-ms or 20-ms bins, then click **Prepare**.
+Choose **Regional PCs** for PC results. Its saved-results dropdown contains PC
+products only, listed by region, probe, population, bin width, and run. To
+prepare a new PFC/HPC PC population, check **Configure a new source**, choose
+500-ms, 100-ms, 50-ms or 20-ms bins, then click **Prepare**. Unit results do not
+need a Prepare click. If current quality metadata is missing, the unit controls
+offer already saved units for offline viewing.
 Unit choices use explicit Phy `group=good` labels. PC populations offer strict
 `good_mua` (explicit `group=good` or `group=mua`) and strict `good`; blank or
 missing labels are excluded. Metadata probe roles are used for PC regions by

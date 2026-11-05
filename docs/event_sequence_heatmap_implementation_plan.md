@@ -1,7 +1,7 @@
 # Event-Sequence Heatmap Implementation Handoff
 
-Status: implementation and designated CT026 single-session validation complete,
-2026-11-05. Reviewed outputs await user inspection. No experimental batch run.
+Status: base implementation, designated-session validation and approved dedicated
+unit-selector revision complete. No experimental batch run.
 
 Authority: [spec](event_sequence_heatmap_spec_v1.md), [AGENTS.md](../AGENTS.md),
 and [SoftwareDesign.md](SoftwareDesign.md). The spec owns scientific meaning;
@@ -13,6 +13,12 @@ explicit manual `group=good` or `group=mua`, excluding blank/missing labels.
 It does not inherit the existing timeline loader's missing-label-to-MUA
 fallback. Existing timeline callers retain their current defaults.
 
+Later approved UX revision: units have separate Probe / Unit / Bin width
+controls, outside the saved PC-run dropdown. Selecting an unprepared unit
+automatically computes and saves that unit once; cached units load directly.
+PC preparation remains explicit. This supersedes the initial explicit-Prepare
+rule for units only. No eager all-unit preparation or new dependency is added.
+
 ## 0. Live handoff
 
 Update the snapshot/ledger and append Section 7 evidence at RED, tests-only
@@ -22,12 +28,12 @@ commit, GREEN, review, interruption, and user-inspection boundaries.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-05 / `refactor` / source accepted at `5ecdcbf`; final handoff commit follows. Recheck; do not reset to this observation. |
-| Authority / next action | Implementation and designated-session validation are complete. User inspects reviewed figures/app before any experimental multi-session batch. |
+| Date / branch / inspected HEAD | 2026-11-05 / `refactor` / unit revision tests `01d3bde`; accepted source/handoff commit follows. Recheck; do not reset to this observation. |
+| Authority / next action | Approved unit-selector revision is complete. User can select any eligible unit for on-demand preparation; PC preparation remains explicit. Inspection still precedes any experimental multi-session batch. |
 | Feature files | Feature source/tests and this handoff are committed. The user's spec remains staged with unstaged refinements, preserved exactly. Transfer those actual user files if changing checkouts. |
 | Other work to preserve | Staged PCA spec, single-unit plan, ridge spec; staged/unstaged phase-synchrony spec; unstaged `src/main.py`, `src/neural_analysis/sync_ephys.py`; unrelated untracked files. |
-| Team / running work | Lead runtime identity is not exposed. Both workers idle. CT026 inspection app runs on loopback 127.0.0.1:8516, tool session 84354; no computations or experimental batches are running. |
-| Verification | Latest scoped regression: 593 passed, no warnings. Synthetic sparse/dense and actual CT026 browser inspection accepted; 26 revised exports passed text-bounds and immutable-NPZ checks. |
+| Team / running work | Lead runtime identity is not exposed. Both workers idle. Revised CT026 app runs on loopback 127.0.0.1:8516, tool session 92006; no computations or experimental batches are running. |
+| Verification | Latest scoped regression: 600 passed, no warnings. Dedicated unit controls validated on CT026: one new unit prepared, cached switches and tool changes reused saved products. |
 
 ### Package ledger
 
@@ -198,10 +204,14 @@ PC population mode for a PC, and bin width. PC rank/outcome/side/direction/x and
 z-scoring are display settings. Use metadata PFC/HPC roles for PCs with an
 explicit probe override; unit selection always identifies its metadata probe.
 
-The app offers Prepare for a missing source configuration and explicit Recompute
-for a fresh run. Source/population/bin-width changes select a compatible saved
-product when present; an uncached configuration shows its readiness and awaits
-Prepare. Show progress while preparation runs. Once loaded, outcome, side,
+The app uses dedicated Probe / Unit / Bin width controls for units. A saved
+unit selection loads directly, including offline saved-unit browsing; a newly
+selected unit or bin width prepares and saves just that unit automatically.
+Reuse the probe-array cache, and invalidate current products when their declared
+source-file identities change. Failed preparation waits for Retry or a changed
+selection/source. The saved-run dropdown lists PC products only. PCs offer
+Prepare for a missing configuration and Recompute for a fresh run. Show progress
+while preparation runs. Once loaded, outcome, side,
 direction, motif length, PC rank, and raw/z-scored mode change live without
 spike loading, binning, fitting, or result publication. PNG export remains an
 explicit display action. Do not add command-line selection flags or metadata
@@ -241,17 +251,20 @@ A valid final NPZ marks publication; interrupted/incomplete directories are
 not reusable. An explicit rerun creates a fresh directory; no stage recovery
 state machine or analysis-job ownership system is required.
 
-Separate saved display from preparation readiness. Saved views read their
+Separate saved activity from preparation readiness. Activity display reads its
 saved labels/mappings, unit arrays or exact referenced PCA, without current
-raw spikes, quality tables, or behavior CSVs. Validate saved shapes/identities
+raw spikes or behavior CSVs. The dedicated unit catalog reads small current
+quality tables once per source identity; missing quality files fall back to
+saved unit IDs. Validate saved shapes/identities
 and report a missing referenced PCA explicitly. Preparation checks current
 sources; saved display does not reconstruct a current-source configuration.
 Discover saved runs before checking current-source readiness or constructing
 a current timeline configuration. Keep saved runs selectable when source files
 are unavailable. Do not apply the app's all-probes-ready gate to these views.
 
-Display selectors never implicitly fit/save. Offer Prepare for a missing source
-configuration. Keep chronological rows and every requested empty panel; report
+Motif, scaling and PC-rank selectors never implicitly fit/save. Unit/probe/bin
+selection may automatically prepare the selected unit; missing PC sources await
+Prepare. Keep chronological rows and every requested empty panel; report
 behavioral matches separately from coverage exclusions. Use the common six-panel
 order and the spec's hover/caption fields. Part II displays one direction/x,
 with local choice-time zero lines and fixed separators. Plotly and Matplotlib
@@ -991,3 +1004,60 @@ output paths, and next action. Preserve history; append corrections to mistakes.
   changing assertions; the unrelated pre-existing sync_ephys.py EOF is untouched.
   Feature source/tests and this handoff are ready for review. User inspection
   is the only remaining gate before any multi-session experimental analysis.
+
+### Approved follow-up - dedicated unit selection / RED and GREEN
+
+- User requested easier unit selection outside the large saved-run dropdown,
+  with live computation or precomputation. Proposed on-demand computation using
+  existing pipeline/raw-cache functions; user explicitly approved. No repeated
+  approval or new dependency is needed. Root owns this bounded follow-up;
+  prior worker contexts stay idle.
+- Tests first: dedicated probe/unit/bin controls list all eligible units,
+  calculate only a newly selected unit, reuse cached probe arrays/saved products,
+  preserve selection across both views, allow offline saved-unit browsing,
+  avoid raw/CSV work on display changes, memoize failures until Retry or changed
+  inputs, and invalidate products when relevant source stats change. Updated
+  former unit Prepare assertions to cover explicit PC preparation instead;
+  initial metadata reading is now necessary to populate the eligible unit list.
+- RED: new seven-test unit-selector module failed seven times on absent controls
+  and invalidation. Combined revised app contracts: 10 failed / 17 passed in
+  6.25 s, session 92933. Tests-only commit 01d3bde preceded all production edits.
+  Verified installed Streamlit selectbox supports index=None for an explicitly
+  unselected unit on a new probe; no default unit is silently computed.
+- GREEN reuses EventSequenceRequest/prepare_event_sequences and the existing
+  two-probe spike cache. PC run selection/configuration remains separate and
+  explicit; raw/behavior/quality source identities are inspected by file stats,
+  never signal reads, on cached reruns. Offline catalogs use saved unit IDs
+  only when current quality metadata is absent.
+- First focused result: 26 passed / one failed in 8.62 s, duplicate Retry widget
+  when a second failure occurred. Fixed widget registration without changing
+  tests. Final focused result is recorded next; full regression/browser and
+  designated-session selector validation remain before acceptance.
+
+### Dedicated-unit selector revision - acceptance
+
+- Corrected Retry registration; focused app suites: 27 passed in 8.31 s,
+  session 66671. Added a small visible eligible-unit count and automatic-selection
+  explanation. Full planned regression including both UI modules: 600 passed
+  in 30.36 s, no warnings, session 67448. Range whitespace audit clean.
+- Restarted only the task's own CT026 loopback server (old 84354 stopped,
+  new 92006). Browser verified separate Neural source / Probe / Unit / Bin width
+  controls and visible eligible counts: ProbeA 125, ProbeB 245. PC saved-run
+  dropdown excludes unit products. No Prepare/configuration checkbox is needed
+  for units. An unprepared probe/unit starts unselected rather than silently
+  computing its first eligible unit.
+- Selected previously unprepared ProbeA:7 at 100 ms in the actual browser:
+  531 ms from selection to updated caption, including preparation. It saved one
+  new product with 695 eligible windows. Switching to existing ProbeA:0 took
+  289 ms; switching back and changing transition->central retained ProbeA:7 and
+  100-ms bins. Saved unit-product count rose from four to five once and stayed
+  five across the cached switches/tool change. No other units or PCs were
+  prepared. No experimental multi-session batch was run.
+- New result:
+  /home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/analysis_runs/event_sequence_heatmaps_20261105_165051_510055_ccc1dcb57c6c1dfa/results.npz.
+  Recorded timings: small metadata/selection 0.035 s, raw-probe load 0.033 s,
+  selected-unit binning 0.068 s. Browser evidence/report is ignored under
+  .pytest_cache/event_sequence_validation_20261105_143800/unit_selector_validation.json;
+  app log is unit_selector_webapp.log in that directory. App remains available
+  at 127.0.0.1:8516 with ProbeA:7 selected. Existing science interfaces, source
+  arrays, PCA bases, CLI/metadata schema and prior products remain unchanged.

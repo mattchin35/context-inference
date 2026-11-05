@@ -16,7 +16,7 @@ from src.neural_analysis.event_sequences.run_session import (
 )
 from src.neural_analysis.phase_synchrony.results import parse_unit_id
 from src.neural_analysis.population import session_timeline_io as timeline_io
-from src.neural_analysis.session_metadata import ResolvedSession
+from src.neural_analysis.session_metadata import ResolvedSession, resolve_probe_sources
 
 
 CENTRAL_VIEW = "central"
@@ -48,7 +48,8 @@ def render_event_sequence_view(
     -------
     None
         Render controls, availability messages, and a Plotly figure. Source
-        preparation occurs only after an explicit Prepare/Recompute click.
+        Units automatically prepare on selection and reuse saved results.
+        PC preparation remains an explicit Prepare/Recompute action.
     """
     if kind not in (CENTRAL_VIEW, TRANSITION_VIEW):
         raise ValueError("kind must be 'central' or 'transition'.")
@@ -60,41 +61,27 @@ def render_event_sequence_view(
     selected_product: dict | None = None
     request: EventSequenceRequest | None = None
 
-    configure_new = not products
-    if products:
-        configure_new = st_module.checkbox(
-            "Configure a new source", value=False, key=f"event_configure_{scope}"
-        )
-    if configure_new:
-        request = _render_configuration(st_module, session, scope)
+    default_kind = products[0]["meta"]["source_kind"] if products else "unit"
+    source_kind = st_module.selectbox(
+        "Neural source", options=("unit", "pc"), index=("unit", "pc").index(default_kind),
+        format_func=_source_kind_label, key=f"event_source_kind_{scope}",
+    )
+    if source_kind == "unit":
+        unit_products = [product for product in products if product["meta"]["source_kind"] == "unit"]
+        request = _render_unit_controls(st_module, session, scope, unit_products)
         if request is not None:
-            selected_product = _find_matching_product(products, session, request)
-            if selected_product is None:
-                st_module.info("This source configuration is not prepared yet. Click Prepare to create it.")
-            else:
-                st_module.caption(
-                    "Saved run with these source settings: " + _product_label(selected_product)
-                )
-    elif products:
-        labels = [_product_label(product) for product in products]
-        selected_label = st_module.selectbox(
-            "Saved source configuration",
-            options=labels,
-            index=0,
-            key=f"event_saved_source_{scope}",
-        )
-        selected_product = products[labels.index(selected_label)]
-        request = _request_from_product(session, selected_product)
+            selected_product = _resolve_unit_product(st_module, session, scope, request, unit_products)
     else:
-        st_module.info("No saved event-sequence sources are available. Configure a source and click Prepare.")
+        pc_products = [product for product in products if product["meta"]["source_kind"] == "pc"]
+        request, selected_product = _render_pc_source(st_module, session, scope, pc_products)
 
     selectors = _render_display_selectors(st_module, scope, kind)
     action = None
     if request is not None:
-        if selected_product is None:
+        if selected_product is None and source_kind == "pc":
             if st_module.button("Prepare", key=f"event_prepare_{scope}"):
                 action = "prepare"
-        elif st_module.button("Recompute", key=f"event_recompute_{scope}"):
+        elif selected_product is not None and st_module.button("Recompute", key=f"event_recompute_{scope}"):
             action = "recompute"
 
     if action is not None:
@@ -175,35 +162,142 @@ def render_event_sequence_view(
             st_module.error(f"Could not export event-sequence PNG: {error}")
 
 
-def _render_configuration(st_module: object, session: ResolvedSession, scope: str) -> EventSequenceRequest | None:
-    """Input: Streamlit/session/scope; return an explicit unit/PC request or show source readiness."""
-    source_columns = st_module.columns(2)
-    source_kind = source_columns[0].selectbox(
-        "Neural source",
-        options=("unit", "pc"),
-        format_func=_source_kind_label,
-        key=f"event_source_kind_{scope}",
+def _render_unit_controls(
+    st_module: object, session: ResolvedSession, scope: str, products: list[dict],
+) -> EventSequenceRequest | None:
+    """Input: UI/session/widget scope/saved unit headers. Return selected unit request or None.
+
+    Probe/qualified unit IDs are unitless; bin width is seconds. Current units
+    require explicit manual-good labels on allowed channels. Missing quality
+    files permit saved-unit browsing only. A new probe has no implicit unit
+    selection until the user chooses one; saved selections can load immediately.
+    """
+    unit_ids = _manual_good_unit_ids(st_module, session, scope)
+    columns = st_module.columns(3)
+    probe_ids = [probe.probe_id for probe in session.probes]
+    if not probe_ids:
+        st_module.warning("No metadata probes are available.")
+        return None
+    latest = products[0]["meta"]["parameters"] if products else {}
+    probe_key = f"event_unit_probe_{scope}"
+    previous_probe = st_module.session_state.get(probe_key, latest.get("probe_id"))
+    probe = columns[0].selectbox(
+        "Probe", options=probe_ids,
+        index=probe_ids.index(previous_probe) if previous_probe in probe_ids else 0, key=probe_key,
     )
-    bin_width_s = source_columns[1].selectbox(
+    width_key = f"event_unit_width_{scope}"
+    previous_width = st_module.session_state.get(width_key, latest.get("bin_width_s", 0.5))
+    width = columns[2].selectbox(
+        "Bin width", options=NEW_BIN_WIDTHS_S,
+        index=NEW_BIN_WIDTHS_S.index(previous_width) if previous_width in NEW_BIN_WIDTHS_S else 0,
+        format_func=_format_bin_width, key=width_key,
+    )
+    sources = resolve_probe_sources(session, probe)
+    metadata_ready = all(path is not None and path.is_file()
+                         for path in (sources.channel_quality_file, sources.cluster_info_file))
+    if metadata_ready:
+        options = [unit for unit in unit_ids if parse_unit_id(unit)[0] == probe]
+    else:
+        options = sorted({product["meta"]["parameters"]["unit_id"] for product in products
+                          if product["meta"]["parameters"]["probe_id"] == probe}, key=parse_unit_id)
+        if options:
+            st_module.info("Current quality metadata is unavailable; showing saved units.")
+    if metadata_ready and options:
+        st_module.caption(f"{len(options)} manual-good units on {probe}. New selections calculate automatically.")
+    default_unit = next((product["meta"]["parameters"]["unit_id"] for product in products
+                         if product["meta"]["parameters"]["probe_id"] == probe
+                         and product["meta"]["parameters"]["bin_width_s"] == width
+                         and product["meta"]["parameters"]["unit_id"] in options), None)
+    unit_key = f"event_unit_id_{scope}_{probe}"
+    selected = st_module.session_state.get(unit_key, default_unit)
+    if unit_key in st_module.session_state and selected not in options:
+        st_module.session_state[unit_key] = None
+    unit = columns[1].selectbox(
+        "Unit", options=options, index=options.index(selected) if selected in options else None,
+        placeholder="Choose a unit", key=unit_key,
+    )
+    if not options:
+        st_module.warning("No eligible manual-good units or saved units are available for this probe.")
+    elif unit is None:
+        st_module.info("Choose a unit to load its saved activity or calculate it automatically.")
+    return None if unit is None else EventSequenceRequest(session.metadata_path, "unit", unit_id=unit, bin_width_s=width)
+
+
+def _resolve_unit_product(
+    st_module: object, session: ResolvedSession, scope: str,
+    request: EventSequenceRequest, products: list[dict],
+) -> dict | None:
+    """Input: UI/session/scope/unit request/saved headers. Return reusable or newly prepared product.
+
+    Compare declared file identities (paths/bytes/mtime) without reading signal
+    arrays. A matching saved product works offline. Missing or changed current
+    products prepare once using the existing pipeline/cache. Failed attempts
+    wait for explicit Retry or changed source/selection, never motif reruns.
+    """
+    product = _find_matching_product(products, session, request)
+    probe = resolve_probe_sources(session, parse_unit_id(request.unit_id)[0])
+    paths = (session.behavior.trial_table_file, probe.alignment_file, probe.spike_clusters_file,
+             probe.cluster_info_file, probe.channel_quality_file)
+    identities = [event_io.source_file_identity(path) if path is not None else {"missing": True}
+                  for path in paths]
+    inputs_ready = all(not identity.get("missing", False) for identity in identities)
+    if product is not None and (not inputs_ready or product["meta"]["configuration"]["sources"] == identities):
+        return product
+    if not inputs_ready:
+        st_module.warning("This unit has no saved result for these bins, and its current preparation inputs are unavailable.")
+        return None
+    failure_key = f"event_unit_failure_{scope}"
+    failure = st_module.session_state.get(failure_key)
+    token = (request, identities)
+    retry_shown = failure is not None and failure[0] == token
+    if retry_shown:
+        if not st_module.button("Retry unit", key=f"event_unit_retry_{scope}"):
+            st_module.error(failure[1])
+            return None
+    try:
+        with st_module.spinner(f"Preparing {request.unit_id}..."):
+            report = prepare_event_sequences(request)
+        product = _find_product_by_path(event_io.discover_event_sequences(session.session_root), report["result_path"])
+        if product is None:
+            raise ValueError("Unit preparation did not publish a readable saved result.")
+        st_module.session_state.pop(failure_key, None)
+        return product
+    except (OSError, ValueError) as error:
+        message = f"Could not prepare unit {request.unit_id}: {error}"
+        st_module.session_state[failure_key] = (token, message)
+        st_module.error(message)
+        if not retry_shown:
+            st_module.button("Retry unit", key=f"event_unit_retry_{scope}")
+        return None
+
+
+def _render_pc_source(
+    st_module: object, session: ResolvedSession, scope: str, products: list[dict],
+) -> tuple[EventSequenceRequest | None, dict | None]:
+    """Input: UI/session/scope/saved PC headers. Return PC request/product, with new preparation always explicit."""
+    configure = not products or st_module.checkbox("Configure a new source", key=f"event_configure_{scope}")
+    if configure:
+        request = _render_pc_configuration(st_module, session, scope)
+        product = None if request is None else _find_matching_product(products, session, request)
+        if product is None and request is not None:
+            st_module.info("This PC source is not prepared yet. Click Prepare to create it.")
+        elif product is not None:
+            st_module.caption("Saved run with these source settings: " + _product_label(product))
+        return request, product
+    labels = [_product_label(product) for product in products]
+    label = st_module.selectbox("Saved source configuration", options=labels, key=f"event_saved_source_{scope}")
+    product = products[labels.index(label)]
+    return _request_from_product(session, product), product
+
+
+def _render_pc_configuration(st_module: object, session: ResolvedSession, scope: str) -> EventSequenceRequest | None:
+    """Input: Streamlit/session/scope. Return selected regional PC request; bin width is seconds."""
+    bin_width_s = st_module.selectbox(
         "Preparation bin width",
         options=NEW_BIN_WIDTHS_S,
         format_func=_format_bin_width,
         key=f"event_bin_width_{scope}",
     )
-    if source_kind == "unit":
-        unit_ids = _manual_good_unit_ids(st_module, session, scope)
-        if not unit_ids:
-            st_module.warning("No manual-good units are available from current probe metadata.")
-            return None
-        unit_id = st_module.selectbox(
-            "Probe-qualified unit ID",
-            options=unit_ids,
-            key=f"event_unit_id_{scope}",
-        )
-        return EventSequenceRequest(
-            session.metadata_path, "unit", unit_id=unit_id, bin_width_s=bin_width_s
-        )
-
     population_columns = st_module.columns(3)
     region = population_columns[0].selectbox(
         "PC region", options=("PFC", "HPC"), key=f"event_region_{scope}"
@@ -251,6 +345,9 @@ def _manual_good_unit_ids(
         return snapshots[signature]
     unit_ids = []
     for probe in session.probes:
+        if any(path is None or not path.is_file()
+               for path in (probe.channel_quality_file, probe.cluster_info_file)):
+            continue
         try:
             _, _, rows = timeline_io.select_timeline_population(
                 session,
