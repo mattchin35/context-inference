@@ -130,6 +130,7 @@ def test_power_scales_and_time_uirevision_stay_fixed_while_panning_and_toggling(
     for trace in _metric_traces(first, "coherence") + _metric_traces(first, "lfp-phase", "plv"):
         assert tuple(_axis(first, trace).range) == (0, 1)
     assert _metric_traces(moved, "lfp-phase", "ppc")
+    assert all("Within-window LFP-LFP PPC" in trace.name for trace in _metric_traces(moved, "lfp-phase", "ppc"))
     np.testing.assert_array_equal(_find_product(products, "power").record.band_power_integrated, before)
 
 
