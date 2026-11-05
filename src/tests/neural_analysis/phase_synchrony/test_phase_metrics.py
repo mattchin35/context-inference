@@ -144,6 +144,13 @@ def test_valid_primary_survives_secondary_support_loss_and_unrelated_edge(drift_
     assert not primary.valid[:, 0, primary.metric_mask].all()
 
 
+def test_incompatible_actual_decimation_rate_is_rejected(drift_inputs):
+    """1100-Hz native input integer-decimates to 550 Hz, which cannot be relabeled 500 Hz."""
+    source, _, choices, config = drift_inputs
+    with pytest.raises(ValueError, match="rate|500"):
+        preparation.prepare_site_phase(replace(source, sample_rate_hz=1100.0), choices, config)
+
+
 def _tiny_coefficient_transform(time_s, lfp_values, sample_rate_hz, frequencies_hz, **kwargs):
     """Inject known (frequency,time) complex coefficients; preserve real supplied source axes/units."""
     factor = round(sample_rate_hz / 500)

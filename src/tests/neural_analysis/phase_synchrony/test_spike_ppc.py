@@ -69,6 +69,18 @@ def test_real_right_guard_supports_spikes_near_half_open_metric_end():
     assert not missing_guard_valid[0, 0]
 
 
+def test_opposing_vector_interpolant_is_undefined():
+    """Exactly opposing unit vectors average to zero at a midpoint, so no phase is invented."""
+    phase = make_phase(np.ones((1, 1, 1001)))
+    phase.phase[0, 0, 1] = -1
+    # Use Unix epoch zero to isolate the midpoint rule from large-UTC rounding
+    # while keeping the required 500-Hz grid and matching metric mask.
+    phase = replace(phase, choice_times_s=np.zeros(1))
+    target = -0.999
+    _, valid = preparation.sample_site_phase_at_spikes(phase, 0, np.array([target]))
+    assert not valid[0, 0]
+
+
 def test_drift_corrected_phase_at_off_grid_utc_spikes_matches_analytic_ppc(drift_inputs):
     """Prepared drifting LFP supplies actual UTC spike phases/PPC without a second clock correction."""
     source, _, choices, config = drift_inputs
