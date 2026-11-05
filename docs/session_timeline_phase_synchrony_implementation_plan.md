@@ -25,8 +25,8 @@ and before handoff. Append exact evidence to Section 10.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `11284ad` (WP5a tests). Recheck; never reset to this observation. |
-| Package / authority | WP5a GREEN; full Round 1 authorized by user: "alright, then begin implementation". |
+| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `109986e` (WP5a review tests). Recheck; never reset to this observation. |
+| Package / authority | WP5a reviewed; WP5b next. Full Round 1 authorized by user: "alright, then begin implementation". |
 | Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`. WP5a GREEN; no experimental jobs/browser server. |
 | Feature files | WP1-WP4 source/tests and WP5a tests committed; run_session.py core in progress. Plan maintained in working tree. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
@@ -50,7 +50,7 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | WP2 shared PSD/power/coherence | Sol worker, high | GREEN reviewed; complete | `705f8d8`; 1 expected missing-feature collection error, 0.52 s | Worker 107 passed; lead 96 plus 11 runtime regressions; source reviewed |
 | WP3 phase/LFP metrics/spike PPC | Sol worker, high | GREEN reviewed; complete | `14fc7ea`, `cd046db`; review RED `87952d2` (6 failures) | 165 passed, no warnings; lead reviewed and reproduced |
 | WP4 persistence/discovery | Sol worker, high | GREEN reviewed; complete | `6f8650f`; review RED `d867a0e` (10), `76bde37` (3) | 235 passed; lead reproduced and reviewed all source |
-| WP5a execution/timing core | Sol worker, high | GREEN released after lead RED review | `11284ad`; 1 expected missing-runner collection error, 1.16 s | Pending |
+| WP5a execution/timing core | Sol worker, high | GREEN reviewed; complete | `11284ad`; missing-runner RED; `109986e`, 7 input/reporting failures | 20 runner tests; lead 256 combined checks passed; source reviewed |
 | WP5b thin CLI/batch | Optional Luna, medium, or lead | Not started; wrappers match frozen contracts | Not run | Not run |
 | WP6a scientific figures | Sol worker, high | Not started; accept geometry/units/scales | Not run | Not run |
 | WP6b route/widgets/Refresh | Optional Luna, medium, or lead | Not started; browser integration | Not run | Not run |
@@ -961,3 +961,30 @@ Exact next action, owner, and remaining authority or user-inspection gate:
 - GREEN: test_preparation.py plus existing test_lfp_loading.py, 34 passed in
   1.26 s. No experimental arrays loaded. Next: integrate this correction and
   continue WP5a core; invalid site inputs must not disable unrelated sites.
+
+### 2026-11-04 21:48 America/New_York - WP5a / runner review RED
+
+- Lead reviewed the runner, its direct scientific callers, and persistence
+  interfaces. Initial 13 runner tests passed. Follow-up tests expose native-only
+  behavior coupling, missing/malformed behavior error escape, unknown unit-probe
+  error escape, empty LFP-path failure isolation, missing support/array/count
+  measurements, and missing actual timing values in the summary.
+- Focused pytest -k 'native_only or behavior_input_failure or unknown_unit or
+  empty_selected or retain_actual_support or summary_contains': 7 failed,
+  13 deselected in 1.66 s. Tests committed `109986e` before implementation.
+- Same worker released for run_session.py-only corrections. No experimental
+  reads or new dependencies. Next: review corrected GREEN, commit execution
+  core, then lead owns thin CLI/batch tests and wrappers (WP5b).
+
+### 2026-11-04 21:53 America/New_York - WP5a / corrected GREEN reviewed
+
+- Lead reviewed the complete execution source and narrow follow-up fixes.
+  Native-only no longer loads behavior; ordinary behavior/unit/site failures
+  are reported and isolated. Phase metric/guard dimensions, major array buffers,
+  spike support counts, and summary timing values are recorded explicitly.
+- Lead regression command: feature directory plus test_session_metadata.py,
+  test_lfp_summary_work_cache.py and test_session_timeline_io.py: 256 passed
+  in 3.74 s. Worker independently reports 20 focused and 234 combined passes.
+- Worker stopped source edits. Lead accepts run_session.py core. Next WP5b:
+  lead writes/commits CLI validation/delegation and session-worker tests before
+  thin wrappers, reusing existing session-list/CPU-limit helpers. No experiments.
