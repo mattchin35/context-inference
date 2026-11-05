@@ -25,13 +25,13 @@ and before handoff. Append exact evidence to Section 10.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `109986e` (WP5a review tests). Recheck; never reset to this observation. |
-| Package / authority | WP5a reviewed; WP5b next. Full Round 1 authorized by user: "alright, then begin implementation". |
-| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`. WP5a GREEN; no experimental jobs/browser server. |
-| Feature files | WP1-WP4 source/tests and WP5a tests committed; run_session.py core in progress. Plan maintained in working tree. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
+| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `6e11de7` (WP5b fixture correction). Recheck; never reset to this observation. |
+| Package / authority | WP5b review. Full Round 1 authorized by user: "alright, then begin implementation". |
+| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, read-only WP5b review. No experimental jobs/browser server. |
+| Feature files | WP1-WP5a source/tests committed; WP5b tests committed and wrappers under review. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
 | Evidence | WP1-WP4 RED/GREEN/regressions and commits in Section 10; WP4 235 passing checks. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
-| Next action | Review WP5a execution-core GREEN. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
+| Next action | Finish WP5b review/commit, then WP6a scientific figure RED. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
 
 Approval of the full Round 1 sequence includes its synthetic and designated
 single-session validation unless the user limits that approval. Record scope
@@ -51,7 +51,7 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | WP3 phase/LFP metrics/spike PPC | Sol worker, high | GREEN reviewed; complete | `14fc7ea`, `cd046db`; review RED `87952d2` (6 failures) | 165 passed, no warnings; lead reviewed and reproduced |
 | WP4 persistence/discovery | Sol worker, high | GREEN reviewed; complete | `6f8650f`; review RED `d867a0e` (10), `76bde37` (3) | 235 passed; lead reproduced and reviewed all source |
 | WP5a execution/timing core | Sol worker, high | GREEN reviewed; complete | `11284ad`; missing-runner RED; `109986e`, 7 input/reporting failures | 20 runner tests; lead 256 combined checks passed; source reviewed |
-| WP5b thin CLI/batch | Optional Luna, medium, or lead | Not started; wrappers match frozen contracts | Not run | Not run |
+| WP5b thin CLI/batch | Lead; Sol worker read-only review | GREEN reviewed; complete | `b800756`; fixture `6e11de7`; review `987fab4`; process context `db4aea1` | 196 combined; final 12 focused passed without warnings |
 | WP6a scientific figures | Sol worker, high | Not started; accept geometry/units/scales | Not run | Not run |
 | WP6b route/widgets/Refresh | Optional Luna, medium, or lead | Not started; browser integration | Not run | Not run |
 | WP7a synthetic/regression/browser audit | Sol lead; sequential Sol review if useful | Not started; synthetic gate | Not run | Not run |
@@ -976,7 +976,7 @@ Exact next action, owner, and remaining authority or user-inspection gate:
   reads or new dependencies. Next: review corrected GREEN, commit execution
   core, then lead owns thin CLI/batch tests and wrappers (WP5b).
 
-### 2026-11-04 21:53 America/New_York - WP5a / corrected GREEN reviewed
+### 2026-11-04 21:50 America/New_York - WP5a / corrected GREEN reviewed
 
 - Lead reviewed the complete execution source and narrow follow-up fixes.
   Native-only no longer loads behavior; ordinary behavior/unit/site failures
@@ -988,3 +988,31 @@ Exact next action, owner, and remaining authority or user-inspection gate:
 - Worker stopped source edits. Lead accepts run_session.py core. Next WP5b:
   lead writes/commits CLI validation/delegation and session-worker tests before
   thin wrappers, reusing existing session-list/CPU-limit helpers. No experiments.
+
+### 2026-11-04 21:52 America/New_York - WP5b / lead RED and GREEN
+
+- Test-only `b800756`: missing run_batch feature collection error, 1.36 s.
+  Lead then implemented CLI selection validation/delegation plus batch wrapper.
+  Existing session-list and CPU-worker cap helpers are imported, not duplicated.
+- Corrected a genuine test fixture in `6e11de7`: a one-site snapshot test had
+  retained an explicit two-site pair. No production contract was changed.
+- Focused: 10 passed in 1.29 s. Feature plus existing timeline-script suite:
+  194 passed in 4.05 s. CLI module --help executed successfully. Batch ordinary
+  failures preserve other sessions, report actual elapsed seconds, and return
+  nonzero; dry-run launches no processes. No experimental batch authorized/run.
+- Same scientific worker read-only review of CLI/batch source; no concurrent
+  source ownership. Next: accept/commit wrappers, then WP6a figure tests.
+
+### 2026-11-04 21:55 America/New_York - WP5b / review corrections accepted
+
+- Worker read-only review caught ordinary writer-lock RuntimeError escaping
+  CLI/batch boundaries. Lead RED `987fab4`: 1 failed, 1 passed in 1.38 s;
+  added WriterLockError(RuntimeError), caught narrowly at boundaries. Existing
+  RuntimeError callers remain compatible; unexpected programming errors escape.
+- Combined 196 passed in 4.05 s exposed Python's multithreaded-fork warning in
+  a real session-process test. Lead RED `db4aea1`: missing fresh process context,
+  1 failed in 1.27 s. Use ProcessPoolExecutor's standard spawn context so workers
+  do not inherit scientific-library threads. No within-session parallelism.
+- Final 12 script tests passed in 2.80 s, including real child-process writer
+  conflict handling; no warnings. Rerun CLI help documents prerequisite reuse.
+  Lead self-reviewed these narrow corrections. Next: WP6a RED with same worker.

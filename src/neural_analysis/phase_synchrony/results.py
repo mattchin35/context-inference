@@ -33,6 +33,10 @@ INTERVAL_BOUNDS_S = {"primary": (-1.0, 1.0), "secondary": (-2.0, 2.0)}
 COMPONENTS = ("power", "coherence", "lfp-phase", "spike-ppc")
 
 
+class WriterLockError(RuntimeError):
+    """A session writer owns the lock or its ownership cannot safely be recovered."""
+
+
 @dataclass(frozen=True)
 class PhaseSynchronyConfig:
     """Round-1 settings: seconds, Hz, dimensionless thresholds, categorical IDs.
@@ -669,7 +673,7 @@ def session_writer_lock(session_root: Path | str) -> Iterator[Path]:
         try:
             handle = path.open("xb")
         except FileExistsError as error:
-            raise RuntimeError("Session writer lock changed during recovery") from error
+            raise WriterLockError("Session writer lock changed during recovery") from error
     with handle:
         handle.write(payload)
         handle.flush()
@@ -837,25 +841,25 @@ def _product_order_key(product: ProductInfo) -> tuple[datetime, str, str]:
 def _recover_writer_lock(path: Path, root: Path) -> None:
     """Remove only unchanged same-session/same-host positive PID ownership proven dead."""
     if path.is_symlink():
-        raise RuntimeError("Session writer lock is not safely recoverable")
+        raise WriterLockError("Session writer lock is not safely recoverable")
     try:
         payload = path.read_bytes()
         owner = json.loads(payload)
         if owner["session_root"] != str(root) or owner["hostname"] != socket.gethostname():
-            raise RuntimeError("Session writer lock belongs to another session or host")
+            raise WriterLockError("Session writer lock belongs to another session or host")
         pid = owner["pid"]
         if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
-            raise RuntimeError("Session writer lock has invalid PID")
+            raise WriterLockError("Session writer lock has invalid PID")
     except (OSError, ValueError, KeyError, TypeError) as error:
-        raise RuntimeError("Session writer lock is not safely recoverable") from error
+        raise WriterLockError("Session writer lock is not safely recoverable") from error
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         pass
     except PermissionError as error:
-        raise RuntimeError("Session writer process liveness cannot be verified") from error
+        raise WriterLockError("Session writer process liveness cannot be verified") from error
     else:
-        raise RuntimeError("Session writer lock belongs to a live process")
+        raise WriterLockError("Session writer lock belongs to a live process")
     if path.read_bytes() != payload:
-        raise RuntimeError("Session writer lock changed during PID verification")
+        raise WriterLockError("Session writer lock changed during PID verification")
     path.unlink()

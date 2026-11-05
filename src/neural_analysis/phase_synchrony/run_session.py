@@ -4,6 +4,7 @@ This module owns execution only. Numerical estimators, source loading and
 typed persistence retain their independent public contracts.
 """
 
+import argparse
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from importlib.metadata import version
@@ -478,3 +479,76 @@ def _file_identity(path: Path | None) -> dict:
         return {"path": str(path.resolve()), "missing": True}
     stat = path.stat()
     return {"path": str(path.resolve()), "size_bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def argument_parser(*, batch: bool = False) -> argparse.ArgumentParser:
+    """Return the shared CLI parser; batch selects a session-list path instead of metadata.
+
+    All numerical defaults come from PhaseSynchronyConfig (seconds/Hz). Site,
+    ordered pair and probe:cluster selections are categorical metadata IDs.
+    This constructs controls only and reads no files or scientific arrays.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--session-list" if batch else "--session-metadata", type=Path, required=True)
+    defaults = PhaseSynchronyConfig()
+    parser.add_argument("--components", nargs="+", choices=FINAL_FAMILIES, default=defaults.components)
+    parser.add_argument("--sites", nargs="+", default=())
+    parser.add_argument("--pair", nargs=2, action="append", default=[], metavar=("SITE_A", "SITE_B"))
+    parser.add_argument("--unit", action="append", default=[], help="Explicit probe:cluster ID; repeat for multiple units")
+    parser.add_argument("--lfp-site")
+    parser.add_argument("--intervals", nargs="+", choices=("primary", "secondary"), default=defaults.intervals)
+    parser.add_argument("--order", nargs="+", choices=FINAL_FAMILIES)
+    parser.add_argument("--prepare-only", choices=("native-lfp", "phase"))
+    parser.add_argument("--rerun", action="store_true", help="Recompute requested outputs, reusing prerequisites; --prepare-only forces that preparation")
+    parser.add_argument("--dry-run", action="store_true")
+    if batch:
+        parser.add_argument("--workers", type=int, help="Session workers; defaults to CPU count capped by sessions")
+    return parser
+
+
+def config_from_arguments(arguments: argparse.Namespace) -> PhaseSynchronyConfig:
+    """Convert parsed categorical selections to validated immutable scientific settings.
+
+    Return PhaseSynchronyConfig with unchanged accepted Hz/second/threshold
+    defaults; reject repeated selections and an incomplete/repeated work order
+    before any session work. No files or arrays are read.
+    """
+    config = PhaseSynchronyConfig(
+        components=tuple(arguments.components), sites=tuple(arguments.sites),
+        pairs=tuple(tuple(pair) for pair in arguments.pair), unit_ids=tuple(arguments.unit),
+        lfp_site=arguments.lfp_site, intervals=tuple(arguments.intervals),
+    )
+    for name in ("components", "sites", "pairs", "unit_ids", "intervals"):
+        values = getattr(config, name)
+        if len(values) != len(set(values)):
+            raise ValueError(f"Repeated {name} selection")
+    if arguments.order is not None:
+        if len(arguments.order) != len(set(arguments.order)) or set(arguments.order) != set(config.components):
+            raise ValueError("order must contain every requested family exactly once")
+    return config
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Execute one CLI request and print array-free JSON evidence; return integer exit status.
+
+    argv is a list of CLI strings, or None for process arguments. Ordinary
+    input/filesystem failures print to stderr and return 1; completed stages
+    and paths are printed to stdout, including metadata-only dry-run plans.
+    """
+    arguments = argument_parser().parse_args(argv)
+    try:
+        config = config_from_arguments(arguments)
+        report = run_session(
+            arguments.session_metadata, config,
+            order=None if arguments.order is None else tuple(arguments.order),
+            rerun=arguments.rerun, dry_run=arguments.dry_run, prepare_only=arguments.prepare_only,
+        )
+    except (OSError, ValueError, results.WriterLockError) as error:
+        print(f"Phase synchrony run failed: {error}", file=sys.stderr)
+        return 1
+    print(json.dumps(asdict(report), default=str))
+    return report.status
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
