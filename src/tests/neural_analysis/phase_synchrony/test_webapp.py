@@ -122,7 +122,8 @@ def test_manual_refresh_discovers_new_power_and_keeps_chart_navigation(runnable_
     assert _metric_specs(after) and {trace["meta"]["family"] for trace in _metric_specs(after)} == {"power"}
     assert any("coherence" in element.value.lower() for element in at.info)
     assert len(list((runnable_session.parent / "analysis_runs").glob("session_timeline_phase_synchrony_*"))) == 1
-    assert any(report.run_directory.name in str(frame.value) or report.products[0].name in str(frame.value) for frame in at.dataframe)
+    assert any(report.products[0].name in str(value) for frame in at.dataframe
+               for value in frame.value.to_numpy().ravel())
 
 
 def test_display_changes_and_refresh_never_prepare_signals(runnable_session, config, monkeypatch):
