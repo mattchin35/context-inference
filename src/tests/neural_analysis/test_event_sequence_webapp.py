@@ -480,4 +480,3 @@ def test_fine_bin_controls_prepare_only_after_explicit_request(event_session, wi
     assert packet["meta"]["parameters"]["bin_width_s"] == width
     assert packet["unit_rates_hz"].shape[1] == round(4 / width)
     _assert_plotly_output(at)
-
