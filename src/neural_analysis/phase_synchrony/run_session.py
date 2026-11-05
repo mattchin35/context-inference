@@ -220,26 +220,7 @@ def _inspect_selected_sources(session: ResolvedSession, tasks: list) -> dict:
 def _known_identity(state: _RunState, family: str, selection: tuple, interval: str | None,
                     preparation_ids: tuple[str, ...] = ()) -> dict:
     """Build relevant known source/config identity; optional actual preparation references complete it."""
-    sources = {}
-    site_ids = [] if family == "unit-spikes" else (list(selection[1:]) if family == "spike-ppc" else list(selection))
-    sites = {site.site_id: site for site in state.session.sites}
-    for site_id in site_ids:
-        site = sites[site_id]
-        probe = resolve_probe_sources(state.session, site.probe_id)
-        sources[site_id] = {"probe_id": site.probe_id, "saved_channel_index": site.saved_channel_index,
-                            "acquisition_family": probe.acquisition_family,
-                            "files": [_file_identity(path) for path in (probe.lfp_file, probe.lfp_metadata_file, probe.alignment_file)]}
-    if family in {"unit-spikes", "spike-ppc"}:
-        probe_id, _ = results.parse_unit_id(selection[0])
-        try:
-            probe = resolve_probe_sources(state.session, probe_id)
-        except KeyError as error:
-            raise ValueError(f"Unknown selected unit probe: {probe_id}") from error
-        sources[selection[0]] = {"unit_channels": probe.unit_channels,
-                                 "files": [_file_identity(path) for path in (probe.alignment_file, probe.spike_clusters_file,
-                                                                           probe.cluster_info_file, probe.channel_quality_file)]}
-    if family not in {"native-lfp", "unit-spikes"}:
-        sources["behavior_trials"] = _file_identity(state.session.behavior.trial_table_file)
+    sources = preparation.product_source_ids(state.session, family, selection)
     return results.product_identity(family, selection, interval, state.config, source_ids=sources,
                                     preparation_ids=preparation_ids)
 
@@ -469,16 +450,6 @@ def _write_json(path: Path, value: dict) -> None:
     temporary = path.with_name("." + path.name + ".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="ascii")
     temporary.replace(path)
-
-
-def _file_identity(path: Path | None) -> dict:
-    """Return cheap absolute path/byte/mtime source identity, retaining explicit missing-input status."""
-    if path is None:
-        return {"path": None, "missing": True}
-    if not path.is_file():
-        return {"path": str(path.resolve()), "missing": True}
-    stat = path.stat()
-    return {"path": str(path.resolve()), "size_bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
 def argument_parser(*, batch: bool = False) -> argparse.ArgumentParser:

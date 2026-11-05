@@ -53,6 +53,41 @@ def select_metadata_inputs(
     return sites, selected_pairs
 
 
+def product_source_ids(session: ResolvedSession, family: str, selection: tuple[str, ...]) -> dict:
+    """Describe relevant metadata/source files without loading any scientific arrays.
+
+    session is resolved metadata, family names a product category, and selection
+    contains site IDs, ordered site pairs, a probe:cluster ID, or (unit,site).
+    Return JSON-compatible source identities: paths, byte sizes, modification
+    nanoseconds, explicit missing status, mapped channels and unit restrictions.
+    Windowed products include the behavior trial table; native/unit preparations
+    do not. Unknown selections raise ValueError. No clock/unit conversion occurs.
+    """
+    sources = {}
+    site_ids = [] if family == "unit-spikes" else (list(selection[1:]) if family == "spike-ppc" else list(selection))
+    sites = {site.site_id: site for site in session.sites}
+    for site_id in site_ids:
+        if site_id not in sites:
+            raise ValueError(f"Unknown metadata LFP site: {site_id}")
+        site = sites[site_id]
+        probe = resolve_probe_sources(session, site.probe_id)
+        sources[site_id] = {"probe_id": site.probe_id, "saved_channel_index": site.saved_channel_index,
+                            "acquisition_family": probe.acquisition_family,
+                            "files": [_file_identity(path) for path in (probe.lfp_file, probe.lfp_metadata_file, probe.alignment_file)]}
+    if family in {"unit-spikes", "spike-ppc"}:
+        probe_id, _ = parse_unit_id(selection[0])
+        try:
+            probe = resolve_probe_sources(session, probe_id)
+        except KeyError as error:
+            raise ValueError(f"Unknown selected unit probe: {probe_id}") from error
+        sources[selection[0]] = {"unit_channels": probe.unit_channels,
+                                "files": [_file_identity(path) for path in (probe.alignment_file, probe.spike_clusters_file,
+                                                                          probe.cluster_info_file, probe.channel_quality_file)]}
+    if family not in {"native-lfp", "unit-spikes"}:
+        sources["behavior_trials"] = _file_identity(session.behavior.trial_table_file)
+    return sources
+
+
 def component_availability(session: ResolvedSession, config: PhaseSynchronyConfig) -> dict[str, str | None]:
     """Return path-level readiness by requested component/selection, without data I/O.
 
@@ -630,7 +665,11 @@ def _missing_files(paths: list[Path | None]) -> str | None:
     return "Missing inputs: " + ", ".join(missing) if missing else None
 
 
-def _file_identity(path: Path) -> dict:
-    """Return absolute path, bytes and mtime_ns for one existing file; no array axes."""
+def _file_identity(path: Path | None) -> dict:
+    """Return absolute file stat identity or explicit missing status, without opening arrays."""
+    if path is None:
+        return {"path": None, "missing": True}
+    if not path.is_file():
+        return {"path": str(path.resolve()), "missing": True}
     stat = path.stat()
     return {"path": str(path.resolve()), "size_bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}

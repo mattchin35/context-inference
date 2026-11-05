@@ -25,13 +25,13 @@ and before handoff. Append exact evidence to Section 10.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `6e11de7` (WP5b fixture correction). Recheck; never reset to this observation. |
-| Package / authority | WP5b review. Full Round 1 authorized by user: "alright, then begin implementation". |
-| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, read-only WP5b review. No experimental jobs/browser server. |
-| Feature files | WP1-WP5a source/tests committed; WP5b tests committed and wrappers under review. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
+| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `8f9443f` (WP5b source). Recheck; never reset to this observation. |
+| Package / authority | WP6a GREEN. Full Round 1 authorized by user: "alright, then begin implementation". |
+| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, plotting.py only. No experimental jobs/browser server. |
+| Feature files | WP1-WP5b source/tests and WP6a tests committed. Lead current-CLI usage additions in SESSION_TIMELINE.md/README.md are uncommitted. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
 | Evidence | WP1-WP4 RED/GREEN/regressions and commits in Section 10; WP4 235 passing checks. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
-| Next action | Finish WP5b review/commit, then WP6a scientific figure RED. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
+| Next action | Review WP6a plotting GREEN before WP6b UI tests. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
 
 Approval of the full Round 1 sequence includes its synthetic and designated
 single-session validation unless the user limits that approval. Record scope
@@ -52,7 +52,7 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | WP4 persistence/discovery | Sol worker, high | GREEN reviewed; complete | `6f8650f`; review RED `d867a0e` (10), `76bde37` (3) | 235 passed; lead reproduced and reviewed all source |
 | WP5a execution/timing core | Sol worker, high | GREEN reviewed; complete | `11284ad`; missing-runner RED; `109986e`, 7 input/reporting failures | 20 runner tests; lead 256 combined checks passed; source reviewed |
 | WP5b thin CLI/batch | Lead; Sol worker read-only review | GREEN reviewed; complete | `b800756`; fixture `6e11de7`; review `987fab4`; process context `db4aea1` | 196 combined; final 12 focused passed without warnings |
-| WP6a scientific figures | Sol worker, high | Not started; accept geometry/units/scales | Not run | Not run |
+| WP6a scientific figures | Sol worker, high | GREEN released | `0e3f57f`; missing plotting feature collection error, 1.15 s | Pending |
 | WP6b route/widgets/Refresh | Optional Luna, medium, or lead | Not started; browser integration | Not run | Not run |
 | WP7a synthetic/regression/browser audit | Sol lead; sequential Sol review if useful | Not started; synthetic gate | Not run | Not run |
 | WP7b CT026 validation/timings | Sol lead | Not started; user inspects output | Not applicable unless correction needed | Not run |
@@ -1016,3 +1016,83 @@ Exact next action, owner, and remaining authority or user-inspection gate:
 - Final 12 script tests passed in 2.80 s, including real child-process writer
   conflict handling; no warnings. Rerun CLI help documents prerequisite reuse.
   Lead self-reviewed these narrow corrections. Next: WP6a RED with same worker.
+
+### 2026-11-04 21:56 America/New_York - WP6a / plotting RED dispatch
+
+- Baseline `8f9443f`; same Sol/high worker, exact writable path new
+  test_plotting.py only. No source, dependency or experimental writes.
+- Frozen public functions: plot_synchrony_timeline(behavior, products, ...),
+  plot_choice_inspection(behavior, products, row_position, ...), and
+  export_validation_figures(behavior, products, run_directory, row_position=...,
+  frequency_hz=8.0, interval='primary', site_id=None, unit_id=None) -> tuple[Path,...].
+  Products are SavedProduct records; behavior is an empty-region
+  SessionTimelineResult. heatmap_selection=(family, selection_tuple).
+- Oracles cover saved values, original row/ID/UTC binding, true interval edges
+  and gaps, fixed physical/signed scales, support/guard counts, identified phase
+  frequency, spike/polar inputs, captioned opaque PNGs and immutable exports.
+  All plotting forbids raw loads/estimators. Existing behavior renderer and
+  persistent chart metadata are reused. Next: lead reviews and commits RED.
+
+### 2026-11-04 22:04 America/New_York - WP6a / reviewed RED committed
+
+- Lead read all worker plotting tests and reproduced missing plotting feature
+  RED in 1.15 s; Matplotlib/Plotly dependencies imported successfully.
+  Added a geometry oracle for overlapping choice intervals, requiring each
+  true interval to survive instead of constructing false shared boundaries.
+- Test-only commit `0e3f57f`; same worker released for new plotting.py only.
+  No experimental arrays, source changes in other files or dependencies.
+- While waiting at the plotting gate, lead documented the already accepted
+  CLI/contracts in SESSION_TIMELINE.md and neural README. These additions make
+  no viewer or experimental timing claims and will be completed at WP8.
+- Next: inspect actual scientific figures and focused/combined GREEN before
+  the thin UI package; retain the existing manual Refresh/navigation contract.
+
+WP6b implementation notes for the next gate (no UI source written yet):
+
+- Lead owns tests and thin route/widgets. Availability requires behavior only;
+  compatible saved components load independently. Do not gate the view on
+  raw spikes, pairs or every LFP source. Stat-level source compatibility remains
+  per-product, separate from route readiness.
+- Reuse runner source-identity construction through a small public helper in
+  preparation.py if needed, rather than duplicating that logic or invoking the
+  runner from Streamlit. Test equality before moving the existing code.
+- Select scientific settings from completed products' run config.json records;
+  fingerprint settings without requested units/sites/families/interval lists.
+  Match each family's own relevant parameters, so selecting another saved unit
+  or phase configuration does not discard compatible site power.
+- Keep metadata discovery in per-session UI state until manual Refresh;
+  never cache absence indefinitely. Immutable saved product loads can use
+  path/size/mtime cache keys. Refresh keeps chart key/navigation revision stable.
+- Read newer attempt statuses from run config/measurements JSON, ordered by
+  recorded run UTC identity, and report separately from the completed source
+  run/time. A newer failed attempt must not hide a completed compatible product.
+- Selected-choice inspection loads only matching saved waveform/phase/PPC
+  prerequisites on explicit request; ordinary display changes never prepare.
+
+### 2026-11-04 22:08 America/New_York - CT026 CLI metadata-only preflight
+
+- Lead ran the accepted run_session module with CT026 metadata, all four
+  families, both intervals, --unit ProbeB:8 --lfp-site HPC1 --dry-run.
+  Exit 0: 20 planned final components, primary sweep then secondary; per sweep
+  three site powers, three coherence pairs, three LFP-phase pairs and one unit.
+- In-process metadata planning elapsed 0.0055 s (not an analysis or browser
+  benchmark). No run directory, products, writer lock or signal-array loads.
+  Synthetic/real-browser acceptance still precedes experimental processing.
+
+### 2026-11-04 22:10 America/New_York - shared metadata identity extraction
+
+- Independent of plotting.py, lead prepared the metadata-only viewer boundary
+  while worker retained sole plotting source ownership. Announced exact lead
+  ownership: preparation.py and runner._known_identity only. No UI source.
+- Tests `f2de509`: 10 genuine missing-public-helper failures in 1.35 s.
+  Pre-GREEN oracle refinement `cf45453` retains independent expected keys,
+  mapped channels and relevant file lists after runner delegation.
+- Extracted existing source IDs into preparation.product_source_ids; runner
+  delegates and its duplicate stat helper is removed. Existing preparation stat
+  helper now retains the runner's explicit None/missing-file semantics. The
+  initial extraction exposed that mismatch in an existing committed test;
+  corrected source, without changing the test or scientific identities.
+- GREEN: source-identity, runner, scripts and preparation suites, 65 passed
+  in 3.96 s. Lead self-review; no array loads by the new helper. This is a
+  small WP6b prerequisite with frozen existing scientific contracts, not a
+  release of UI implementation before accepted scientific plotting.
