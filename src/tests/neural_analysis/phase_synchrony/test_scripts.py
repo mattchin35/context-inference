@@ -8,6 +8,7 @@ import pytest
 
 from src.neural_analysis.phase_synchrony import run_session as runner
 from src.neural_analysis.phase_synchrony import run_batch as batch
+from src.neural_analysis.phase_synchrony import results
 from src.neural_analysis.phase_synchrony.results import PhaseSynchronyConfig
 from src.tests.neural_analysis.phase_synchrony.test_preparation import binary_session
 from src.tests.neural_analysis.phase_synchrony.test_runner import runnable_session, config
@@ -137,3 +138,25 @@ def test_real_run_saves_both_script_snapshots(runnable_session, config):
     for filename in ("run_session.py", "run_batch.py"):
         expected = Path(runner.__file__).with_name(filename).read_bytes()
         assert (report.run_directory / filename).read_bytes() == expected
+
+
+def test_writer_conflict_is_reported_by_cli_and_does_not_abort_batch(runnable_session, monkeypatch, capsys):
+    """A live session writer is an ordinary input conflict; independent reports remain available."""
+    with results.session_writer_lock(runnable_session.parent):
+        assert runner.main(["--session-metadata", str(runnable_session), "--components", "power",
+                            "--sites", "NamedSite"]) == 1
+        assert "writer" in capsys.readouterr().err.lower()
+        reports = batch.run_batch((runnable_session,), PhaseSynchronyConfig(components=("power",), sites=("NamedSite",)), workers=1)
+        assert len(reports) == 1 and reports[0].status == 1
+        assert "writer" in reports[0].stages[0]["error"].lower()
+
+
+def test_unexpected_runtime_error_still_propagates(monkeypatch):
+    """Boundary handling must not turn programming defects into ordinary unavailable-data reports."""
+    action = Mock(side_effect=RuntimeError("Unexpected programming error"))
+    monkeypatch.setattr(runner, "run_session", action)
+    with pytest.raises(RuntimeError, match="Unexpected"):
+        runner.main(["--session-metadata", "session.json"])
+    monkeypatch.setattr(batch, "run_session", action)
+    with pytest.raises(RuntimeError, match="Unexpected"):
+        batch.run_batch((Path("session.json"),), dry_run=True)
