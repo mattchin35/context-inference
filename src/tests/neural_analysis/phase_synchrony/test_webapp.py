@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 from streamlit.testing.v1 import AppTest
 
@@ -205,3 +206,41 @@ def test_inspection_without_explicit_unit_does_not_substitute_a_saved_unit(runna
     products = view.discover_view_products(session, selected)
     inspection = view.load_inspection_products(session, selected, products, site_id="NamedSite", unit_id=None)
     assert all(product.meta["identity"]["family"] != "spike-ppc" for product in inspection)
+
+
+def test_centered_interval_labels_show_actual_choice_relative_windows(runnable_session):
+    """Display explicit half-open seconds while keeping primary/secondary as saved identity values."""
+    at = AppTest.from_function(_render_for_test, args=(str(runnable_session),)).run()
+    assert not at.exception
+    selector = next(widget for widget in at.selectbox if widget.label == "Centered interval")
+    assert selector.options == ["Primary: [-1, +1) s around choice", "Secondary: [-2, +2) s around choice"]
+    assert selector.value == "primary"
+    selector.select("secondary").run()
+    assert not at.exception
+    assert next(widget for widget in at.selectbox if widget.label == "Centered interval").value == "secondary"
+
+
+def test_summary_band_switching_preserves_saved_values_scales_and_navigation(runnable_session, config, monkeypatch):
+    """Theta is initially shown; gamma/both are display-only choices with stable chart and time identity."""
+    report = runner.run_session(runnable_session, replace(config, sites=("NamedSite",), pairs=()))
+    original = results.load_product(report.products[0]).record.band_power_integrated.copy()
+    _forbid_analysis(monkeypatch)
+    at = AppTest.from_function(_render_for_test, args=(str(runnable_session),)).run()
+    assert not at.exception
+    selector = next(widget for widget in at.selectbox if widget.label == "Summary band")
+    assert selector.options == ["Theta (6-10 Hz)", "Gamma (30-80 Hz)", "Both bands"]
+    assert selector.value == "theta"
+    first_id, first = _figure_spec(at)
+    assert {trace["meta"]["band"] for trace in _metric_specs(first)} == {"theta"}
+    for selection, expected in (("gamma", {"gamma"}), ("both", {"theta", "gamma"}), ("theta", {"theta"})):
+        next(widget for widget in at.selectbox if widget.label == "Summary band").select(selection).run()
+        assert not at.exception
+        chart_id, spec = _figure_spec(at)
+        assert chart_id == first_id and spec["layout"]["uirevision"] == first["layout"]["uirevision"]
+        traces = _metric_specs(spec)
+        assert {trace["meta"]["band"] for trace in traces} == expected
+        for trace in traces:
+            band = 0 if trace["meta"]["band"] == "theta" else 1
+            assert trace["y"] == original[:, band].tolist()
+    np.testing.assert_array_equal(results.load_product(report.products[0]).record.band_power_integrated, original)
+    assert len(list((runnable_session.parent / "analysis_runs").glob("session_timeline_phase_synchrony_*"))) == 1

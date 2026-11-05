@@ -134,6 +134,23 @@ def test_power_scales_and_time_uirevision_stay_fixed_while_panning_and_toggling(
     np.testing.assert_array_equal(_find_product(products, "power").record.band_power_integrated, before)
 
 
+@pytest.mark.parametrize("band", ["theta", "gamma"])
+def test_summary_band_filter_keeps_original_scalars_limits_and_time_identity(saved_view, band):
+    """Filter only scalar rows by categorical band; retain original saved trial axes, units and full-product scales."""
+    behavior, products = saved_view
+    full = plotting.plot_synchrony_timeline(behavior, products, viewport_revision=4)
+    selected = plotting.plot_synchrony_timeline(behavior, products, bands=(band,), viewport_revision=4)
+    traces = _metric_traces(selected)
+    assert len(traces) == 4 and {trace.meta["band"] for trace in traces} == {band}
+    assert selected.layout.uirevision == full.layout.uirevision
+    expected = {trace.meta["family"]: trace for trace in _metric_traces(full) if trace.meta["band"] == band}
+    for trace in traces:
+        original = expected[trace.meta["family"]]
+        np.testing.assert_array_equal(trace.x, original.x)
+        np.testing.assert_allclose(trace.y, original.y, equal_nan=True)
+        assert _axis(selected, trace).range == _axis(full, original).range
+
+
 def test_frequency_heatmap_uses_actual_interval_edges_and_blank_gap_columns(saved_view):
     """Each heatmap column is a whole-window scalar; explicit edges leave real inter-choice gaps blank."""
     behavior, products = saved_view
