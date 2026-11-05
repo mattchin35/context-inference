@@ -21,6 +21,7 @@ from src.neural_analysis.population.session_timeline import (
     choice_bin_edges,
     prepare_timeline_choices,
     select_complete_choice_windows,
+    trial_identities_match,
 )
 from src.neural_analysis.session_metadata import (
     ResolvedProbeSources, ResolvedSession, resolve_probe_sources,
@@ -700,7 +701,9 @@ def _regional_arrays_match(
         return False
     previous = candidate.choices.iloc[old_positions]
     expected = choices.iloc[positions]
-    for column in ("row_position", "trial_id", "choice_time", "action"):
+    if "trial_id" not in previous or not trial_identities_match(previous["trial_id"], expected["trial_id"]):
+        return False
+    for column in ("row_position", "choice_time", "action"):
         if column not in previous or not np.array_equal(previous[column].to_numpy(), expected[column].to_numpy()):
             return False
     fitted = saved.transform

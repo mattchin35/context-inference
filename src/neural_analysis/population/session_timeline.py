@@ -11,6 +11,7 @@ import pynapple as nap
 
 from src.behavior_analysis.project_utils import (
     get_experimenter_reward_flags,
+    is_present_value,
     is_zero_flag,
 )
 from src.neural_analysis.interregional.pca import (
@@ -122,6 +123,52 @@ def prepare_timeline_choices(trial_df: pd.DataFrame) -> tuple[float, pd.DataFram
         }
     )
     return origin, choices
+
+
+def trial_identities_match(
+    first: pd.Series | np.ndarray, second: pd.Series | np.ndarray,
+) -> bool:
+    """Compare aligned original trial IDs without changing choice eligibility.
+
+    Parameters
+    ----------
+    first, second : pd.Series or np.ndarray
+        One-dimensional identity vectors (N,), with no physical units. Series
+        index labels are ignored. Numeric IDs and numeric strings compare by
+        value. Real missing values and recognized project string sentinels
+        compare as missing. Other present tokens compare by stripped text.
+
+    Returns
+    -------
+    bool
+        True if shapes and every aligned identity agree semantically. Different
+        malformed tokens never become equal merely because numeric coercion
+        yields NaN. Paired missing IDs preserve an ordinary neural reference
+        window, while motif selection separately requires consecutive IDs.
+        Different shapes or non-vector inputs return False; inputs are unchanged.
+    """
+    left = np.asarray(first, dtype=object)
+    right = np.asarray(second, dtype=object)
+    if left.ndim != 1 or right.ndim != 1 or left.shape != right.shape:
+        return False
+    left = pd.Series(left)
+    right = pd.Series(right)
+    left_present = is_present_value(left).to_numpy()
+    right_present = is_present_value(right).to_numpy()
+    if not np.array_equal(left_present, right_present):
+        return False
+    left = left[left_present]
+    right = right[right_present]
+    left_numeric = pd.to_numeric(left, errors="coerce")
+    right_numeric = pd.to_numeric(right, errors="coerce")
+    numeric = left_numeric.notna().to_numpy()
+    if not np.array_equal(numeric, right_numeric.notna().to_numpy()):
+        return False
+    if not np.array_equal(left_numeric.to_numpy()[numeric], right_numeric.to_numpy()[numeric]):
+        return False
+    left_text = left.astype(str).str.strip().to_numpy()[~numeric]
+    right_text = right.astype(str).str.strip().to_numpy()[~numeric]
+    return bool(np.array_equal(left_text, right_text))
 
 
 def select_complete_choice_windows(
