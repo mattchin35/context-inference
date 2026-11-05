@@ -243,3 +243,60 @@ def test_completion_time_requires_parseable_timezone_aware_timestamp(tmp_path, s
     with pytest.raises(ValueError):
         results.save_product(tmp_path / "power.npz", records["power"], identity_for("power", config, records),
                              run_id="run-a", completed_utc=completed_utc)
+
+
+@pytest.mark.parametrize("changed", [
+    "site", "unit", "interval", "phase_frequency", "welch", "bands", "notch", "phase_guard",
+])
+def test_publication_identity_must_match_actual_scientific_record(tmp_path, scientific_records, changed):
+    """A caller cannot publish correct typed arrays under a different selection or analysis.
+
+    Inputs are the nine synthetic records with their documented axes/units;
+    reject mismatched IDs, seconds, Hz/settings or an included phase guard.
+    """
+    config, _, records = scientific_records
+    family = {"unit": "unit-spikes", "phase_frequency": "phase", "phase_guard": "phase",
+              "welch": "psd", "notch": "native-lfp"}.get(changed, "power")
+    record = records[family]
+    identity = identity_for(family, config, records)
+    selection, interval = identity["selection"], identity["interval"]
+    if changed == "site":
+        selection = ("DifferentSite",)
+    elif changed == "unit":
+        selection = ("ProbeB:17",)
+    elif changed == "interval":
+        interval = "secondary"
+    elif changed == "phase_frequency":
+        config = replace(config, phase_frequencies_hz=(10.0,))
+    elif changed == "welch":
+        config = replace(config, welch_segment_s=0.4)
+    elif changed == "bands":
+        from src.neural_analysis.lfp.config import FrequencyBandConfig
+
+        config = replace(config, bands=(FrequencyBandConfig("theta", 6.0, 8.0),))
+    elif changed == "notch":
+        config = replace(config, notch_enabled=True)
+    else:
+        record = replace(record, metric_mask=np.ones_like(record.metric_mask))
+    identity = results.product_identity(
+        family, selection, interval, config, source_ids=identity["source_ids"],
+        preparation_ids=identity["preparation_ids"],
+    )
+    path = tmp_path / "mismatched.npz"
+    with pytest.raises(ValueError):
+        results.save_product(path, record, identity, run_id="bad", completed_utc="2030-01-02T03:04:05Z")
+    assert not path.exists()
+
+
+def test_loading_rejects_relabelled_phase_frequency_identity(tmp_path, scientific_records):
+    """A structurally complete archive cannot claim a different frequency under a valid identity digest."""
+    config, _, records = scientific_records
+    identity = identity_for("phase", config, records)
+    path = results.save_product(tmp_path / "phase.npz", records["phase"], identity,
+                                run_id="original", completed_utc="2030-01-02T03:04:05Z")
+    metadata = deepcopy(results.load_product(path).meta)
+    changed = identity_for("phase", replace(config, phase_frequencies_hz=(10.0,)), records)
+    metadata["identity"] = changed
+    rewrite_archive_meta(path, metadata)
+    with pytest.raises(ValueError):
+        results.load_product(path, expected_identity=changed)

@@ -159,6 +159,24 @@ def _metadata_only_getitem(archive, key):
     return REAL_NPZ_GETITEM(archive, key)
 
 
+def test_metadata_discovery_can_resolve_known_inputs_before_preparation_id_is_known(tmp_path, scientific_records, monkeypatch):
+    """Cold/dry-run planning discovers completed headers without computing numerical preparation hashes."""
+    config, _, records = scientific_records
+    expected = results.save_product(
+        product_path(tmp_path, "one", "phase"), records["phase"], identity_for("phase", config, records),
+        run_id="one", completed_utc="2030-01-02T03:04:05Z",
+    )
+    results.save_product(
+        product_path(tmp_path, "one", "power"), records["power"], identity_for("power", config, records),
+        run_id="one", completed_utc="2030-01-02T03:04:05Z",
+    )
+    monkeypatch.setattr(np.lib.npyio.NpzFile, "__getitem__", _metadata_only_getitem)
+    matches = results.discover_product_metadata(tmp_path, family="phase")
+    assert isinstance(matches, tuple) and len(matches) == 1
+    assert matches[0].path == expected
+    assert matches[0].meta["identity"]["preparation_ids"]
+
+
 def test_saved_native_preparation_is_reusable_for_later_phase_without_raw_loading(tmp_path, scientific_records, monkeypatch):
     """Reload calibrated continuous native data/clock from its preparation product before new CWT work."""
     config, choices, records = scientific_records
