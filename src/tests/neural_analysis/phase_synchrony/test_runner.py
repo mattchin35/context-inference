@@ -5,6 +5,7 @@ from dataclasses import replace
 from functools import partial
 import json
 from pathlib import Path
+import re
 from threading import Event
 
 import numpy as np
@@ -299,3 +300,76 @@ def test_cold_and_warm_dry_run_read_only_metadata_and_never_write_outputs(runnab
     assert any(stage["stage"] == "power" and stage["status"] == "reusable" for stage in warm.stages)
     assert before == {path: path.read_bytes() for path in runnable_session.parent.rglob("*") if path.is_file()}
     assert actual.run_directory.is_dir()
+
+
+def test_native_only_preparation_needs_no_behavior_file(runnable_session, config, monkeypatch):
+    """Continuous native uV/clock preparation depends on metadata/LFP, not trial or event tables."""
+    (runnable_session.parent / "trials.csv").unlink()
+    monkeypatch.setattr(runner.timeline_io, "load_timeline_behavior", _forbid_work)
+    report = runner.run_session(runnable_session, replace(config, sites=("NamedSite",), pairs=()), prepare_only="native-lfp")
+    assert report.status == 0 and _product_families(report) == ["native-lfp"]
+
+
+@pytest.mark.parametrize("failure", ["missing", "malformed"])
+def test_behavior_input_failure_is_logged_and_returned_without_signal_work(runnable_session, config, monkeypatch, failure):
+    """Shared behavior failure yields a nonzero report, durable failed input stage and summary."""
+    trials = runnable_session.parent / "trials.csv"
+    if failure == "missing":
+        trials.unlink()
+    else:
+        trials.write_text("unexpected_column\n1\n", encoding="ascii")
+    monkeypatch.setattr(preparation, "load_site_lfp", _forbid_work)
+    report = runner.run_session(runnable_session, config)
+    assert report.status != 0 and not report.products
+    failed = [stage for stage in report.stages if stage["stage"] == "input-setup" and stage["status"] == "failed"]
+    assert len(failed) == 1 and failed[0]["error"]
+    assert failed[0]["error"] in (report.run_directory / "run.log").read_text()
+    saved = json.loads((report.run_directory / "measurements.json").read_text())
+    assert any(stage["status"] == "failed" for stage in saved["stages"])
+    assert "failed" in (report.run_directory / "summary.md").read_text().lower()
+
+
+def test_unknown_unit_probe_is_a_reported_input_failure(runnable_session, config):
+    """A syntactically valid but unknown probe-qualified ID never escapes as an internal KeyError."""
+    selected = replace(config, components=("spike-ppc",), unit_ids=("UnknownProbe:17",), lfp_site="NamedSite")
+    report = runner.run_session(runnable_session, selected)
+    assert report.status != 0 and not report.products
+    assert any(stage["status"] == "failed" and "probe" in stage["error"].lower() for stage in report.stages)
+
+
+def test_empty_selected_lfp_path_preserves_independent_site_output(runnable_session, config):
+    """An explicitly empty missing site's path is local input failure, not a session-wide TypeError."""
+    payload = json.loads(runnable_session.read_text())
+    payload["probes"]["MissingProbe"]["lfp"] = ""
+    runnable_session.write_text(json.dumps(payload), encoding="ascii")
+    selected = replace(config, sites=("NamedSite", "MissingSite"), pairs=())
+    report = runner.run_session(runnable_session, selected)
+    assert report.status != 0 and len(report.products) == 1
+    assert results.read_product_metadata(report.products[0])["identity"]["selection"] == ("NamedSite",)
+
+
+def test_phase_and_spike_measurements_retain_actual_support_and_array_dimensions(runnable_session, config):
+    """Measurements distinguish 1000 metric times from one guard and physical spikes from frequency counts."""
+    selected = replace(config, components=("spike-ppc",), unit_ids=("ProbeZ:17",), lfp_site="NamedSite")
+    report = runner.run_session(runnable_session, selected)
+    phase = next(stage for stage in report.stages if stage["stage"] == "phase")
+    assert phase["counts"]["metric_sample_count_per_trial"] == 1000
+    assert phase["counts"]["time_sample_count_including_guard"] == 1001
+    arrays = phase["counts"]["major_arrays"]
+    assert arrays["phase"]["shape"] == [1, 1, 1001]
+    assert arrays["phase"]["dtype"] == "complex64" and arrays["phase"]["nbytes"] == 1 * 1 * 1001 * 8
+    ppc = next(stage for stage in report.stages if stage["stage"] == "spike-ppc")
+    record = results.load_product(report.products[0]).record
+    assert ppc["counts"]["selected_spike_count"] == sum(len(times) for times in record.spike_times_by_trial) == 4
+    assert ppc["counts"]["valid_spike_count_by_frequency"] == record.spike_count.sum(axis=0).tolist()
+    assert ppc["counts"]["excluded_spike_count_by_frequency"] == record.excluded_spike_count.sum(axis=0).tolist()
+
+
+def test_run_summary_contains_actual_total_and_first_requested_product_times(runnable_session, config):
+    """Human-readable Markdown reports measured latency values, beyond a link to JSON evidence."""
+    report = runner.run_session(runnable_session, replace(config, sites=("NamedSite",), pairs=()))
+    text = (report.run_directory / "summary.md").read_text()
+    for label, key in (("Total elapsed", "total_s"), ("First requested product", "first_product_s")):
+        match = re.search(label + r":\s*([0-9]+(?:\.[0-9]+)?) s", text)
+        assert match is not None
+        assert float(match.group(1)) == pytest.approx(report.timings_s[key], abs=0.0005)
