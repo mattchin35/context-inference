@@ -113,7 +113,7 @@ referenced session-timeline PCA archive; a missing or changed archive is
 reported. Each view remains available when an unrelated probe is unavailable.
 
 To create a new product, configure a probe-qualified manual-good unit or a
-PFC/HPC PC population, choose 500-ms or 100-ms bins, then click **Prepare**.
+PFC/HPC PC population, choose 500-ms, 100-ms, 50-ms or 20-ms bins, then click **Prepare**.
 Unit choices use explicit Phy `group=good` labels. PC populations offer strict
 `good_mua` (explicit `group=good` or `group=mua`) and strict `good`; blank or
 missing labels are excluded. Metadata probe roles are used for PC regions by
@@ -128,6 +128,13 @@ Click **Export PNG** to save an additive light-mode image in the selected run's
 `figures/` directory. The callable Python batch entry point is
 `src.neural_analysis.event_sequences.run_batch.run_batch`; there is no public
 CLI or JSON batch-request format in this workflow.
+
+A seeded synthetic benchmark with 715 choices and 174/316 good+MUA units on
+the i9-12900 workstation took about 2-8 seconds for new regional PCA products
+at 500/100 ms and 15-29 seconds at 20 ms. A unit took less than 0.3 seconds.
+Once loaded, live browser z-score/rank changes took about 0.3 seconds; a dense
+713-row, 20-ms unit display took about 0.9 seconds to switch z-scoring. These
+are measured synthetic workloads, not latency guarantees for every session.
 
 For version-3 metadata, **Cached LFP Summary** defaults to the read-only
 `session cache` source. It inspects only the declared preview and final cache

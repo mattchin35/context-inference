@@ -22,7 +22,7 @@ from src.neural_analysis.session_metadata import ResolvedSession
 CENTRAL_VIEW = "central"
 TRANSITION_VIEW = "transition"
 EVENT_SEQUENCE_CACHE_MAX_ENTRIES = 2
-NEW_BIN_WIDTHS_S = (0.5, 0.1)
+NEW_BIN_WIDTHS_S = (0.5, 0.1, 0.05, 0.02)
 
 
 def render_event_sequence_view(

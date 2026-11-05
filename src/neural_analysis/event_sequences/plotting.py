@@ -82,7 +82,7 @@ def build_central_view(
             panel = activity.assemble_heatmap(display_source, packet["central_matches"][key])
             panel.update(condition=key, row=row, col=col)
             relation = "opposite side" if previous == "incorrect" else "same side"
-            panel["title"] = f"Prev. {previous.replace('_', ' ')} ({relation}) / {following}; n={panel['n']}"
+            panel["title"] = f"Prev. {previous.replace('_', ' ')}\n({relation}) / {following}; n={panel['n']}"
             panel["title"] = _coverage_title(panel)
             panel["message"] = _panel_message(panel, "trials")
             positions = panel["row_positions"]
@@ -130,7 +130,7 @@ def build_transition_view(
     view.update(
         segment_edges=display_source["bin_edges_s"][None, :] + offsets[:, None],
         zero_positions=offsets,
-        segment_labels=["Trigger"] + [f"Incorrect repeat {index}" for index in range(1, repeats + 1)] + ["Rewarded switch"],
+        segment_labels=["Trigger"] + [f"Incorrect\nrepeat {index}" for index in range(1, repeats + 1)] + ["Rewarded\nswitch"],
     )
     selection = f"Ideal transition {label}; x{repeats} incorrect repeats"
     view["caption"] = _caption(display_source, [panel], selection) + (
@@ -148,7 +148,15 @@ def plotly_figure(view: dict) -> go.Figure:
     """
     central = view["kind"] == "central"
     rows, cols = (3, 2) if central else (1, 1)
-    figure = make_subplots(rows=rows, cols=cols, subplot_titles=[panel["title"].replace("\n", "<br>") for panel in view["panels"]], vertical_spacing=.12 if central else .08)
+    figure = make_subplots(rows=rows, cols=cols,
+                           subplot_titles=[panel["title"].replace("\n", "<br>") for panel in view["panels"]],
+                           vertical_spacing=.12 if central else .08, horizontal_spacing=.22 if central else .1)
+    # Long headings and horizontal PC units otherwise squeeze the two-column
+    # app grid. Preserve exact unit text while putting it beside the colorbar.
+    for annotation in figure.layout.annotations:
+        annotation.font.size = 13
+    if not central:
+        figure.layout.annotations[0].y = 1.22
     for panel in view["panels"]:
         row, col = panel["row"] + 1, panel["col"] + 1
         number = panel["row"] * cols + panel["col"] + 1
@@ -174,11 +182,13 @@ def plotly_figure(view: dict) -> go.Figure:
                             ticktext=[panel["row_labels"][index] for index in ticks],
                             title_text="Trials (oldest first)" if central else "Episodes (oldest first)", row=row, col=col)
         if panel["message"] and not panel["n"]:
-            figure.add_annotation(text=panel["message"], x=.5, y=.5,
+            message_lines = textwrap.wrap(panel["message"], 32 if central else 75,
+                                          break_long_words=False, break_on_hyphens=False)
+            figure.add_annotation(text="<br>".join(message_lines), x=.5, y=.5,
                                   xref="x" + suffix + " domain", yref="y" + suffix + " domain",
                                   showarrow=False, align="center", font={"color": "black", "size": 13})
         _plotly_time_axis(figure, view, row, col)
-    coloraxis = {"colorscale": "Viridis" if _positive_colors(view) else "RdBu_r", "colorbar": {"title": {"text": view["value_units"]}}}
+    coloraxis = {"colorscale": "Viridis" if _positive_colors(view) else "RdBu_r", "colorbar": {"title": {"text": view["value_units"], "side": "right"}}}
     if view["color_limits"] is not None:
         coloraxis.update(cmin=view["color_limits"][0], cmax=view["color_limits"][1])
     figure.update_layout(
@@ -188,7 +198,7 @@ def plotly_figure(view: dict) -> go.Figure:
         margin={"l": 140, "r": 130, "t": 100, "b": 210},
         meta={"caption": view["caption"], "kind": view["kind"]},
     )
-    figure.add_annotation(text="<br>".join(_caption_lines(view["caption"])), x=0, y=-.10,
+    figure.add_annotation(text="<br>".join(_caption_lines(view["caption"], width=85)), x=0, y=-.10 if central else -.25,
                           xref="paper", yref="paper", xanchor="left", yanchor="top",
                           showarrow=False, align="left", font={"size": 12, "color": "black"})
     return figure
@@ -316,7 +326,7 @@ def _coverage_title(panel: dict) -> str:
     """Input: panel with title/counts. Return title with partial-coverage counts above populated activity."""
     title = panel["title"]
     if panel["n"] and panel["excluded_count"]:
-        title += f"\nBehavioral matches={panel['behavioral_count']}; coverage excluded={panel['excluded_count']}"
+        title += f"\nMatches={panel['behavioral_count']}; coverage excluded={panel['excluded_count']}"
     return title
 
 
@@ -407,7 +417,8 @@ def _plotly_time_axis(figure: go.Figure, view: dict, row: int, col: int) -> None
         figure.update_xaxes(range=[view["segment_edges"][0, 0], view["segment_edges"][-1, -1]], tickvals=ticks,
                             ticktext=labels, title_text="Local time from each choice (s); display separators", row=row, col=col)
         for zero, label in zip(view["zero_positions"], view["segment_labels"]):
-            figure.add_annotation(x=zero, y=1.08, xref="x", yref="paper", text=label, showarrow=False, font={"size": 12, "color": "black"})
+            figure.add_annotation(x=zero, y=1.04, xref="x", yref="paper", text=label.replace("\n", "<br>"),
+                                  yanchor="bottom", showarrow=False, font={"size": 12, "color": "black"})
 
 
 def _positive_colors(view: dict) -> bool:
@@ -415,6 +426,6 @@ def _positive_colors(view: dict) -> bool:
     return view["source_kind"] == "unit" and not view["zscore"]
 
 
-def _caption_lines(caption: str) -> list[str]:
-    """Input: caption text. Return readable wrapped lines preserving complete configuration/hash tokens."""
-    return textwrap.wrap(caption, 135, break_long_words=False, break_on_hyphens=False)
+def _caption_lines(caption: str, *, width: int = 135) -> list[str]:
+    """Input: caption text/maximum character count per line. Return wrapped lines preserving configuration/hash tokens."""
+    return textwrap.wrap(caption, width, break_long_words=False, break_on_hyphens=False)
