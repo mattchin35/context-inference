@@ -1,6 +1,7 @@
 """Saved-only route, independent products and manual Refresh contracts (WP6b)."""
 
 from dataclasses import asdict, replace
+import base64
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -241,6 +242,9 @@ def test_summary_band_switching_preserves_saved_values_scales_and_navigation(run
         assert {trace["meta"]["band"] for trace in traces} == expected
         for trace in traces:
             band = 0 if trace["meta"]["band"] == "theta" else 1
-            assert trace["y"] == original[:, band].tolist()
+            values = trace["y"]
+            if isinstance(values, dict):
+                values = np.frombuffer(base64.b64decode(values["bdata"]), dtype=values["dtype"])
+            np.testing.assert_array_equal(values, original[:, band])
     np.testing.assert_array_equal(results.load_product(report.products[0]).record.band_power_integrated, original)
     assert len(list((runnable_session.parent / "analysis_runs").glob("session_timeline_phase_synchrony_*"))) == 1
