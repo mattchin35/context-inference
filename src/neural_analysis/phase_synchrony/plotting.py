@@ -1,6 +1,5 @@
 """Saved-only choice-window figures and captioned opaque Matplotlib PNG exports."""
 
-import json
 from pathlib import Path
 import re
 import textwrap
@@ -86,11 +85,14 @@ def plot_synchrony_timeline(
     if len(visible) != 2 or not np.isfinite(visible).all() or visible[0] >= visible[1]:
         raise ValueError("time_range_s must contain increasing finite elapsed seconds")
     figure.update_xaxes(range=visible, minallowed=bounds[0], maxallowed=bounds[1])
+    height = max(600, 140 * len(titles) + 200)
+    navigator_height_px = 60
     figure.update_xaxes(title_text="Elapsed session time (s; zero = first trial start)",
-                        rangeslider={"visible": True, "range": bounds}, row=len(titles), col=1)
+                        rangeslider={"visible": True, "range": bounds, "thickness": navigator_height_px / height},
+                        row=len(titles), col=1)
     missing = [family for family in METRIC_FAMILIES if not any(row["family"] == family for row in rows)]
     caption = _caption(interval) + (" Unavailable saved tracks: " + ", ".join(missing) + "." if missing else "")
-    _light_layout(figure, caption, height=max(600, 140 * len(titles) + 200))
+    _light_layout(figure, caption, height=height, navigator_height_px=navigator_height_px)
     figure.update_layout(uirevision=f"{behavior.session_id}:{behavior.time_origin_s}:{viewport_revision}",
                          meta={"caption": caption, "interval": interval, "unavailable": missing,
                                "time_axes": ["xaxis" + (str(index) if index > 1 else "") for index in range(1, len(titles) + 1)],
@@ -122,7 +124,7 @@ def plot_choice_inspection(
                               if product.meta["identity"]["family"] in {"phase", "waveforms", "spike-ppc"}), None)
     figure = make_subplots(rows=4, cols=1, specs=[[{}], [{}], [{}], [{"type": "polar"}]],
                            subplot_titles=["Saved LFP (uV)", f"Saved phase at {frequency_hz:g} Hz (rad)",
-                                           "Selected-unit UTC spikes", "Saved spike-phase histogram"],
+                                           "Selected-unit spikes", "Saved spike-phase histogram"],
                            vertical_spacing=.07)
     unavailable = []
     ppc_text = "PPC unavailable"
@@ -165,7 +167,7 @@ def plot_choice_inspection(
                         f"{record.excluded_spike_count[trial, frequency]} excluded")
     bounds = INTERVAL_BOUNDS_S[interval]
     for row in (1, 2, 3):
-        figure.update_xaxes(range=bounds, title_text="Time relative to choice (s)", row=row, col=1)
+        figure.update_xaxes(range=bounds, title_text="Time relative to choice (s)" if row == 3 else None, row=row, col=1)
     figure.update_yaxes(title_text="uV", row=1, col=1)
     figure.update_yaxes(title_text="Phase (rad)", range=(-np.pi, np.pi), row=2, col=1)
     figure.update_yaxes(title_text="Spikes", row=3, col=1)
@@ -294,7 +296,7 @@ def _metric_customdata(product: SavedProduct, band: int, products: tuple) -> np.
 
 
 def _source_details(product: SavedProduct, products: tuple) -> str:
-    """Summarize actual supplied site/probe/channel IDs and effective settings without repeating whole source metadata."""
+    """Return short HTML lines of deduplicated site/probe/channel IDs and actual saved settings."""
     sites = []
     selection = product.meta["identity"]["selection"]
     for site, source in product.meta["identity"].get("source_ids", {}).items():
@@ -309,9 +311,23 @@ def _source_details(product: SavedProduct, products: tuple) -> str:
         record = related.record
         if hasattr(record, "site_id") and hasattr(record, "probe_id") and record.site_id in selection:
             sites.append({"site": record.site_id, "probe": record.probe_id, "saved_channel": record.saved_channel_index})
-    return json.dumps({"selection": product.meta["identity"]["selection"], "sites": sites,
-                       "notch_enabled": product.meta["identity"]["parameters"].get("notch_enabled"),
-                       "welch": product.record.meta.get("welch")}, sort_keys=True)
+    unique_sites = dict.fromkeys((site["site"], site["probe"], site["saved_channel"]) for site in sites)
+    lines = [f"{site}: {probe}, saved channel {channel}" for site, probe, channel in unique_sites]
+    if not lines:
+        lines.append(" / ".join(selection))
+    parameters = product.meta["identity"]["parameters"]
+    notch = "Notch off"
+    if parameters.get("notch_enabled"):
+        notch = f"Notch 60 Hz, Q={parameters['notch_quality_factor']:g}"
+    lines.append(notch)
+    welch = meta.get("welch")
+    if welch:
+        lines.append(f"Welch {welch['window']}")
+        lines.append(f"Segment {welch['nperseg']}, overlap {welch['noverlap']}, FFT {welch['nfft']} samples")
+        lines.append(f"Detrend {welch['detrend']}; {welch['scaling']}, {welch['average']} average")
+    elif "phase_rate_hz" in parameters:
+        lines.append(f"Phase rate {parameters['phase_rate_hz']:g} Hz; {len(parameters['phase_frequencies_hz'])} saved frequencies")
+    return "<br>".join(lines)
 
 
 def _site_label(site_id: str | None, products: tuple) -> str:
@@ -339,11 +355,18 @@ def _retained_band_mask(frequencies_hz: np.ndarray, band: dict) -> np.ndarray:
 
 def _metric_hover(row: dict) -> str:
     """Return named-field window-summary hover HTML; numerical values remain in customdata."""
+    if row["family"] == "spike-ppc":
+        support = "<br>Valid spike count range %{customdata[8]}-%{customdata[9]} across retained frequencies"
+    else:
+        support = "<br>Samples %{customdata[5]}"
+        if row["family"] in {"power", "coherence"}:
+            support += "; segments %{customdata[6]}"
+        if row["family"] == "power":
+            support += "; retained bandwidth %{customdata[7]} Hz"
     return (f"{row['title']}<br>Window summary; value %{{y:.6g}} {row['unit']}"
             "<br>Trial %{customdata[0]}, original row %{customdata[1]}"
             "<br>UTC [%{customdata[3]:.6f}, %{customdata[4]:.6f}) s; choice %{customdata[2]:.6f}"
-            "<br>Samples %{customdata[5]}; segments %{customdata[6]}; retained bandwidth %{customdata[7]} Hz"
-            "<br>Valid spike count range %{customdata[8]}-%{customdata[9]} across retained frequencies"
+            + support +
             "<br>Source run %{customdata[10]}, completed %{customdata[11]}<br>%{customdata[12]}<extra></extra>")
 
 
@@ -382,17 +405,22 @@ def _add_frequency_heatmap(figure: go.Figure, product: SavedProduct, origin: flo
             custom_columns.append(custom[:, index])
         tiles = [(np.asarray(edges), np.column_stack(columns), np.stack(custom_columns, axis=1))] if columns else []
     limits = _metric_limits(values, metric)
-    for edges, scalar_values, tile_custom in tiles:
+    domain = figure.layout["yaxis" + (str(row) if row > 1 else "")].domain
+    support = ("<br>Valid spikes %{customdata[15]}, excluded %{customdata[16]}" if family == "spike-ppc"
+               else "<br>Samples %{customdata[5]}" + (", segments %{customdata[6]}" if family == "coherence" else ""))
+    for tile_index, (edges, scalar_values, tile_custom) in enumerate(tiles):
         figure.add_trace(go.Heatmap(x=edges, y=record.frequency_hz, z=scalar_values,
                                     zmin=limits[0], zmax=limits[1], zauto=False, zsmooth=False, connectgaps=False,
                                     hoverongaps=False, colorscale="Viridis" if metric != "ppc" else "RdBu",
+                                    showscale=tile_index == 0,
+                                    colorbar={"len": domain[1] - domain[0], "y": sum(domain) / 2, "yanchor": "middle",
+                                              "ypad": 0, "thickness": 12, "tickfont": {"size": 10}},
                                     customdata=tile_custom,
                                     meta={"kind": "frequency-heatmap", "family": family, "customdata_fields": fields,
                                           "selection": product.meta["identity"]["selection"]},
                                     hovertemplate="Window summary<br>Trial %{customdata[0]}, original row %{customdata[1]}"
                                     "<br>UTC [%{customdata[3]:.6f}, %{customdata[4]:.6f}) s; choice %{customdata[2]:.6f}"
-                                    "<br>%{y:g} Hz: %{z:.6g}<br>Samples %{customdata[5]}, segments %{customdata[6]}"
-                                    "<br>Valid spikes %{customdata[15]}, excluded %{customdata[16]}"
+                                    "<br>%{y:g} Hz: %{z:.6g}" + support +
                                     "<br>Source run %{customdata[10]}, completed %{customdata[11]}"
                                     "<br>%{customdata[12]}<extra></extra>"),
                           row=row, col=1)
@@ -433,12 +461,15 @@ def _caption(interval: str) -> str:
             "LFP PPC is descriptive within-trial consistency; temporal dependence is not corrected.")
 
 
-def _light_layout(figure: go.Figure, caption: str, height: int) -> None:
-    """Apply opaque white backgrounds, readable black text and a visible caption; return None."""
+def _light_layout(figure: go.Figure, caption: str, height: int, navigator_height_px: int = 0) -> None:
+    """Apply white layout and pixel-spaced caption below axes and optional navigator; sizes are pixels."""
+    caption_lines = textwrap.wrap(caption, 60)
+    caption_shift_px = 80 + navigator_height_px
+    bottom_margin_px = caption_shift_px + 18 * len(caption_lines) + 20
     figure.update_layout(template="plotly_white", paper_bgcolor="white", plot_bgcolor="white",
                          font={"size": 14, "color": "black"}, height=height,
-                         margin={"l": 85, "r": 100, "t": 65, "b": 150}, showlegend=False, dragmode="pan")
-    figure.add_annotation(text="<br>".join(textwrap.wrap(caption, 135)), x=0, y=-.1, xref="paper", yref="paper",
+                         margin={"l": 85, "r": 100, "t": 65, "b": bottom_margin_px}, showlegend=False, dragmode="pan")
+    figure.add_annotation(text="<br>".join(caption_lines), x=0, y=0, yshift=-caption_shift_px, xref="paper", yref="paper",
                            showarrow=False, xanchor="left", yanchor="top", align="left")
 
 

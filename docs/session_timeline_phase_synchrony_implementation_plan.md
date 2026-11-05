@@ -26,12 +26,12 @@ and before handoff. Append exact evidence to Section 10.
 | Field | Current value |
 | --- | --- |
 | Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `8f9443f` (WP5b source). Recheck; never reset to this observation. |
-| Package / authority | WP6b corrected GREEN; WP7a browser next. Full Round 1 authorized by user: "alright, then begin implementation". |
-| Team / running work | Lead runtime model/effort not exposed; scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, stopped after read-only UI review. Lead owns integration/browser. No experimental jobs/browser server yet. |
+| Package / authority | WP7a accepted; WP7b CT026 next. Full Round 1 authorized by user: "alright, then begin implementation". |
+| Team / running work | Lead runtime model/effort not exposed; scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, stopped after bounded plotting fixes. Lead owns CT026 validation. Local browser server port 8505, exec session 11102, file watching disabled. |
 | Feature files | WP1-WP5b source/tests and WP6a tests committed. Lead current-CLI usage additions in SESSION_TIMELINE.md/README.md are uncommitted. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
 | Evidence | WP1-WP4 RED/GREEN/regressions and commits in Section 10; WP4 235 passing checks. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
-| Next action | Review/commit WP6b source, inspect full seeded session in browser, then CT026 validation if accepted. CT026 uses `ProbeB:8` with `HPC1`; optional additional-unit timing question pending, no other units inferred. |
+| Next action | Commit accepted browser fixes; execute/measure CT026 both intervals/all metadata sites/pairs plus `ProbeB:8`/`HPC1`, session-local outputs only. Optional multi-unit timing question pending; do not infer IDs. |
 
 Approval of the full Round 1 sequence includes its synthetic and designated
 single-session validation unless the user limits that approval. Record scope
@@ -53,9 +53,9 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | WP5a execution/timing core | Sol worker, high | GREEN reviewed; complete | `11284ad`; missing-runner RED; `109986e`, 7 input/reporting failures | 20 runner tests; lead 256 combined checks passed; source reviewed |
 | WP5b thin CLI/batch | Lead; Sol worker read-only review | GREEN reviewed; complete | `b800756`; fixture `6e11de7`; review `987fab4`; process context `db4aea1` | 196 combined; final 12 focused passed without warnings |
 | WP6a scientific figures | Sol worker, high | GREEN reviewed; complete | `0e3f57f`; review `e929a1d` (5); label `8063a0d` (1) | 17 plotting tests; lead 247 combined; PNGs visually reviewed |
-| WP6b route/widgets/Refresh | Lead; worker read-only review | Corrected GREEN; source commit next | `f4bfd03`; fixture `721307e`; selection `6fa2d40` (3); status `d099477` (3); payload `5fee607` (1) | 12 UI tests passed; browser next |
-| WP7a synthetic/regression/browser audit | Lead | Seeded full pipeline passed; browser pending | Existing features already unit-TDD verified; acceptance tests `697a954` | 2 seeded integration tests passed, 3.67 s |
-| WP7b CT026 validation/timings | Sol lead | Not started; user inspects output | Not applicable unless correction needed | Not run |
+| WP6b route/widgets/Refresh | Lead; worker read-only review | GREEN reviewed; complete `ea1cdd7` | `f4bfd03`; fixture `721307e`; selection `6fa2d40` (3); status `d099477` (3); payload `5fee607` (1) | 12 UI tests; combined 302; browser inspected |
+| WP7a synthetic/regression/browser audit | Lead; bounded worker plotting fix | Accepted | `697a954` acceptance; real-browser layout RED `104b9ab` (2), `fdc4097` (1) | Seeded full pipeline, 282 worker regressions, browser hover/pan/Refresh/Jump/heatmap/inspection |
+| WP7b CT026 validation/timings | Lead | Authorized; begins after browser-fix commit | Not applicable unless correction needed | No experimental arrays loaded yet |
 | WP8 usage/final handoff | Lead; optional Luna for literal docs | Not started; Round 1 acceptance | Not applicable for docs only | Not run |
 
 ### 0.3 Resume procedure and first commands
@@ -1161,3 +1161,35 @@ WP6b implementation notes for the next gate (no UI source written yet):
   regressions, launch seeded session locally and inspect hover/pan/Refresh.
 - Lead combined feature, metadata, timeline IO/webapp/chart and package checks:
   302 passed in 12.32 s, bundled Node enabled; no warnings. UI source accepted.
+
+### 2026-11-04 22:44 America/New_York - WP7a / browser acceptance and local layout repair
+
+- Actual app route selected in the browser. Seeded full timeline rendered all
+  site/pair/unit tracks. Power hover verified original trial/row, UTC bounds,
+  5000 samples, seven segments, 4-Hz theta bandwidth and actual source channel.
+  Native pan moved all tracks together; Refresh and PLV/PPC toggle retained
+  the browser-panned range. Jump to original trial 44 updated the explicit
+  viewport. Added heatmap kept real interval columns/gaps and 58-62-Hz blanks;
+  frequency hover verified actual Hz/UTC/sample/source details.
+- Explicit inspection showed saved waveform, identified 8-Hz phase, four
+  spikes, polar counts and negative PPC, with actual site/probe/channel.
+  No computation buttons or source preparations were invoked by the view.
+- Browser exposed oversized default rangeslider, caption/axis title overlap
+  and nonlocal heatmap colorbar. Lead RED `104b9ab`: 2 failed, 17 deselected,
+  1.80 s; `fdc4097`: 1 failed, 18 deselected, 1.68 s. Same worker fixed only
+  plotting.py. Lead reviewed diff; revised browser visibly confirms compact
+  navigator, separated wrapped caption, local scale and inspection labels.
+- Worker: 19 plotting and 282 combined checks passed (11.12 s combined).
+  No numerical values/IDs/axes/interfaces changed. Responsiveness judged
+  qualitatively; no browser-latency numbers claimed.
+- Environment: localhost bind needed sandbox escalation (approved). Host
+  inotify watchers were exhausted; verified installed Streamlit config option
+  --server.fileWatcherType none, no dependency modification. Repeated pytest
+  cleanup removed the first disposable browser fixture, so final browser used
+  isolated --basetemp=/tmp/context_inference_phase_browser_20261105_0340.
+  Test-only harness .pytest_cache/phase_synchrony_browser.py calls the production
+  renderer directly, avoiding the unrelated raster default's required LED
+  columns on a minimal trial table. Full app routing was already verified.
+- Synthetic/browser gate accepted. No experimental arrays loaded yet. Next:
+  CT026 session-local validation, actual cold/warm/incremental measurements,
+  saved PNG inspection, and user review before any further sessions.
