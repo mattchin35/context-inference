@@ -75,14 +75,14 @@ def binary_session(tmp_path: Path):
         "ch": [0, 1], "channel_id": ["CH0", "CH1"], "label": ["bad", "good"],
         "inside_brain": [True, True], "x_um": [0.0, 20.0], "y_um": [0.0, 20.0],
     }).to_csv(
-        directory / "quality.csv", index=False
+        directory / "channel_quality.csv", index=False
     )
     payload = {
         "schema_version": "2", "session": "synthetic_2030-01-02_030405",
         "acquisition": "open_ephys", "behavior": {"trials": "trials.csv", "events": None},
         "probes": {"ProbeZ": {
             "lfp": "probe/lfp.dat", "alignment": "probe/sync.npz",
-            "sorter": "probe/ks", "quality": "probe/quality.csv",
+            "sorter": "probe/ks", "quality": "probe/channel_quality.csv",
             "sites": {"NamedSite": 1}, "unit_channels": [1],
         }},
         "site_pairs": [],
@@ -238,6 +238,25 @@ def test_epoch_second_tolerance_cannot_snap_distinct_fractional_native_samples()
     values, valid = sample_site_lfp_utc(source, targets)
     np.testing.assert_allclose(values, [4, 4.5, 8], rtol=0, atol=1e-12)
     assert valid.all()
+
+
+def test_utc_rounding_preserves_exact_native_sample_with_invalid_neighbors():
+    """A 2500-Hz exact hit uses its own validity despite UTC-double rounding.
+
+    Inputs are (2501,) native samples in uV and UTC-second targets at a large
+    epoch. A distinguishable one-eighth-sample offset still needs both neighbors.
+    """
+    samples = np.arange(2501)
+    anchors = pd.DataFrame({
+        "sample_ix": [0, 2500], "utc_unix": [UTC_ORIGIN, UTC_ORIGIN + 1],
+    })
+    source = _source(samples, samples.astype(float), anchors, 2500.0, samples == 1)
+    values, valid = sample_site_lfp_utc(
+        source, UTC_ORIGIN + np.array([1 / 2500, 1.125 / 2500]),
+    )
+    np.testing.assert_array_equal(valid, [True, False])
+    assert values[0] == 1.0
+    assert np.isnan(values[1])
 
 
 def test_valid_primary_survives_missing_secondary_and_unrelated_boundary_trial():
