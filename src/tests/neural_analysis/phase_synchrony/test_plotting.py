@@ -17,7 +17,7 @@ import pytest
 from src.neural_analysis.phase_synchrony import computation, preparation, results, plotting
 from src.neural_analysis.population.session_timeline import SessionTimelineResult
 from src.tests.neural_analysis.phase_synchrony.test_results import scientific_records, identity_for
-from src.tests.neural_analysis.phase_synchrony.test_phase_metrics import UTC_ORIGIN
+from src.tests.neural_analysis.phase_synchrony.test_phase_metrics import UTC_ORIGIN, make_native_source
 
 
 @pytest.fixture
@@ -151,6 +151,60 @@ def test_frequency_heatmap_uses_actual_interval_edges_and_blank_gap_columns(save
     assert "window" in heatmap.hovertemplate.lower()
 
 
+def test_frequency_heatmap_hover_binds_each_tile_to_original_trial_support_and_source(saved_view):
+    """A scalar tile retains IDs, actual UTC bounds/counts and completed-source provenance in hover."""
+    behavior, products = saved_view
+    figure = plotting.plot_synchrony_timeline(behavior, products, heatmap_selection=("coherence", ("SiteA", "SiteB")))
+    heatmap = next(trace for trace in figure.data if trace.type == "heatmap")
+    fields = heatmap.meta["customdata_fields"]
+    required = {"trial_id", "row_position", "choice_time_s", "interval_start_s", "interval_stop_s",
+                "sample_count", "segment_count", "source_run_id", "completed_utc", "source_details"}
+    assert required.issubset(fields)
+    data = np.asarray(heatmap.customdata, dtype=object)
+    assert data.shape[:2] == np.asarray(heatmap.z).shape
+    for column, trial in ((0, 0), (2, 1)):
+        assert data[0, column, fields.index("trial_id")] == behavior.choices.trial_id.iloc[trial]
+        assert data[0, column, fields.index("row_position")] == behavior.choices.row_position.iloc[trial]
+        assert data[0, column, fields.index("source_run_id")] == "source-run"
+    assert "customdata" in heatmap.hovertemplate and "UTC" in heatmap.hovertemplate
+
+
+def test_frequency_heatmap_honors_saved_validity_even_for_finite_stored_values(saved_view):
+    """Invalid saved support is unavailable; a finite numeric buffer must not override its explicit mask."""
+    behavior, products = saved_view
+    product = _find_product(products, "coherence")
+    valid = product.record.valid.copy()
+    frequency = int(np.flatnonzero(product.record.frequency_hz == 8)[0])
+    assert np.isfinite(product.record.coherence[0, frequency])
+    valid[0, frequency] = False
+    product = replace(product, record=replace(product.record, valid=valid))
+    figure = plotting.plot_synchrony_timeline(behavior, (product,), heatmap_selection=("coherence", ("SiteA", "SiteB")))
+    heatmap = next(trace for trace in figure.data if trace.type == "heatmap")
+    assert np.isnan(np.asarray(heatmap.z)[frequency, 0])
+
+
+def test_lfp_band_hover_counts_only_retained_band_frequencies(saved_view, scientific_records):
+    """Unsupported 2-Hz samples cannot change the support count shown for a fully supported theta band."""
+    behavior, products = saved_view
+    config, choices, records = scientific_records
+    config = replace(config, phase_frequencies_hz=(2., 6., 8., 10.))
+    phase = preparation.prepare_site_phase(make_native_source(offset_s=-5, duration_s=18), choices, config)
+    validity = phase.valid.copy()
+    validity[0] = False
+    phase = replace(phase, valid=validity)
+    record = computation.compute_lfp_phase_summary(phase, replace(phase, site_id="SiteB"), config)
+    source = _find_product(products, "lfp-phase")
+    identity = results.product_identity("lfp-phase", ("SiteA", "SiteB"), "primary", config,
+                                       source_ids=source.meta["identity"]["source_ids"],
+                                       preparation_ids=(results.preparation_identity(phase),))
+    path = results.save_product(source.path.with_name("band-support.npz"), record, identity,
+                               run_id="band-support", completed_utc="2030-01-02T03:04:05Z")
+    figure = plotting.plot_synchrony_timeline(behavior, (results.load_product(path),))
+    theta = next(trace for trace in _metric_traces(figure, "lfp-phase") if trace.meta["band"] == "theta")
+    assert theta.y[0] == pytest.approx(1)
+    assert str(_custom_column(theta, "sample_count")[0]) in {"1000", "1000-1000"}
+
+
 def test_overlapping_choice_windows_keep_each_true_interval(saved_view):
     """Overlapping windows need separate tiles rather than fabricated monotonic shared edges."""
     behavior, products = saved_view
@@ -211,6 +265,7 @@ def test_selected_choice_inspection_uses_saved_waveform_phase_spikes_and_polar_c
     np.testing.assert_array_equal(traces["polar-histogram"].r, spike.polar_histogram_count[0, 0])
     assert "8" in _texts(figure) and "21" in _texts(figure)
     assert "PPC" in _texts(figure) and "spike" in _texts(figure).lower()
+    assert phase.probe_id in _texts(figure) and "channel" in _texts(figure).lower()
 
 
 def test_missing_inspection_inputs_and_secondary_products_remain_explicitly_unavailable(saved_view):
@@ -296,6 +351,8 @@ def test_validation_export_writes_captioned_opaque_white_pngs_without_kaleido_or
         if pixels.shape[2] == 4:
             np.testing.assert_allclose(pixels[..., 3], 1, rtol=0, atol=0)
     assert captured and all("primary" in text.lower() and "[-1" in text for text in captured)
+    assert "SiteA" in captured[0] and "theta" in captured[0] and "gamma" in captured[0]
+    assert "8 Hz" in captured[1] and "ProbeA:17" in captured[1]
     before = {path: path.read_bytes() for path in paths}
     with pytest.raises(FileExistsError):
         plotting.export_validation_figures(behavior, products, tmp_path / "run", row_position=2, frequency_hz=8)
