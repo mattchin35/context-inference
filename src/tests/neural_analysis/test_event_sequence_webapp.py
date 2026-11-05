@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -185,6 +184,7 @@ def test_missing_part_ii_fields_explain_only_transition_view(event_session, monk
         event_session.behavior.trial_table_file, index=False
     )
     _prepare_unit_product(event_session)
+    _remove_current_sources(event_session)
     monkeypatch.setattr(pd, "read_csv", _forbidden_display_operation)
 
     central = AppTest.from_function(
@@ -203,6 +203,10 @@ def test_display_selectors_do_not_prepare_bin_fit_or_publish(event_session, monk
     _prepare_unit_product(event_session)
     from src.neural_analysis.webapp import event_sequence_views
 
+    at = AppTest.from_function(
+        _render_event_view, args=(str(event_session.metadata_path), "central")
+    ).run()
+    assert not at.exception
     monkeypatch.setattr(pd, "read_csv", _forbidden_display_operation)
     monkeypatch.setattr(event_io, "load_probe_spike_arrays", _forbidden_display_operation)
     monkeypatch.setattr(event_io, "save_event_sequences", _forbidden_display_operation)
@@ -211,10 +215,6 @@ def test_display_selectors_do_not_prepare_bin_fit_or_publish(event_session, monk
     monkeypatch.setattr(timeline, "bin_choice_counts", _forbidden_display_operation)
     monkeypatch.setattr(event_activity, "extract_unit_activity", _forbidden_display_operation)
     monkeypatch.setattr(timeline, "fit_timeline_activity", _forbidden_display_operation)
-    at = AppTest.from_function(
-        _render_event_view, args=(str(event_session.metadata_path), "central")
-    ).run()
-    assert not at.exception
     _assert_selector(at, "selectbox", "Central outcome", "omission")
     _assert_selector(at, "selectbox", "Central side", "right")
     checkbox = next(item for item in at.checkbox if item.label == "Z-score")
@@ -225,11 +225,10 @@ def test_display_selectors_do_not_prepare_bin_fit_or_publish(event_session, monk
     assert "session-wide z-score" in _plotly_spec(at)["layout"]["meta"]["caption"]
 
 
-def test_open_source_editor_does_not_reread_quality_on_live_motif_changes(event_session, monkeypatch):
-    """Input: saved unit with its source editor open. Return None; live motif changes reuse curated metadata."""
+def test_unit_controls_do_not_reread_quality_on_live_motif_changes(event_session, monkeypatch):
+    """Input: saved unit with dedicated controls. Return None; live motif changes reuse curated metadata."""
     _prepare_unit_product(event_session)
     at = AppTest.from_function(_render_event_view, args=(str(event_session.metadata_path), "central")).run()
-    next(item for item in at.checkbox if item.label == "Configure a new source").check().run()
     assert not at.exception
     _assert_plotly_output(at)
     monkeypatch.setattr(pd, "read_csv", _forbidden_display_operation)
@@ -262,8 +261,8 @@ def test_legacy_metadata_requires_explicit_pc_probe_override(event_session, monk
     assert request.region == "HPC" and request.probe_id == "B"
 
 
-def test_prepare_and_recompute_are_the_only_preparation_actions(event_session, monkeypatch):
-    """Input: uncached configured view and preparation spy; buttons invoke exactly one request each."""
+def test_pc_prepare_and_recompute_are_the_only_pc_preparation_actions(event_session, monkeypatch):
+    """Input: uncached PC view/preparation spy; only the explicit buttons invoke one PC request each."""
     from src.neural_analysis.webapp import event_sequence_views
 
     prepare = Mock(wraps=prepare_event_sequences)
@@ -273,6 +272,7 @@ def test_prepare_and_recompute_are_the_only_preparation_actions(event_session, m
     ).run()
     assert not at.exception
     prepare.assert_not_called()
+    _assert_selector(at, "selectbox", "Neural source", "pc")
     next(item for item in at.button if item.label == "Prepare").click().run()
     assert not at.exception
     assert prepare.call_count == 1
@@ -284,8 +284,8 @@ def test_prepare_and_recompute_are_the_only_preparation_actions(event_session, m
     assert [call.kwargs.get("rerun", False) for call in prepare.call_args_list] == [False, True]
 
 
-def test_prepare_error_is_visible_and_controls_remain_usable(event_session, monkeypatch):
-    """Input: uncached view and failing explicit preparation; surface message and keep selectors usable."""
+def test_pc_prepare_error_is_visible_and_controls_remain_usable(event_session, monkeypatch):
+    """Input: uncached PC view/failing explicit preparation; surface message and keep selectors usable."""
     from src.neural_analysis.webapp import event_sequence_views
 
     prepare = Mock(side_effect=ValueError("Trusted coverage unavailable"))
@@ -294,6 +294,7 @@ def test_prepare_error_is_visible_and_controls_remain_usable(event_session, monk
         _render_event_view, args=(str(event_session.metadata_path), "central")
     ).run()
     assert not at.exception
+    _assert_selector(at, "selectbox", "Neural source", "pc")
     next(item for item in at.button if item.label == "Prepare").click().run()
     assert not at.exception
     assert prepare.call_count == 1
@@ -311,6 +312,10 @@ def test_cached_source_switch_and_rank_change_do_not_prepare_again(event_session
     assert len({first_path, second_path, pc_path}) == 3
     from src.neural_analysis.webapp import event_sequence_views
 
+    at = AppTest.from_function(
+        _render_event_view, args=(str(event_session.metadata_path), "central")
+    ).run()
+    _assert_selector(at, "selectbox", "Neural source", "unit")
     monkeypatch.setattr(pd, "read_csv", _forbidden_display_operation)
     monkeypatch.setattr(event_io, "load_probe_spike_arrays", _forbidden_display_operation)
     monkeypatch.setattr(event_io, "save_event_sequences", _forbidden_display_operation)
@@ -319,15 +324,12 @@ def test_cached_source_switch_and_rank_change_do_not_prepare_again(event_session
     monkeypatch.setattr(timeline, "bin_choice_counts", _forbidden_display_operation)
     monkeypatch.setattr(timeline, "fit_timeline_activity", _forbidden_display_operation)
     monkeypatch.setattr(event_activity, "extract_unit_activity", _forbidden_display_operation)
-    at = AppTest.from_function(
-        _render_event_view, args=(str(event_session.metadata_path), "central")
-    ).run()
-    assert not at.exception
-    selector = next(item for item in at.selectbox if item.label == "Saved source configuration")
-    selector.select(next(option for option in selector.options if "A:7" in option)).run()
-    assert not at.exception
+    _assert_selector(at, "selectbox", "Probe", "A")
+    _assert_selector(at, "selectbox", "Unit", "A:7")
     _assert_plotly_output(at)
+    _assert_selector(at, "selectbox", "Neural source", "pc")
     selector = next(item for item in at.selectbox if item.label == "Saved source configuration")
+    assert all("PCs" in option for option in selector.options)
     selector.select(next(option for option in selector.options if "PFC" in option)).run()
     assert not at.exception
     rank = next(item for item in at.slider if item.label == "PC rank")
@@ -460,11 +462,11 @@ def test_pc_saved_cache_invalidates_when_referenced_archive_disappears(event_ses
 
 
 @pytest.mark.parametrize("width", [0.05, 0.02])
-def test_fine_bin_controls_prepare_only_after_explicit_request(event_session, width: float) -> None:
-    """Input: synthetic session/accepted fine width seconds. Return None; selecting 50/20 ms waits for Prepare."""
+def test_fine_bin_pc_controls_prepare_only_after_explicit_request(event_session, width: float) -> None:
+    """Input: synthetic session/accepted fine width seconds. Return None; selecting PC 50/20 ms waits for Prepare."""
     original = _prepare_unit_product(event_session)
     at = AppTest.from_function(_render_event_view, args=(str(event_session.metadata_path), "central")).run()
-    next(item for item in at.checkbox if item.label == "Configure a new source").check().run()
+    _assert_selector(at, "selectbox", "Neural source", "pc")
     selector = next(item for item in at.selectbox if item.label == "Preparation bin width")
     assert f"{width * 1000:g} ms" in selector.options
     selector.select(width).run()
@@ -478,5 +480,6 @@ def test_fine_bin_controls_prepare_only_after_explicit_request(event_session, wi
     created = next(path for path in paths if path != original)
     packet = event_io.load_event_sequences(created)
     assert packet["meta"]["parameters"]["bin_width_s"] == width
-    assert packet["unit_rates_hz"].shape[1] == round(4 / width)
+    assert packet["meta"]["source_kind"] == "pc"
+    assert len(packet["bin_edges_s"]) - 1 == round(4 / width)
     _assert_plotly_output(at)
