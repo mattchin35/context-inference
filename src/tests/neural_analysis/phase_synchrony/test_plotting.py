@@ -295,6 +295,8 @@ def test_selected_choice_inspection_uses_saved_waveform_phase_spikes_and_polar_c
     plot_height = figure.layout.height - figure.layout.margin.t - figure.layout.margin.b
     gap = figure.layout.yaxis3.domain[0] - figure.layout.polar.domain.y[1]
     assert gap * plot_height >= 85  # Space for the time title and polar subplot title.
+    polar_title = next(annotation for annotation in figure.layout.annotations if annotation.text == "Saved spike-phase histogram")
+    assert polar_title.yshift is not None and polar_title.yshift >= 20
 
 
 def test_missing_inspection_inputs_and_secondary_products_remain_explicitly_unavailable(saved_view):
