@@ -66,25 +66,29 @@ def test_saved_power_is_discovered_independently_of_unit_selection(runnable_sess
     assert view.discover_view_products(session, selected) == ()
 
 
-def test_newer_failed_attempt_is_separate_from_selected_completed_source(runnable_session, config, monkeypatch):
+@pytest.mark.parametrize("target_site,change_phase", [("NamedSite", False), ("NamedSite", True), ("OtherSite", False)])
+def test_newer_failed_attempt_is_separate_from_selected_completed_source(runnable_session, config, monkeypatch, target_site, change_phase):
     """Recorded UTC attempt ordering reports failure while preserving the older compatible result."""
     selected = replace(config, sites=("NamedSite",), pairs=())
     report = runner.run_session(runnable_session, selected)
+    if target_site == "OtherSite":
+        selected = replace(selected, sites=("NamedSite", "OtherSite"))
     session = _resolve(runnable_session)
     attempt = session.session_root / "analysis_runs" / "session_timeline_phase_synchrony_20300102_030405_000000_new"
     attempt.mkdir()
-    (attempt / "config.json").write_text(json.dumps({"session_id": session.session_id, **asdict(selected)}), encoding="ascii")
+    attempt_config = replace(selected, phase_frequencies_hz=(6., 8., 10.)) if change_phase else selected
+    (attempt / "config.json").write_text(json.dumps({"session_id": session.session_id, **asdict(attempt_config)}), encoding="ascii")
     (attempt / "measurements.json").write_text(json.dumps({
-        "run_id": "20300102_030405_000000_new", "stages": [{"stage": "power", "selection": ["NamedSite"],
+        "run_id": "20300102_030405_000000_new", "stages": [{"stage": "power", "selection": [target_site],
         "interval": "primary", "status": "failed", "error": "Synthetic interrupted input"}],
     }), encoding="ascii")
     _forbid_analysis(monkeypatch)
     products = view.discover_view_products(session, selected)
     assert [product.path for product in products] == list(report.products)
     statuses = view.newer_attempt_statuses(session.session_root, selected, products)
-    failure = next(status for status in statuses if status["stage"] == "power")
+    failure = next(status for status in statuses if status["stage"] == "power" and tuple(status["selection"]) == (target_site,))
     assert failure["status"] == "failed" and failure["run_id"].endswith("_new")
-    assert failure["displayed_run_id"] == products[0].meta["run_id"]
+    assert failure["displayed_run_id"] == (products[0].meta["run_id"] if target_site == "NamedSite" else None)
     assert failure["error"] == "Synthetic interrupted input"
 
 
@@ -168,6 +172,14 @@ def test_empty_site_display_selection_hides_site_metrics(runnable_session, confi
     next(widget for widget in at.multiselect if widget.label == "LFP sites").set_value([]).run()
     assert not at.exception
     assert not _metric_specs(_figure_spec(at)[1])
+
+
+def test_partial_power_labels_each_unavailable_selected_site(runnable_session, config):
+    """An available power family cannot hide another selected site's missing product."""
+    runner.run_session(runnable_session, replace(config, sites=("NamedSite",), pairs=()))
+    at = AppTest.from_function(_render_for_test, args=(str(runnable_session),)).run()
+    assert not at.exception
+    assert any("power" in element.value and "OtherSite" in element.value for element in at.info)
 
 
 def test_initial_saved_unit_uses_its_actual_lfp_site(runnable_session, config):
