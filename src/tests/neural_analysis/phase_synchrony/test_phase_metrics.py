@@ -97,6 +97,13 @@ def test_phase_preparation_keeps_exact_metric_grid_real_guard_and_provenance(dri
     assert result.meta["padding_s"] >= 1.0
     assert result.meta["blocks"]
     assert all(np.isfinite(block["utc_origin_s"]) and len(block["support_bounds_s"]) == 2 for block in result.meta["blocks"])
+    for block in result.meta["blocks"]:
+        assert np.isfinite(block["clock_utc_origin_s"])
+        assert np.isfinite(block["origin_relative_s"])
+        bounds = block["support_relative_bounds_s"]
+        assert len(bounds) == 2 and bounds[0] < bounds[1]
+        assert bounds[0] == block["origin_relative_s"]
+        assert block["utc_origin_s"] == block["clock_utc_origin_s"] + block["origin_relative_s"]
 
 
 def test_full_drift_preparation_recovers_analytic_phases_and_pair_metrics(drift_inputs):
@@ -241,3 +248,24 @@ def test_band_summaries_keep_fixed_frequency_set_and_exclude_gamma_line_centers(
     result = computation.compute_lfp_phase_summary(replace(left, valid=mask), right, PhaseSynchronyConfig())
     np.testing.assert_array_equal(result.band_valid, [[True, True], [True, False]])
     assert np.isnan(result.band_ppc[1, 1])
+
+
+@pytest.mark.parametrize("changed", ["guard_mask", "relative_grid", "actual_rate", "interval_bounds"])
+def test_phase_metrics_reject_incompatible_metric_grid_even_when_pair_axes_match(changed):
+    """Malformed shared phase axes cannot redefine the requested half-open statistic.
+
+    Two (1,1,1001) phase records have identical altered axes; reject an included
+    guard, shifted relative seconds, wrong Hz rate, or conflicting interval bounds.
+    """
+    phase = make_phase(np.ones((1, 1, 1001)))
+    if changed == "guard_mask":
+        phase = replace(phase, metric_mask=np.ones(1001, dtype=bool))
+    elif changed == "relative_grid":
+        phase = replace(phase, relative_time_s=phase.relative_time_s + 0.0001)
+    elif changed == "actual_rate":
+        phase = replace(phase, sample_rate_hz=550.0)
+    else:
+        phase = replace(phase, meta=dict(phase.meta, interval_bounds_s=(-2.0, 2.0)))
+    other = replace(phase, site_id="SiteB")
+    with pytest.raises(ValueError, match="grid|rate|interval|metric|500|guard"):
+        computation.compute_lfp_phase_summary(phase, other, PhaseSynchronyConfig())
