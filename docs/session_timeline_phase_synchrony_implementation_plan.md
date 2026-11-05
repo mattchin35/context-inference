@@ -26,12 +26,12 @@ and before handoff. Append exact evidence to Section 10.
 | Field | Current value |
 | --- | --- |
 | Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `8f9443f` (WP5b source). Recheck; never reset to this observation. |
-| Package / authority | WP6a GREEN. Full Round 1 authorized by user: "alright, then begin implementation". |
-| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, plotting.py only. No experimental jobs/browser server. |
+| Package / authority | WP6a accepted; WP6b GREEN next. Full Round 1 authorized by user: "alright, then begin implementation". |
+| Team / running work | Lead runtime model/effort not exposed; scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, stopped after plotting. Lead owns UI. No experimental jobs/browser server. |
 | Feature files | WP1-WP5b source/tests and WP6a tests committed. Lead current-CLI usage additions in SESSION_TIMELINE.md/README.md are uncommitted. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
 | Evidence | WP1-WP4 RED/GREEN/regressions and commits in Section 10; WP4 235 passing checks. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
-| Next action | Review WP6a plotting GREEN before WP6b UI tests. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
+| Next action | Implement thin WP6b UI against committed RED tests `f4bfd03`. CT026 uses `ProbeB:8` with `HPC1`; optional additional-unit timing question pending, no other units inferred. |
 
 Approval of the full Round 1 sequence includes its synthetic and designated
 single-session validation unless the user limits that approval. Record scope
@@ -52,8 +52,8 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | WP4 persistence/discovery | Sol worker, high | GREEN reviewed; complete | `6f8650f`; review RED `d867a0e` (10), `76bde37` (3) | 235 passed; lead reproduced and reviewed all source |
 | WP5a execution/timing core | Sol worker, high | GREEN reviewed; complete | `11284ad`; missing-runner RED; `109986e`, 7 input/reporting failures | 20 runner tests; lead 256 combined checks passed; source reviewed |
 | WP5b thin CLI/batch | Lead; Sol worker read-only review | GREEN reviewed; complete | `b800756`; fixture `6e11de7`; review `987fab4`; process context `db4aea1` | 196 combined; final 12 focused passed without warnings |
-| WP6a scientific figures | Sol worker, high | GREEN released | `0e3f57f`; missing plotting feature collection error, 1.15 s | Pending |
-| WP6b route/widgets/Refresh | Optional Luna, medium, or lead | Not started; browser integration | Not run | Not run |
+| WP6a scientific figures | Sol worker, high | GREEN reviewed; complete | `0e3f57f`; review `e929a1d` (5); label `8063a0d` (1) | 17 plotting tests; lead 247 combined; PNGs visually reviewed |
+| WP6b route/widgets/Refresh | Lead | RED committed; GREEN next | `f4bfd03`, expected missing UI feature error, 1.76 s | Pending |
 | WP7a synthetic/regression/browser audit | Sol lead; sequential Sol review if useful | Not started; synthetic gate | Not run | Not run |
 | WP7b CT026 validation/timings | Sol lead | Not started; user inspects output | Not applicable unless correction needed | Not run |
 | WP8 usage/final handoff | Lead; optional Luna for literal docs | Not started; Round 1 acceptance | Not applicable for docs only | Not run |
@@ -1096,3 +1096,41 @@ WP6b implementation notes for the next gate (no UI source written yet):
   in 3.96 s. Lead self-review; no array loads by the new helper. This is a
   small WP6b prerequisite with frozen existing scientific contracts, not a
   release of UI implementation before accepted scientific plotting.
+
+### 2026-11-04 22:15 America/New_York - WP6a / plotted-data review RED
+
+- Initial plotting GREEN: 14 passed; worker 263 feature/timeline/chart checks
+  passed in 7.79 s (UI test draft excluded). Lead read all 426 source lines.
+  Worker and lead visually inspected actual PNGs; static exports omitted
+  site/band row titles and the inspection polar title overlapped an x label.
+- Lead follow-up `e929a1d`: rich heatmap original-trial/UTC/support/source hover,
+  explicit validity masks, retained-band-only LFP sample counts, actual probe/
+  channel inspection captions, and exported site/band/frequency/unit labels.
+  Focused RED: 5 failed, 12 deselected in 2.42 s. Before committing, corrected
+  a genuine fixture padding shortage using an earlier-starting, longer synthetic
+  native source; count test then failed the actual outside-band 0-1000 bug.
+- Same worker released for plotting.py-only fixes and visual repair. No
+  estimator/source changes, test weakening, experimental reads or dependencies.
+- Lead also prepared/committed thin UI tests `f4bfd03` while figure fixes were
+  pending: expected missing phase_synchrony_view collection error in 1.76 s.
+  No UI source implementation is released before plotting acceptance. Tests
+  freeze behavior-only routing, independent saved products, settings/source
+  matching, newer failed-attempt separation, explicit inspection and real
+  Streamlit Refresh with stable component/navigation identity.
+
+### 2026-11-04 22:19 America/New_York - WP6a / corrected figures accepted
+
+- Additional required-label RED `8063a0d`: 1 failed, 16 deselected in 1.78 s.
+  Pair PPC is explicitly Within-window LFP-LFP PPC, separate from unit PPC.
+- Lead reviewed all source/follow-up fixes and actual timeline/inspection PNGs.
+  Labels, calibrated units, original integer trial ID, probe/channel, selected
+  8-Hz phase, counts, captions and polar layout are now readable. No figure
+  builder imports analysis/preparation or raw loaders. Product arrays stay intact.
+- Lead feature/timeline-plot/chart command (bundled Node supplied, UI tests
+  excluded): 247 passed in 7.97 s. Worker adds existing session-timeline tests:
+  266 passed in 8.03 s. Focused 17 passed. No warnings.
+- Worker stopped edits. Lead accepts plotting.py; WP6b source is now released
+  against previously committed RED `f4bfd03`. No experimental processing until
+  synthetic/browser gate. Optional async question asks whether to skip the
+  plan's multi-unit timing or receive additional explicit IDs; ProbeB:8/HPC1
+  single-unit validation proceeds independently.
