@@ -25,13 +25,13 @@ and before handoff. Append exact evidence to Section 10.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `8f9443f` (WP5b source). Recheck; never reset to this observation. |
-| Package / authority | WP7a accepted; WP7b CT026 next. Full Round 1 authorized by user: "alright, then begin implementation". |
-| Team / running work | Lead runtime model/effort not exposed; scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, stopped after bounded plotting fixes. Lead owns CT026 validation. Local browser server port 8505, exec session 11102, file watching disabled. |
-| Feature files | WP1-WP5b source/tests and WP6a tests committed. Lead current-CLI usage additions in SESSION_TIMELINE.md/README.md are uncommitted. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
+| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `06e2aea` (final polar-title test). Recheck; never reset to this observation. |
+| Package / authority | Round 1 implemented and CT026 validated; final documentation/source handoff included in this commit. Full Round 1 authorized by user: "alright, then begin implementation". |
+| Team / running work | Lead runtime model/effort not exposed; scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, idle. No analysis jobs remain. Read-only CT026 browser server port 8505, exec session 98673, file watching disabled. |
+| Feature files | WP1-WP7 source/tests committed with final layout/interpretation/docs in this handoff. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
-| Evidence | WP1-WP4 RED/GREEN/regressions and commits in Section 10; WP4 235 passing checks. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
-| Next action | Commit accepted browser fixes; execute/measure CT026 both intervals/all metadata sites/pairs plus `ProbeB:8`/`HPC1`, session-local outputs only. Optional multi-unit timing question pending; do not infer IDs. |
+| Evidence | Section 10 records all RED/GREEN gates; broad final suite 464 passed, final plotting/UI/chart checks 33 passed. CT026: 695 choices, 20 metric selections, both intervals, all sites/pairs, ProbeB:8/HPC1, saved-array audits/PNGs/browser verified. |
+| Next action | User scientific inspection of CT026 output before any further experimental session, additional unit benchmark or Round 2. No additional unit IDs inferred; optional multi-unit question unanswered. |
 
 Approval of the full Round 1 sequence includes its synthetic and designated
 single-session validation unless the user limits that approval. Record scope
@@ -55,8 +55,8 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | WP6a scientific figures | Sol worker, high | GREEN reviewed; complete | `0e3f57f`; review `e929a1d` (5); label `8063a0d` (1) | 17 plotting tests; lead 247 combined; PNGs visually reviewed |
 | WP6b route/widgets/Refresh | Lead; worker read-only review | GREEN reviewed; complete `ea1cdd7` | `f4bfd03`; fixture `721307e`; selection `6fa2d40` (3); status `d099477` (3); payload `5fee607` (1) | 12 UI tests; combined 302; browser inspected |
 | WP7a synthetic/regression/browser audit | Lead; bounded worker plotting fix | Accepted | `697a954` acceptance; real-browser layout RED `104b9ab` (2), `fdc4097` (1) | Seeded full pipeline, 282 worker regressions, browser hover/pan/Refresh/Jump/heatmap/inspection |
-| WP7b CT026 validation/timings | Lead | Authorized; begins after browser-fix commit | Not applicable unless correction needed | No experimental arrays loaded yet |
-| WP8 usage/final handoff | Lead; optional Luna for literal docs | Not started; Round 1 acceptance | Not applicable for docs only | Not run |
+| WP7b CT026 validation/timings | Lead | Complete; user inspection next | No numerical corrections required | 20 selections, 695 choices; power 168.10 s, phase 305.98 s, PPC 6.35 s, warm all 0.28 s; audits/PNGs/browser verified |
+| WP8 usage/final handoff | Lead | Complete in this handoff | Docs only; interpretation `661a90c`; final layout `9eea84b`, `06e2aea` | Usage, measurements, limitations and review artifacts recorded |
 
 ### 0.3 Resume procedure and first commands
 
@@ -1193,3 +1193,71 @@ WP6b implementation notes for the next gate (no UI source written yet):
 - Synthetic/browser gate accepted. No experimental arrays loaded yet. Next:
   CT026 session-local validation, actual cold/warm/incremental measurements,
   saved PNG inspection, and user review before any further sessions.
+
+### 2026-11-04 22:48 America/New_York - WP7b / authorized CT026 computation started
+
+- Browser fixes source committed `448e104`; lead 33 plotting/UI/chart checks
+  passed in 4.68 s. Full synthetic/browser gate accepted before any CT026 arrays.
+- Approved filesystem escalation allowed immutable outputs under the designated
+  CT026 session. Driver exec session 27664, exact script saved as validation.py
+  with main/batch snapshots, config, log, summary and additive measurements in:
+  analysis_runs/session_timeline_phase_synchrony_validation_20261105_034428_633646_a215bab7.
+- Both intervals; metadata PFC1/HPC1/HPC2 and three declared ordered pairs;
+  only ProbeB:8 with HPC1. Optional multi-unit timing clarification remains
+  unanswered; no unselected experimental unit/session is processed.
+- First durable PFC1 primary power: 48.9569 s. Initial six power products:
+  168.0979 s total; 695 choices, all valid both primary bands, seven primary
+  segments and physical uV^2 with 4/46-Hz retained bandwidth. Initial probe
+  native reads 29.85/37.96 s; later same-probe channel 0.78 s. OS cache state
+  unspecified, so these are not claimed cold-storage comparisons.
+- Six incremental power outputs from cached PSDs: 0.5982 s, first 0.1356 s.
+  Six coherence products after power: 4.3689 s, first 0.6944 s. Current driver
+  is preparing LFP phase, then selected-unit PPC, warm all-family reuse and one
+  bounded HPC1 primary phase cProfile (profiling overhead labeled separately).
+- Completed products remain immediately readable; no source files overwritten.
+  Next: finish computations, inspect actual counts and phase/PPC availability,
+  measure saved viewing/export and inspect captioned PNGs before final handoff.
+
+### 2026-11-04 23:11 America/New_York - WP7b/WP8 / completed validation and handoff
+
+- CT026 execution completed with no numerical corrections. Both intervals,
+  three sites/pairs, 695 original choices and only ProbeB:8/HPC1: 20 metric
+  selections. LFP phase 305.9811 s, first pair 68.6656 s; selected-unit PPC
+  6.3468 s, first 3.0256 s; warm all-component reuse 0.2815 s, first 0.0869 s.
+  Initial power/coherence/incremental timing is in the preceding log.
+- Saved-only audit/export script and outputs remain in the validation directory
+  recorded above. All LFP band summaries have 695 valid choices. Phase metric
+  counts are exactly 1000/2000; maximum PLV/PPC identity error 3.33e-16.
+  Primary unit PPC: 687 defined, eight N<2 unavailable; secondary 695 defined.
+  Polar totals match frequency counts, and finite negative PPC is retained.
+- Primary/secondary saved load 0.187/0.174 s, overview build 0.698/0.583 s,
+  serialization 0.177/0.211 s, payload about 5.5 MB. Optional phase heatmap
+  payload about 21.3 MB. PNG export 1.478/1.435 s for two images per interval.
+  All four opaque captioned PNGs visually inspected; offline HTMLs also saved.
+- Bounded HPC1 primary profile: 29.00 s including profiling; interpolation/
+  extraction 10.82 s, Morlet 5.62 s, publication/compression 8.59 s. No major
+  optimization applied. Intel i9-12900/24 CPUs/~62 GiB RAM; preparation-driver
+  lifetime RSS 15.85 GB, separate saved-view/export 3.34 GB. Recommend local
+  offline power -> coherence -> phase -> selected PPC, with one session worker
+  for similar recordings on this host. No cold-OS or per-stage RSS claims.
+- Actual CT026 browser verified original trial/UTC/source hover, native pan
+  persistence across Refresh/PLV-PPC/events, prepared secondary switching with
+  10000 native samples/15 segments, and explicit HPC1/ProbeB:8 at 8 Hz. Secondary
+  first-row readout retained negative PPC -0.011164 and 54 valid spikes.
+  Browser responsiveness qualitative; no invented end-to-end latency.
+- Literal scientific interpretation is accessible in the viewer and docs:
+  amplitude-sensitive spectra vs normalized phases; finite-count LFP PPC is
+  not a temporal-independence correction; bursts/reference/shared sources and
+  lack of causal/significance inference. RED `661a90c`: 1 failed in 2.05 s;
+  all 12 UI tests then passed. Final real-browser inspection spacing REDs
+  `9eea84b` (1 failed, 1.65 s) / `06e2aea` (1 failed, 1.69 s); only presentation
+  spacing changed. Lead self-reviewed; 33 plotting/UI/chart checks pass.
+- Broad final feature, metadata/loading, LFP synchrony/work-cache, spike phase,
+  timeline/IO/scripts/webapp/identity/chart regressions: 464 passed in 15.20 s,
+  Node enabled, no warnings. Final narrow plotting/UI/chart: 33 passed in
+  4.74 s after presentation fixes. Unit tests still precede each source change.
+- SESSION_TIMELINE.md and neural README now describe commands, manual Refresh,
+  inspection, scientific contracts, actual measurements and practical limits.
+  Validation review_notes.md/summary.md include figure links and user-review
+  status. No additional units, sessions, batch, Round 2 or major optimization.
+  User's pre-existing staged/unstaged/untracked work remains preserved.

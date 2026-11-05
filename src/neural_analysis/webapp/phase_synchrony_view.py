@@ -80,7 +80,8 @@ def newer_attempt_statuses(
     Root is a session directory; only each component's relevant scientific
     settings are compared. Ordering uses the recorded UTC run ID and completion
     instant, never filesystem mtime. Returned dictionaries identify categorical
-    stage/selection/interval/status/error, attempted run and displayed source run.
+    stage/selection/interval/status/error, attempted run and displayed source run
+    (None when no compatible product has completed).
     Only JSON logs/configurations are read; no arrays or analysis are executed.
     """
     displayed = {(product.meta["identity"]["family"], tuple(product.meta["identity"]["selection"]),
@@ -198,6 +199,19 @@ def render_phase_synchrony_view(st_module: object, session: ResolvedSession) -> 
         serialization_s = perf_counter() - started
     render_timeline_chart(figure, key=f"{scope}_chart")
     st_module.caption(figure.layout.meta["caption"] + " Drag horizontally to pan; use the time controls or Jump to navigate explicitly.")
+    with st_module.expander("Metric interpretation"):
+        st_module.markdown(
+            "Power is integrated Welch density in uV^2, without dividing by window duration again. "
+            "Magnitude-squared coherence averages matched cross/auto spectra and retains amplitude information. "
+            "PLV and LFP PPC use normalized Morlet phase differences at each frequency. Their numerical "
+            "thresholds are not interchangeable with coherence. A consistent nonzero phase offset can give high PLV.\n\n"
+            "Within-window LFP-LFP PPC is a finite-count transformation of squared PLV on the same observations. "
+            "Successive filtered samples are not independent oscillation cycles, and this correction does not "
+            "remove temporal dependence. Selected-unit spike PPC uses all pairs within that choice window; "
+            "bursts and spike-history dependence remain. Negative PPC is retained; fewer than two valid "
+            "observations is unavailable. Shared sources, reference and event locking can affect all these "
+            "descriptive measures; they do not establish directed or causal communication."
+        )
     _render_saved_details(st_module, session, config, products, load_s, construction_s, serialization_s, payload_bytes)
     _render_inspection(st_module, session, behavior, config, products, headers, scope)
 

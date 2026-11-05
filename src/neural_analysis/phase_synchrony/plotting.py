@@ -125,7 +125,9 @@ def plot_choice_inspection(
     figure = make_subplots(rows=4, cols=1, specs=[[{}], [{}], [{}], [{"type": "polar"}]],
                            subplot_titles=["Saved LFP (uV)", f"Saved phase at {frequency_hz:g} Hz (rad)",
                                            "Selected-unit spikes", "Saved spike-phase histogram"],
-                           vertical_spacing=.07)
+                           vertical_spacing=.12)
+    # Polar angular ticks extend beyond their domain; lift the last subplot title.
+    figure.layout.annotations[-1].yshift = 24
     unavailable = []
     ppc_text = "PPC unavailable"
     for family, kind in (("waveforms", "waveform"), ("phase", "phase"), ("spike-ppc", "spikes")):
@@ -175,7 +177,7 @@ def plot_choice_inspection(
                f"{frequency_hz:g} Hz. " + _caption(interval) + " " + ppc_text + ".")
     if unavailable:
         caption += " Unavailable: " + ", ".join(unavailable) + "."
-    _light_layout(figure, caption, height=1100)
+    _light_layout(figure, caption, height=1200)
     figure.update_layout(meta={"caption": caption, "unavailable": unavailable,
                                "time_axes": ["xaxis", "xaxis2", "xaxis3"], "primary_time_axis": "xaxis"},
                          uirevision=f"{behavior.session_id}:inspection:{row_position}:{interval}:{frequency_hz}")

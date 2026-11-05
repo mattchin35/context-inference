@@ -162,6 +162,24 @@ You can also click **Prepare** in the viewer. See the
 assignments, navigation, saved outputs, benchmarking, and session-level batch
 preparation. Stage 1 does not compute per-choice participation counts.
 
+## Choice-window LFP power and phase synchrony
+
+The independent `src.neural_analysis.phase_synchrony.run_session` command
+prepares per-choice integrated band power, pairwise coherence and LFP PLV/PPC,
+or explicitly selected-unit spike PPC. Use `--components`, metadata `--sites`
+or ordered `--pair` selections, and `--intervals primary secondary`; spike PPC
+requires `--unit ProbeB:8 --lfp-site HPC1`. Primary is `[-1,+1)` s and secondary
+is `[-2,+2)` s. `--dry-run` reads metadata only, while `--rerun` creates additive
+outputs and reuses compatible prerequisites. The separate `run_batch` module
+parallelizes approved session lists. See the [offline usage and scientific
+contracts](SESSION_TIMELINE.md#choice-window-lfp-power-and-phase-synchrony-offline-preparation).
+In the metadata-driven Streamlit app choose **Session timeline: LFP power and
+synchrony**, then **Refresh results** to load completed products. The view
+supports behavior-only/partial results, original-time navigation, PLV/PPC
+switching, frequency summaries and saved selected-choice inspection. It never
+launches analysis. [Viewer usage](SESSION_TIMELINE.md#open-the-saved-lfpsynchrony-timeline)
+describes selection, provenance, support counts and PNG export.
+
 ## Run Spike-phase/PPC computation
 
 ### Prepare Power, Synchrony, and phase

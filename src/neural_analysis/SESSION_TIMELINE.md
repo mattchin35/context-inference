@@ -646,3 +646,228 @@ loading them preserves their bytes and identity without raw inputs or migration.
 
 Fine-resolution viewport filtering limits contributions and browser payloads;
 the current NPZ loader still loads full regional score arrays into memory.
+
+## Choice-window LFP power and phase synchrony: offline preparation
+
+The separate `phase_synchrony` analysis uses the metadata's named LFP sites
+and ordered site pairs. It preserves original choice IDs, row positions and
+UTC times. Its primary interval is `[-1,+1)` seconds; the secondary interval
+is `[-2,+2)`. These are one estimate per choice, with no across-trial pooling.
+Open Ephys inputs need the derived LFP scaling sidecar, IRIG anchors and a
+verified nominal AP `sample_rate_hz` in synchronization metadata. A rate inferred
+from UTC-anchor slopes cannot establish the AP-to-LFP index conversion.
+
+Prepare only site power, leaving other probes and analyses independent:
+
+```bash
+uv run -m src.neural_analysis.phase_synchrony.run_session \
+  --session-metadata /path/to/session/neural_session.json \
+  --components power --sites HPC1 --intervals primary secondary
+```
+
+Omit `--sites` to select all metadata sites. With no `--components`, the
+defaults are `power coherence lfp-phase`. Use `--pair HPC1 HPC2` to request an
+ordered pair, repeating the argument for additional pairs. Pair sites must
+belong to the selected sites. Metadata pairs are used when no pair is given;
+if metadata declares none, distinct site combinations follow metadata order.
+
+Selected-unit PPC requires explicit probe-qualified IDs and one LFP site:
+
+```bash
+uv run -m src.neural_analysis.phase_synchrony.run_session \
+  --session-metadata /path/to/session/neural_session.json \
+  --components spike-ppc --unit ProbeB:8 --lfp-site HPC1 \
+  --intervals primary secondary
+```
+
+Repeat `--unit` for additional designated units; no all-unit default exists.
+The existing Phy good/mua and good inside-brain channel rules apply, including
+metadata `unit_channels`. No 50-spike threshold is imposed. Fewer than two
+valid spikes yields unavailable PPC, with counts/exclusions saved per frequency.
+
+`--dry-run` lists planned/reusable components from metadata and saved headers,
+without reading signal arrays or creating outputs. `--prepare-only native-lfp`
+prepares selected calibrated, notched continuous channels without behavior;
+`--prepare-only phase` prepares selected sites/intervals without metric reductions.
+`--order power coherence lfp-phase` changes family order within each interval
+sweep and must list every requested family exactly once. Primary products
+are published before secondary-only work, even if intervals are listed in
+the opposite order. Independent completed products survive another failure.
+
+Compatible products and prerequisites are reused. `--rerun` creates new
+requested outputs while reusing prerequisites. Combined with `--prepare-only`,
+it forces that preparation. Previous outputs remain immutable. One writer
+per session is allowed; viewers can read completed products during processing.
+
+Each invocation writes a new session-local
+`analysis_runs/session_timeline_phase_synchrony_<date>_<time>_<run_id>/`
+with `components/`, `config.json`, `run.log`, `summary.md`, `measurements.json`,
+and main/batch script snapshots. Reusable native waveforms, auto-PSDs, phase
+and selected spike preparations live under
+`processed/session_timeline_phase_synchrony/`. Each NPZ has named arrays and
+a dictionary `meta` describing units, axes, scientific settings and identities.
+Do not move these experimental outputs into the source repository.
+
+The batch entry point accepts `--session-list /path/to/sessions.txt` with the
+same component/site/unit/interval flags. Paths in that text file resolve
+relative to the list file; comments and blank lines are ignored. Sessions
+use separate processes, defaulting to CPU count capped by session count.
+Set `--workers` lower when RAM or disk throughput limits concurrency. Inspect
+the designated single experimental session before requesting a batch.
+
+Power integrates Welch density into physical `uV^2`, using theta 6-10 Hz and
+gamma 30-80 Hz with 58-62 Hz excluded. It is not divided by window duration.
+Welch uses native-rate voltages, periodic Hann 0.5-s segments, 50% overlap,
+constant detrending and mean density. Coherence reuses matching auto-PSDs.
+Phase uses drift-aware uniform-UTC sampling before Morlet/decimation, the
+500-Hz phase grid and 2-100 Hz frequencies spaced by 2 Hz. The 60-Hz notch
+has Q=30. Numerical and absolute phase-amplitude thresholds are both 0.0;
+zero/nonfinite coefficients remain invalid. LFP phase metrics require complete
+window support; real right guards support spike interpolation but do not enter
+metric counts. These semantic markers distinguish the products from legacy
+nominal-clock phase caches.
+
+PLV and coherence span 0-1 but describe different quantities. Signed PPC is
+retained. Coherence averages matched cross/auto spectra and retains amplitude
+information; PLV/PPC use normalized Morlet phase differences at each frequency.
+Their numerical thresholds are not interchangeable. A consistent nonzero phase
+offset can still give high PLV. Within-window LFP PPC is a finite-count transformation of squared
+PLV on the same observations; successive filtered samples are not independent
+oscillation cycles. Spike PPC uses all within-window spike pairs per unit.
+These are descriptive measurements, without significance or causal claims.
+Shared sources, reference and event locking can affect the measures, and spike
+bursts/history remain relevant to within-trial spike PPC. The viewer's
+**Metric interpretation** expander explains these distinctions.
+
+Measurements separate shared prerequisites, metric work, publication and reuse.
+Where an existing API bundles operations, the combined stage is recorded.
+Native source reads currently cover each selected full recording. Analysis
+cache state does not establish OS cache state; peak RSS is a process-lifetime
+high-water mark. Figure construction and browser responsiveness require separate
+measurements.
+
+### Open the saved LFP/synchrony timeline
+
+Use the same metadata-driven Streamlit launch command above and select
+**Session timeline: LFP power and synchrony** in **Plot view**. Behavior appears
+without PCA, spikes or a complete set of neural results. Prepare neural products
+in a separate terminal, then click **Refresh results**. The viewer never starts
+preparation or background jobs.
+
+**Saved analysis settings** selects scientific settings from completed runs.
+**Centered interval**, **LFP sites**, **LFP pairs** and **Saved units** select
+existing estimates. **Spike-PPC LFP site** initially follows the selected saved
+unit's actual phase channel. Clearing a display selection hides those rows.
+Every unavailable selected component is identified, including a missing site
+when other sites already have power results. Switching interval does not compute
+an unprepared interval.
+
+Time zero and choice labels use the same original behavior as the PCA timeline.
+Use **Visible duration (s)**, **Window start (s)** or **Jump to trial** to request
+a range. Dragging the chart or its compact navigator changes the range locally.
+Refresh, event visibility, added tracks and PLV/PPC switching preserve that
+browser range. The sidebar retains the last explicit navigation request.
+
+The **LFP phase metric** toggle selects PLV or signed within-window LFP-LFP PPC.
+Coherence stays separate. Each power site/band has its own nonnegative `uV^2`
+axis fixed from the complete saved product; panning does not renormalize it.
+Hover identifies original trial/row, interval center/bounds, support counts,
+retained bandwidth or spike-count range, and the actual probe/saved channel.
+Open **Saved sources and timing** for full settings, displayed source runs and
+UTC completion times, separate later failed/unfinished attempts, execution
+timings and measured Python display/payload costs. Python construction and JSON
+serialization times exclude browser rendering.
+
+**Frequency heatmap** displays one saved scalar per frequency and choice window.
+Columns occupy the actual estimation intervals; inter-choice gaps and excluded
+frequencies remain blank. Overlapping windows keep independent true tiles.
+These are whole-window summaries, not continuously estimated time courses.
+
+Enable **Inspect a choice** for an original row, choose **Inspection LFP site**,
+an explicit saved **Inspection unit** if desired, and **Phase frequency (Hz)**.
+The panels load only saved waveform/phase/spike/histogram inputs. Missing
+preparations are labeled unavailable; selecting a frequency does not substitute
+a nearby frequency or trigger a transform. LFP traces are `uV`, phase is radians
+at the identified frequency, spike times are relative to the original choice,
+and polar bars count the saved valid spike phases. Real interpolation guards
+are excluded from the displayed metric interval.
+
+Python callers can load compatible products with
+`phase_synchrony.results.load_product`, build figures with
+`plotting.plot_synchrony_timeline` / `plot_choice_inspection`, and export with
+`plotting.export_validation_figures(behavior, products, run_directory,
+row_position=..., frequency_hz=8, site_id=..., unit_id=...)`. `behavior` is the
+ordinary behavior-only `SessionTimelineResult`; products are loaded
+`SavedProduct` records, including available inspection prerequisites. Export
+writes captioned opaque-white PNGs under `run_directory/figures`, refuses
+overwrites, and uses Matplotlib/Agg without Kaleido. Numerical calculation,
+loading, figure construction and PNG export remain separate stages.
+
+### CT026 centered-choice validation and measured order
+
+CT026 2026-08-28 was validated on an Intel i9-12900 workstation with 24 logical
+CPUs and about 62 GiB RAM. The 695 original completed choices were retained.
+Both intervals include PFC1, HPC1, HPC2, the three metadata pairs, and only
+`ProbeB:8` with `HPC1` (saved channel 222). No experimental batch was run.
+
+| Requested action | Products | Total seconds | First requested product seconds |
+| --- | ---: | ---: | ---: |
+| Initial power, both intervals | 6 | 168.10 | 48.96 |
+| Incremental power from cached PSDs | 6 | 0.60 | 0.14 |
+| Coherence after power | 6 | 4.37 | 0.69 |
+| Initial LFP phase/PLV/PPC | 6 | 305.98 | 68.67 |
+| Selected-unit PPC using saved phase | 2 | 6.35 | 3.03 |
+| Warm reuse of all components | 20 | 0.28 | 0.09 |
+
+Initial analysis caches were absent. OS filesystem-cache state was unspecified;
+the later same-probe channel read benefited from prior file access. Initial
+source reads took about 29.85/37.96 seconds for the first channels on the two
+probes, and 0.78 seconds for the subsequent channel. Choice waveform preparation
+took about 12 seconds per site/interval. These timings support preparing power
+first, reusing its auto-PSDs for coherence, then preparing phase for pair metrics
+and reusing it for selected-unit PPC. Keep this workflow local and offline.
+
+A separate bounded profile of HPC1 primary phase preparation with cached native
+input took 29.00 seconds including profiling overhead: about 10.82 seconds in
+choice phase extraction/interpolation, 5.62 seconds in Morlet preparation and
+8.59 seconds in publication, predominantly compression. These measurements do
+not identify Morlet alone as the bottleneck. No major optimization or dependency
+change was introduced. Profile evidence is saved with the validation.
+
+Power/coherence had the expected 7/15 segments and LFP phase had exactly
+1,000/2,000 metric observations, excluding real guards. All LFP band summaries
+were available for all 695 choices. The saved LFP PLV/PPC identity agreed to
+within `3.4e-16`. Selected-unit primary PPC was defined for 687 choices; the
+remaining eight had fewer than two valid spikes and stayed unavailable.
+Secondary PPC was defined for all 695. Negative PPC values were preserved.
+Saved polar histogram totals matched per-frequency contributing spike counts.
+These are validity checks, not significance tests or coupling claims.
+
+| Saved viewing/export | Primary seconds | Secondary seconds |
+| --- | ---: | ---: |
+| Load 10 completed products | 0.187 | 0.174 |
+| Overview figure construction | 0.698 | 0.583 |
+| Overview JSON serialization | 0.177 | 0.211 |
+| Add frequency heatmap: figure construction | 0.774 | 0.761 |
+| Heatmap JSON serialization | 0.687 | 0.800 |
+| Saved inspection prerequisites | 1.352 | 2.472 |
+| Two captioned PNG exports | 1.478 | 1.435 |
+
+Overview payloads were about 5.5 MB; the optional phase heatmap increased them
+to about 21.3 MB. These are Python measurements, excluding browser rendering.
+Browser hover, original-trial navigation, shared pan, Refresh, PLV/PPC switching,
+added heatmaps and selected-choice inspection were checked qualitatively.
+Use the overview first and enable a selected heatmap when needed.
+
+The preparation driver's process-lifetime peak RSS was about 15.85 GB; the
+separate saved-display/export process peaked at 3.34 GB. These are not per-stage
+increments. Use `--workers 1` for recordings of this size on this workstation
+unless RAM/I/O measurements justify more concurrent sessions.
+
+Session-local evidence is under
+`analysis_runs/session_timeline_phase_synchrony_validation_20261105_034428_633646_a215bab7/`:
+runner snapshots, `validation.py`, `visualize_validation.py`, config/log/summary,
+execution and display measurements, bounded profile, offline HTML timelines
+and captioned primary/secondary PNGs. Only one unit was designated, so no
+additional-unit timing benchmark was inferred. User inspection of CT026 output
+precedes additional experimental sessions and Round 2.
