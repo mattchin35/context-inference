@@ -465,3 +465,31 @@ def test_explicit_png_export_is_opaque_and_refuses_overwrite(tmp_path: Path) -> 
     with pytest.raises(FileExistsError):
         plotting.export_png(view, path)
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["central", "transition"])
+def test_partial_coverage_counts_do_not_obscure_real_activity(kind: str) -> None:
+    """Input: view kind. Return None; report two matches/one exclusion outside the surviving activity bins."""
+    if kind == "central":
+        trials = _trials([1, 1, 1, "no_choice", 1, 1, 1], [1, 1, 0, 0, 1, 1, 0], [1, 1, 0, 1, 1, 1, 0])
+        missing = 5
+    else:
+        trials = _trials(
+            [1, 1, 0, "no_choice", 1, 1, 0], [1, 0, 1, 0, 1, 0, 1], [1, 0, 1, 1, 1, 0, 1],
+            [0, 1, 1, 1, 2, 3, 3], [1, 0, 0, 2, 1, 0, 0],
+        )
+        missing = 5
+    packet = _packet(trials=trials, drop=(missing,))
+    source = plotting.prepare_display_source(packet)
+    view = plotting.build_central_view(packet, source) if kind == "central" else plotting.build_transition_view(packet, source)
+    panel = view["panels"][0]
+    assert (panel["behavioral_count"], panel["excluded_count"], panel["n"]) == (2, 1, 1)
+    interactive = plotting.plotly_figure(view)
+    static = plotting.matplotlib_figure(view)
+    # Coverage counts belong in panel titles; empty-panel explanations may
+    # remain inside their axes, but text must not cover surviving activity.
+    assert "excluded" in static.axes[0].get_title().lower()
+    assert not any("excluded" in text.get_text().lower() for text in static.axes[0].texts)
+    title = next(annotation for annotation in interactive.layout.annotations if "n=1" in annotation.text and annotation.yref == "paper")
+    assert "excluded" in title.text.lower()
+    assert not any("excluded" in annotation.text.lower() and annotation.yref != "paper" for annotation in interactive.layout.annotations)
