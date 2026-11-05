@@ -158,3 +158,34 @@ def test_inspection_requires_explicit_request_and_loads_saved_prerequisites_only
     assert "waveforms" not in families  # Spike PPC did not prepare Welch waveform windows.
     phase = next(product for product in inspection if product.meta["identity"]["family"] == "phase")
     assert results.preparation_identity(phase.record) in products[0].meta["identity"]["preparation_ids"]
+
+
+def test_empty_site_display_selection_hides_site_metrics(runnable_session, config):
+    """Clearing a display multiselect means hide those rows, independent of offline empty-means-default config."""
+    runner.run_session(runnable_session, replace(config, sites=("NamedSite",), pairs=()))
+    at = AppTest.from_function(_render_for_test, args=(str(runnable_session),)).run()
+    assert not at.exception and _metric_specs(_figure_spec(at)[1])
+    next(widget for widget in at.multiselect if widget.label == "LFP sites").set_value([]).run()
+    assert not at.exception
+    assert not _metric_specs(_figure_spec(at)[1])
+
+
+def test_initial_saved_unit_uses_its_actual_lfp_site(runnable_session, config):
+    """A saved unit on the second metadata site appears without silently selecting the first site."""
+    selected = replace(config, components=("spike-ppc",), unit_ids=("ProbeZ:17",), lfp_site="OtherSite")
+    runner.run_session(runnable_session, selected)
+    at = AppTest.from_function(_render_for_test, args=(str(runnable_session),)).run()
+    assert not at.exception
+    assert next(widget for widget in at.selectbox if widget.label == "Spike-PPC LFP site").value == "OtherSite"
+    assert any(trace["meta"]["family"] == "spike-ppc" for trace in _metric_specs(_figure_spec(at)[1]))
+
+
+def test_inspection_without_explicit_unit_does_not_substitute_a_saved_unit(runnable_session, config):
+    """No-unit LFP inspection excludes spike and polar observations even if a unit result is available."""
+    selected = replace(config, components=("spike-ppc",), sites=("NamedSite",), pairs=(),
+                       unit_ids=("ProbeZ:17",), lfp_site="NamedSite")
+    runner.run_session(runnable_session, selected)
+    session = _resolve(runnable_session)
+    products = view.discover_view_products(session, selected)
+    inspection = view.load_inspection_products(session, selected, products, site_id="NamedSite", unit_id=None)
+    assert all(product.meta["identity"]["family"] != "spike-ppc" for product in inspection)
