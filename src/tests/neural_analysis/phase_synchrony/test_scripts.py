@@ -132,7 +132,7 @@ def test_batch_dry_run_is_sequential_and_reports_failures(monkeypatch):
 
 def test_real_run_saves_both_script_snapshots(runnable_session, config):
     """Completed single-session runs contain the actual main and batch scripts used."""
-    report = runner.run_session(runnable_session, replace(config, sites=("NamedSite",)))
+    report = runner.run_session(runnable_session, replace(config, sites=("NamedSite",), pairs=()))
     assert report.status == 0
     for filename in ("run_session.py", "run_batch.py"):
         expected = Path(runner.__file__).with_name(filename).read_bytes()
