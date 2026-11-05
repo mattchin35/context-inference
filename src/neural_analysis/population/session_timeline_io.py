@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+from zipfile import BadZipFile
 
 import numpy as np
 import pandas as pd
@@ -19,8 +20,11 @@ from src.neural_analysis.population.session_timeline import (
     SessionTimelineResult,
     choice_bin_edges,
     prepare_timeline_choices,
+    select_complete_choice_windows,
 )
-from src.neural_analysis.session_metadata import ResolvedSession, resolve_probe_sources
+from src.neural_analysis.session_metadata import (
+    ResolvedProbeSources, ResolvedSession, resolve_probe_sources,
+)
 from src.neural_analysis.spike_behavior import loading
 from src.neural_analysis.task_decoding.activity import inspect_probe_coverage
 
@@ -68,15 +72,22 @@ def load_timeline_behavior(
 
 
 def load_timeline_population(
-    session: ResolvedSession, probe_id: str
+    session: ResolvedSession, probe_id: str, *,
+    population_quality: str = "good_mua", missing_label_policy: str = "mua",
 ) -> TimelinePopulation:
     """Load one metadata probe using existing Phy good/mua and channel-quality rules.
 
     Return selected units in cluster-ID order with unsmoothed UTC-second spikes
     and trusted IRIG bounds. No LFP samples or site-specific populations load.
     Missing sources, invalid quality data, or empty selections raise input errors.
+    Keyword-only population_quality is good_mua/good; missing_label_policy is
+    mua (historical fallback) or exclude (explicit manual labels only). Inputs
+    are scalar policy strings; returned unit/spike axes and UTC units are unchanged.
     """
-    source, channels, clusters = _select_population(session, probe_id)
+    source, channels, clusters = select_timeline_population(
+        session, probe_id, population_quality=population_quality,
+        missing_label_policy=missing_label_policy,
+    )
     coverage = inspect_probe_coverage(source)
     assignments, _ = loading.load_sorter_metadata(source.sorter_directory)
     times = loading.load_aligned_spikes(source.alignment_file)
@@ -87,8 +98,8 @@ def load_timeline_population(
     selected = np.isin(assignments, ids)
     if not np.isfinite(times[selected]).all():
         raise ValueError("Selected spike timestamps must be finite UTC seconds.")
-    group = loading.build_spike_tsgroup(
-        times[selected], assignments[selected], cluster_ids=ids
+    group = _build_timeline_spike_group(
+        times[selected], assignments[selected], ids, (coverage.start_s, coverage.end_s),
     )
     return TimelinePopulation(
         ids,
@@ -103,13 +114,20 @@ def timeline_configuration(
     session: ResolvedSession,
     probe_roles: dict[str, str],
     bin_width_s: float,
+    *,
+    population_quality: str = "good_mua",
+    missing_label_policy: str = "mua",
 ) -> dict:
     """Return a JSON-compatible scientific/source cache identity, without spike loading.
 
     probe_roles maps PFC/HPC to metadata probe IDs; an absent role is unavailable.
     File identities use resolved paths, byte sizes, and mtime_ns. Display state
     is excluded. The configuration_id is a digest of these actual inputs.
+    bin_width_s is seconds; the keyword-only scalar quality/policy labels use
+    the load_timeline_population contract. Both defaults preserve the previous
+    dict/digest exactly; nondefault policies add explicit scientific identity.
     """
+    _validate_population_policy(population_quality, missing_label_policy)
     choice_bin_edges(bin_width_s)
     if not set(probe_roles).issubset({"PFC", "HPC"}):
         raise ValueError("Probe roles must be PFC and/or HPC.")
@@ -131,7 +149,10 @@ def timeline_configuration(
             ]
         )
         try:
-            _, channels, rows = _select_population(session, probe_id)
+            _, channels, rows = select_timeline_population(
+                session, probe_id, population_quality=population_quality,
+                missing_label_policy=missing_label_policy,
+            )
             selection[role] = {
                 "unit_ids": [f"{probe_id}:{unit}" for unit in rows.cluster_id],
                 "channels": channels.tolist(),
@@ -153,8 +174,146 @@ def timeline_configuration(
         "selection": selection,
         "sources": [_file_identity(path) for path in paths if path is not None],
     }
+    if population_quality != "good_mua" or missing_label_policy != "mua":
+        config.update(
+            population_quality=population_quality, missing_label_policy=missing_label_policy,
+            quality_rules=_quality_rule_description(population_quality, missing_label_policy),
+        )
     config["configuration_id"] = _configuration_digest(config)
     return config
+
+
+def select_timeline_population(
+    session: ResolvedSession, probe_id: str, *,
+    population_quality: str = "good_mua", missing_label_policy: str = "mua",
+) -> tuple[ResolvedProbeSources, np.ndarray, pd.DataFrame]:
+    """Select manual-quality metadata without loading spike arrays.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        Metadata/source paths for one session; no scientific arrays supplied.
+    probe_id : str
+        Metadata probe identity, used to qualify selected units downstream.
+    population_quality : str, keyword-only
+        good_mua includes manual Phy good/mua; good includes good only. Case
+        and surrounding label whitespace are normalized; KSLabel is never used.
+    missing_label_policy : str, keyword-only
+        mua retains historical missing-to-MUA behavior; exclude drops real
+        missing, blank and string missing labels from either population mode.
+
+    Returns
+    -------
+    tuple[ResolvedProbeSources, np.ndarray, pd.DataFrame]
+        Resolved source, integer channel IDs (C,), and cluster metadata (U,C').
+        Channels are zero-based good inside-brain channels intersected with
+        metadata unit_channels. Rows are sorted by integer cluster_id and add
+        normalized quality_label. All identities/labels are unitless. Missing
+        required manual metadata, no selected units or duplicate selected IDs
+        raise ValueError; policy errors are validated before reading files.
+    """
+    _validate_population_policy(population_quality, missing_label_policy)
+    source = resolve_probe_sources(session, probe_id)
+    if source.channel_quality_file is None or source.cluster_info_file is None:
+        raise ValueError(
+            f"{probe_id}: metadata needs channel quality and manual Phy cluster_info.tsv."
+        )
+    quality = loading.load_channel_quality(source.channel_quality_file)
+    channels = loading.select_channels_from_quality(
+        quality, require_inside_brain=True, labels=("good",)
+    )
+    if source.unit_channels is not None:
+        channels = np.intersect1d(channels, source.unit_channels)
+    labels = ("good", "mua") if population_quality == "good_mua" else ("good",)
+    cluster_metadata = pd.read_csv(source.cluster_info_file, sep="\t")
+    if "group" in cluster_metadata:
+        # An entirely empty CSV group column is inferred as float. Give the
+        # existing normalizer an object column before it fills string labels.
+        cluster_metadata["group"] = cluster_metadata["group"].astype(object)
+    rows = loading.filter_cluster_metadata(
+        cluster_metadata, channels,
+        quality_labels=labels, quality_column="group",
+        default_group="mua" if missing_label_policy == "mua" else "",
+    )
+    if rows.empty:
+        raise ValueError(
+            f"{probe_id}: no manual {'/'.join(labels)} units on selected good inside-brain channels."
+        )
+    if rows.cluster_id.duplicated().any():
+        raise ValueError(f"{probe_id}: duplicate selected cluster IDs.")
+    return source, channels, rows
+
+
+def find_compatible_regional_timeline(
+    session: ResolvedSession, region: str, probe_id: str, bin_width_s: float, *,
+    population_quality: str = "good_mua", missing_label_policy: str = "exclude",
+) -> Path | None:
+    """Find an exact existing regional basis without loading raw neural activity.
+
+    Parameters
+    ----------
+    session : ResolvedSession
+        Current metadata/source paths. Only trial CSV, small quality tables,
+        file identities and trusted IRIG coverage are inspected; optional
+        display events and aligned spike/assignment arrays are not loaded.
+    region, probe_id : str
+        PFC/HPC role and its requested metadata probe. Other probes need not
+        match a candidate's whole-session configuration.
+    bin_width_s : float
+        Supported choice-window bin width in seconds; windows are [-2,+2) s.
+    population_quality, missing_label_policy : str, keyword-only
+        Same unitless policies as select_timeline_population. Default lookup
+        requires explicit manual good/mua labels. A default/legacy basis is
+        eligible only if its actual input IDs equal the requested population.
+
+    Returns
+    -------
+    Path or None
+        Newest compatible session-local NPZ, or None if unavailable. Reuse
+        verifies source identities, full coverage-eligible (W,) trial pool,
+        (W,B,K) signed unwhitened scores and complete (K,U_retained) basis.
+        Old metadata-bound archives require their immutable registration
+        receipt. Invalid candidates are skipped without modification or fitting.
+    """
+    current = timeline_configuration(
+        session, {region: probe_id}, bin_width_s,
+        population_quality=population_quality, missing_label_policy=missing_label_policy,
+    )
+    if "unavailable" in current["selection"][region]:
+        return None
+    try:
+        trials = pd.read_csv(session.behavior.trial_table_file)
+        origin, choices = prepare_timeline_choices(trials)
+        source = resolve_probe_sources(session, probe_id)
+        coverage = inspect_probe_coverage(source)
+        positions = select_complete_choice_windows(
+            choices.choice_time.to_numpy(), (coverage.start_s, coverage.end_s),
+        )
+        if positions.size == 0:
+            return None
+    except (OSError, ValueError, KeyError, EOFError, BadZipFile):
+        return None
+
+    paths = (session.session_root / "analysis_runs").glob("session_timeline_pca_*/results.npz")
+    for path in sorted(paths, reverse=True):
+        try:
+            # Most archives differ in bin width or sources. Reject those using
+            # metadata before decompressing any regional score tensors.
+            with np.load(path, allow_pickle=True) as archive:
+                meta = archive["meta"].item()
+            if (meta.get("schema_version") != 1 or meta.get("analysis_version") != ANALYSIS_VERSION
+                    or meta.get("regions", {}).get(region, {}).get("probe_id") != probe_id):
+                continue
+            configuration = _regional_candidate_configuration(path, meta)
+            if configuration is None:
+                continue
+            if _regional_sources_match(configuration, current, session, source, region):
+                candidate = load_timeline_result(path)
+                if _regional_arrays_match(candidate, origin, choices, positions, current, region, probe_id):
+                    return path
+        except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, EOFError, BadZipFile):
+            continue
+    return None
 
 
 def register_timeline_scientific_identity(
@@ -408,33 +567,165 @@ def load_timeline_result(input_path: Path | str) -> SessionTimelineResult:
     )
 
 
-# Source-boundary helpers; these deliberately do not read spike arrays.
-def _select_population(session: ResolvedSession, probe_id: str) -> tuple:
-    """Return resolved probe, (C,) channel IDs, and (U,columns) selected sorter rows."""
-    source = resolve_probe_sources(session, probe_id)
-    if source.channel_quality_file is None or source.cluster_info_file is None:
-        raise ValueError(
-            f"{probe_id}: metadata needs channel quality and manual Phy cluster_info.tsv."
-        )
-    quality = loading.load_channel_quality(source.channel_quality_file)
-    channels = loading.select_channels_from_quality(
-        quality, require_inside_brain=True, labels=("good",)
+# Source/compatibility helpers; raw spike file reads remain in the loader.
+def _build_timeline_spike_group(
+    times_s: np.ndarray, assignments: np.ndarray, cluster_ids: np.ndarray,
+    coverage_s: tuple[float, float],
+) -> nap.TsGroup:
+    """Input: UTC spikes/assignments (S,), unit IDs (U,), trusted UTC bounds (2,).
+
+    Return a TsGroup with sorted UTC-second Ts per cluster. Ordinary inputs use
+    the existing shared builder. Empty/single-timestamp trains require explicit
+    trusted support because Pynapple cannot infer positive-duration support
+    there. Support includes the trusted bounds and every selected finite spike;
+    the separate coverage bounds alone determine eligible choice windows.
+    """
+    spikes = {int(unit): np.sort(times_s[assignments == unit]) for unit in cluster_ids}
+    if all(len(values) > 1 and values[-1] > values[0] for values in spikes.values()):
+        return loading.build_spike_tsgroup(times_s, assignments, cluster_ids=cluster_ids)
+    start_s, end_s = coverage_s
+    if times_s.size:
+        start_s = min(start_s, float(times_s.min()))
+        end_s = max(end_s, float(times_s.max()))
+    support = nap.IntervalSet(start=start_s, end=end_s, time_units="s")
+    return nap.TsGroup(
+        {unit: nap.Ts(t=values, time_units="s", time_support=support) for unit, values in spikes.items()},
+        time_support=support,
     )
-    if source.unit_channels is not None:
-        channels = np.intersect1d(channels, source.unit_channels)
-    rows = loading.filter_cluster_metadata(
-        pd.read_csv(source.cluster_info_file, sep="\t"),
-        channels,
-        quality_labels=("good", "mua"),
-        quality_column="group",
-    )
-    if rows.empty:
-        raise ValueError(
-            f"{probe_id}: no manual good/mua units on selected good inside-brain channels."
+
+
+def _validate_population_policy(population_quality: str, missing_label_policy: str) -> None:
+    """Validate two scalar unitless policy strings; return None or raise ValueError."""
+    if population_quality not in ("good_mua", "good"):
+        raise ValueError("population_quality must be good_mua or good.")
+    if missing_label_policy not in ("mua", "exclude"):
+        raise ValueError("missing_label_policy must be mua or exclude.")
+
+
+def _quality_rule_description(population_quality: str, missing_label_policy: str) -> str:
+    """Input: scalar quality/policy strings. Return unitless scientific rule description."""
+    labels = "good/mua" if population_quality == "good_mua" else "good"
+    rule = f"Phy group {labels}; good inside-brain channels; metadata unit_channels"
+    if population_quality != "good_mua" or missing_label_policy != "mua":
+        rule += f"; missing labels {missing_label_policy}"
+    return rule
+
+
+def _regional_candidate_configuration(path: Path, meta: dict) -> dict | None:
+    """Input: saved NPZ Path/meta dict. Return verified scientific config or None.
+
+    Configuration values are unitless identities except widths/windows in
+    seconds and source file sizes/mtime in bytes/ns. Legacy receipts are checked
+    using their original whole-session configuration, never a requested subset.
+    """
+    if meta.get("configuration_identity_version") == 2:
+        fields = (
+            "analysis_version", "configuration_identity_version", "acquisition_families",
+            "session_id", "probe_roles", "bin_width_s", "window_s", "quality_rules",
+            "selection", "sources", "configuration_id",
         )
-    if rows.cluster_id.duplicated().any():
-        raise ValueError(f"{probe_id}: duplicate selected cluster IDs.")
-    return source, channels, rows
+        configuration = {key: meta[key] for key in fields}
+        for key in ("population_quality", "missing_label_policy"):
+            if key in meta:
+                configuration[key] = meta[key]
+        if _configuration_digest(configuration) != configuration["configuration_id"]:
+            return None
+    else:
+        receipt = json.loads((path.parent / "scientific_identity.json").read_text())
+        configuration = receipt["configuration"]
+        registered = find_registered_timeline(path.parents[2], configuration["configuration_id"])
+        if registered != path:
+            return None
+    quality = configuration.get("population_quality", "good_mua")
+    missing = configuration.get("missing_label_policy", "mua")
+    _validate_population_policy(quality, missing)
+    if configuration["quality_rules"] != _quality_rule_description(quality, missing):
+        return None
+    return configuration
+
+
+def _regional_sources_match(
+    candidate: dict, current: dict, session: ResolvedSession,
+    source: ResolvedProbeSources, region: str,
+) -> bool:
+    """Input: candidate/current configs, session/probe records, role. Return match bool.
+
+    Only the requested probe's source identities, acquisition, selected unit
+    IDs and allowed channels participate. Trial CSV identity is required;
+    unrelated probes and optional event display files do not affect this basis.
+    Width/window values are seconds; unit/channel/source labels are unitless.
+    """
+    for field in ("analysis_version", "session_id", "bin_width_s", "window_s"):
+        if candidate.get(field) != current[field]:
+            return False
+    if candidate["probe_roles"].get(region) != current["probe_roles"][region]:
+        return False
+    if candidate["acquisition_families"].get(region) != source.acquisition_family:
+        return False
+    if candidate["selection"].get(region) != current["selection"][region]:
+        return False
+    previous_sources = {entry["path"]: entry for entry in candidate["sources"]}
+    relevant = (
+        session.behavior.trial_table_file, source.alignment_file,
+        source.spike_clusters_file, source.cluster_info_file, source.channel_quality_file,
+    )
+    return all(
+        path is not None and previous_sources.get(str(path.resolve())) == _file_identity(path)
+        for path in relevant
+    )
+
+
+def _regional_arrays_match(
+    candidate: SessionTimelineResult, origin_s: float, choices: pd.DataFrame,
+    positions: np.ndarray, current: dict, region: str, probe_id: str,
+) -> bool:
+    """Input: saved result, current UTC origin/(N,C) choices/(W,) map/config/labels.
+
+    Return bool for the exact current eligible trial pool, native (W,B,K)
+    scores, and complete unwhitened (K,U_retained) basis. Bins are relative
+    seconds. Dataclass loading already validates finite transform arrays and
+    disjoint retained/omitted IDs; no raw-count reconstruction occurs here.
+    """
+    if candidate.time_origin_s != origin_s or candidate.session_id != current["session_id"]:
+        return False
+    saved = candidate.regions.get(region)
+    if saved is None or saved.probe_id != probe_id:
+        return False
+    edges = choice_bin_edges(current["bin_width_s"])
+    if not np.array_equal(saved.bin_edges_s, edges):
+        return False
+    old_positions = saved.choice_positions
+    if (old_positions.ndim != 1 or not np.issubdtype(old_positions.dtype, np.integer)
+            or np.any(old_positions < 0) or np.any(old_positions >= len(candidate.choices))):
+        return False
+    previous = candidate.choices.iloc[old_positions]
+    expected = choices.iloc[positions]
+    for column in ("row_position", "trial_id", "choice_time", "action"):
+        if column not in previous or not np.array_equal(previous[column].to_numpy(), expected[column].to_numpy()):
+            return False
+    fitted = saved.transform
+    unit_ids = tuple(current["selection"][region]["unit_ids"])
+    observations = len(positions) * (len(edges) - 1)
+    components = min(observations, len(fitted.retained_unit_ids))
+    if (fitted.input_unit_ids != unit_ids or fitted.n_training_observations != observations
+            or fitted.actual_components != components or fitted.whiten
+            or saved.scores.shape != (len(positions), len(edges) - 1, components)
+            or not np.isfinite(saved.scores).all()):
+        return False
+    for labels in (fitted.retained_unit_ids, fitted.omitted_unit_ids):
+        if tuple(unit for unit in unit_ids if unit in labels) != labels:
+            return False
+    if not np.allclose(fitted.components @ fitted.components.T, np.eye(components), atol=1e-7):
+        return False
+    if (np.any(fitted.explained_variance < 0) or np.any(fitted.explained_variance_ratio < 0)
+            or saved.window_total_variance.shape != (len(positions),)
+            or not np.isfinite(saved.window_total_variance).all()
+            or not np.isfinite(saved.total_session_variance) or saved.total_session_variance <= 0):
+        return False
+    return (
+        candidate.meta.get("units", {}).get("scores") == "unwhitened standardized-unit scores"
+        and candidate.meta.get("axes", {}).get("scores") == ["choice_window", "time_bin", "session_pc"]
+    )
 
 
 def _file_identity(path: Path) -> dict:

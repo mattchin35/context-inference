@@ -56,6 +56,8 @@ def run_session_timeline(
     *,
     rerun: bool = False,
     dry_run: bool = False,
+    population_quality: str = "good_mua",
+    missing_label_policy: str = "mua",
 ) -> TimelineRunReport:
     """Prepare a session-local result or reuse an identical saved configuration.
 
@@ -64,13 +66,19 @@ def run_session_timeline(
     .5/.1/.05/.02 seconds. Run flags apply only at this orchestration boundary.
     Return a small report; outputs are written under session/analysis_runs.
     Dry-run reads only metadata and small selection files and writes nothing.
+    Keyword-only population_quality (good_mua/good) and missing_label_policy
+    (mua/exclude) select manual-label rules for both identity and actual loading.
+    These scalar policies do not change the (W,B,K) score axes or native units.
     """
     started = perf_counter()
     session = resolve_session_metadata(
         load_session_metadata(metadata_path), metadata_path
     )
     roles = resolve_timeline_probe_roles(session, probe_roles)
-    config = timeline_io.timeline_configuration(session, roles, bin_width_s)
+    config = timeline_io.timeline_configuration(
+        session, roles, bin_width_s, population_quality=population_quality,
+        missing_label_policy=missing_label_policy,
+    )
     identity = config["configuration_id"]
     if dry_run:
         return TimelineRunReport("dry-run", None, identity, perf_counter() - started)
@@ -357,7 +365,11 @@ def _prepare_session(
             continue
         try:
             start = perf_counter()
-            population = timeline_io.load_timeline_population(session, roles[role])
+            population = timeline_io.load_timeline_population(
+                session, roles[role],
+                population_quality=config.get("population_quality", "good_mua"),
+                missing_label_policy=config.get("missing_label_policy", "mua"),
+            )
             loading_s = perf_counter() - start
             positions = select_complete_choice_windows(
                 choices.choice_time.to_numpy(), population.coverage_s
