@@ -32,6 +32,28 @@ def test_public_source_identity_matches_existing_runner_without_numerical_reads(
     actual = preparation.product_source_ids(session, family, selection)
     assert actual == expected
     assert "MissingSite" not in actual
+    # Independent field/path assertions retain the oracle after the runner delegates.
+    site_ids = [] if family == "unit-spikes" else list(selection[1:] if family == "spike-ppc" else selection)
+    keys = set(site_ids)
+    probe = session.probes[0]
+    for site_id in site_ids:
+        site = next(site for site in session.sites if site.site_id == site_id)
+        assert actual[site_id]["probe_id"] == site.probe_id
+        assert actual[site_id]["saved_channel_index"] == site.saved_channel_index
+        assert [item["path"] for item in actual[site_id]["files"]] == [
+            str(path) for path in (probe.lfp_file, probe.lfp_metadata_file, probe.alignment_file)
+        ]
+    if family in {"unit-spikes", "spike-ppc"}:
+        keys.add("ProbeZ:17")
+        assert actual["ProbeZ:17"]["unit_channels"] == probe.unit_channels
+        assert [item["path"] for item in actual["ProbeZ:17"]["files"]] == [
+            str(path) for path in (probe.alignment_file, probe.spike_clusters_file,
+                                  probe.cluster_info_file, probe.channel_quality_file)
+        ]
+    if interval is not None:
+        keys.add("behavior_trials")
+        assert actual["behavior_trials"]["path"] == str(session.behavior.trial_table_file)
+    assert set(actual) == keys
 
 
 def test_source_identity_tracks_only_relevant_selection_inputs(runnable_session):
