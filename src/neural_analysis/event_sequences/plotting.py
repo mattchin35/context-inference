@@ -83,6 +83,7 @@ def build_central_view(
             panel.update(condition=key, row=row, col=col)
             relation = "opposite side" if previous == "incorrect" else "same side"
             panel["title"] = f"Prev. {previous.replace('_', ' ')} ({relation}) / {following}; n={panel['n']}"
+            panel["title"] = _coverage_title(panel)
             panel["message"] = _panel_message(panel, "trials")
             positions = panel["row_positions"]
             rows = packet["trials"].iloc[positions]
@@ -116,6 +117,7 @@ def build_transition_view(
     panel.update(condition=key, row=0, col=0)
     label = "L -> R" if direction == "left_to_right" else "R -> L"
     panel["title"] = f"{label}, x{repeats} incorrect repeats; n={panel['n']}"
+    panel["title"] = _coverage_title(panel)
     panel["message"] = _panel_message(panel, "transitions", packet["meta"]["transition_unavailable_reason"])
     positions = panel["row_positions"]
     trials = packet["trials"]
@@ -146,7 +148,7 @@ def plotly_figure(view: dict) -> go.Figure:
     """
     central = view["kind"] == "central"
     rows, cols = (3, 2) if central else (1, 1)
-    figure = make_subplots(rows=rows, cols=cols, subplot_titles=[panel["title"] for panel in view["panels"]], vertical_spacing=.12 if central else .08)
+    figure = make_subplots(rows=rows, cols=cols, subplot_titles=[panel["title"].replace("\n", "<br>") for panel in view["panels"]], vertical_spacing=.12 if central else .08)
     for panel in view["panels"]:
         row, col = panel["row"] + 1, panel["col"] + 1
         number = panel["row"] * cols + panel["col"] + 1
@@ -171,7 +173,7 @@ def plotly_figure(view: dict) -> go.Figure:
         figure.update_yaxes(range=[max(panel["n"], 1) - .5, -.5], tickvals=ticks,
                             ticktext=[panel["row_labels"][index] for index in ticks],
                             title_text="Trials (oldest first)" if central else "Episodes (oldest first)", row=row, col=col)
-        if panel["message"]:
+        if panel["message"] and not panel["n"]:
             figure.add_annotation(text=panel["message"], x=.5, y=.5,
                                   xref="x" + suffix + " domain", yref="y" + suffix + " domain",
                                   showarrow=False, align="center", font={"color": "black", "size": 13})
@@ -226,7 +228,7 @@ def matplotlib_figure(view: dict) -> MatplotlibFigure:
         axis.set_ylim(max(panel["n"], 1) - .5, -.5)
         axis.set_ylabel("Trials (oldest first)" if central else "Episodes (oldest first)", fontsize=13, color="black")
         axis.tick_params(labelsize=12, colors="black")
-        if panel["message"]:
+        if panel["message"] and not panel["n"]:
             axis.text(.5, .5, "\n".join(textwrap.wrap(panel["message"], 60)), transform=axis.transAxes,
                       ha="center", va="center", fontsize=13, color="black")
         if central:
@@ -308,6 +310,14 @@ def _panel_message(panel: dict, noun: str, context_reason: str = "") -> str:
     if panel["excluded_count"]:
         return (f"No {noun} with complete neural coverage; " if not panel["n"] else "") + counts
     return ""
+
+
+def _coverage_title(panel: dict) -> str:
+    """Input: panel with title/counts. Return title with partial-coverage counts above populated activity."""
+    title = panel["title"]
+    if panel["n"] and panel["excluded_count"]:
+        title += f"\nBehavioral matches={panel['behavioral_count']}; coverage excluded={panel['excluded_count']}"
+    return title
 
 
 def _central_customdata(rows, edges_s: np.ndarray, side: str, outcome: str) -> np.ndarray:
