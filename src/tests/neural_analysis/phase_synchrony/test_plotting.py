@@ -290,6 +290,8 @@ def test_selected_choice_inspection_uses_saved_waveform_phase_spikes_and_polar_c
     assert "8" in _texts(figure) and "21" in _texts(figure)
     assert "PPC" in _texts(figure) and "spike" in _texts(figure).lower()
     assert phase.probe_id in _texts(figure) and "channel" in _texts(figure).lower()
+    assert not figure.layout.xaxis.title.text and not figure.layout.xaxis2.title.text
+    assert "relative to choice" in figure.layout.xaxis3.title.text
 
 
 def test_missing_inspection_inputs_and_secondary_products_remain_explicitly_unavailable(saved_view):
