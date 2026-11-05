@@ -493,3 +493,20 @@ def test_partial_coverage_counts_do_not_obscure_real_activity(kind: str) -> None
     title = next(annotation for annotation in interactive.layout.annotations if "n=1" in annotation.text and annotation.yref == "paper")
     assert "excluded" in title.text.lower()
     assert not any("excluded" in annotation.text.lower() and annotation.yref != "paper" for annotation in interactive.layout.annotations)
+
+
+def test_interactive_labels_fit_the_app_grid_without_wide_colorbar_titles() -> None:
+    """No inputs. Return None; wrapped grid/segment headings and a vertical colorbar title preserve narrow browser space."""
+    packet = _packet("pc", width=0.02)
+    source = plotting.prepare_display_source(packet)
+    central = plotting.build_central_view(packet, source)
+    assert all(max(map(len, panel["title"].splitlines())) <= 32 for panel in central["panels"])
+    figure = plotting.plotly_figure(central)
+    assert figure.layout.coloraxis.colorbar.title.side == "right"
+    assert all(12 <= annotation.font.size <= 14 for annotation in figure.layout.annotations[:6])
+    transition = plotting.build_transition_view(packet, source, repeats=4)
+    assert all(max(map(len, label.splitlines())) <= 10 for label in transition["segment_labels"])
+    figure = plotting.plotly_figure(transition)
+    headings = [annotation for annotation in figure.layout.annotations if "repeat" in annotation.text and "n=" not in annotation.text]
+    assert len(headings) == 4 and all("<br>" in annotation.text for annotation in headings)
+    assert figure.layout.annotations[0].y > max(annotation.y for annotation in headings)
