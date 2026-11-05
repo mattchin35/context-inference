@@ -525,3 +525,33 @@ def test_empty_panel_explanations_wrap_inside_the_app_grid() -> None:
     assert len(explanations) == 5
     assert all("<br>" in annotation.text for annotation in explanations)
     assert all(max(len(line) for line in annotation.text.split("<br>")) <= 34 for annotation in explanations)
+
+
+@pytest.mark.parametrize("repeats", [1, 2, 3, 4])
+@pytest.mark.parametrize("zscore", [False, True])
+def test_static_transition_caption_fits_its_canvas(repeats: int, zscore: bool) -> None:
+    """Input: segment count/scaling mode. Return None; long saved identities fit the PNG width and avoid the time label."""
+    packet = _packet("pc")
+    packet["meta"]["session_id"] = "CT026_2026-08-28_134630"
+    source = plotting.prepare_display_source(packet, zscore=zscore)
+    view = plotting.build_transition_view(packet, source, repeats=repeats)
+    figure = plotting.matplotlib_figure(view)
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    caption_bounds = figure.texts[-1].get_window_extent(renderer)
+    time_label_bounds = figure.axes[0].xaxis.label.get_window_extent(renderer)
+    assert caption_bounds.x0 >= 0 and caption_bounds.x1 <= figure.bbox.width
+    assert caption_bounds.y0 >= 0 and caption_bounds.y1 < time_label_bounds.y0
+
+
+def test_static_trial_tick_labels_do_not_overlap_for_seventeen_rows() -> None:
+    """No inputs. Return None; uneven counts such as 17 rows keep large original-ID labels distinct in the PNG."""
+    packet = _packet(trials=_trials([1] * 19, [1] * 19, [1] * 19))
+    view = plotting.build_central_view(packet, plotting.prepare_display_source(packet))
+    assert view["panels"][0]["n"] == 17
+    figure = plotting.matplotlib_figure(view)
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    bounds = [text.get_window_extent(renderer) for text in figure.axes[0].get_yticklabels()]
+    assert len(bounds) >= 2
+    assert all(first.y0 >= second.y1 for first, second in zip(bounds, bounds[1:]))
