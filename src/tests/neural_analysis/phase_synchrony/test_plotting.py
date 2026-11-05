@@ -292,6 +292,9 @@ def test_selected_choice_inspection_uses_saved_waveform_phase_spikes_and_polar_c
     assert phase.probe_id in _texts(figure) and "channel" in _texts(figure).lower()
     assert not figure.layout.xaxis.title.text and not figure.layout.xaxis2.title.text
     assert "relative to choice" in figure.layout.xaxis3.title.text
+    plot_height = figure.layout.height - figure.layout.margin.t - figure.layout.margin.b
+    gap = figure.layout.yaxis3.domain[0] - figure.layout.polar.domain.y[1]
+    assert gap * plot_height >= 85  # Space for the time title and polar subplot title.
 
 
 def test_missing_inspection_inputs_and_secondary_products_remain_explicitly_unavailable(saved_view):
