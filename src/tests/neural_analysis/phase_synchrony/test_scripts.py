@@ -110,7 +110,9 @@ def test_batch_submits_sessions_with_unchanged_config_and_flags(monkeypatch):
     constructor.return_value.__exit__ = Mock(return_value=False)
     monkeypatch.setattr(batch, "ProcessPoolExecutor", constructor)
     reports = batch.run_batch(paths, selected, workers=1, order=("power",), rerun=True, prepare_only="phase")
-    constructor.assert_called_once_with(max_workers=1)
+    assert constructor.call_count == 1
+    assert constructor.call_args.kwargs["max_workers"] == 1
+    assert constructor.call_args.kwargs["mp_context"].get_start_method() == "spawn"
     assert [report.status for report in reports] == [0, 1]
     assert len(pool.submit.call_args_list) == 2
     for call, path in zip(pool.submit.call_args_list, paths):
