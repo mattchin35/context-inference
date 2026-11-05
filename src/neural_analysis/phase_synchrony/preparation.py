@@ -109,9 +109,9 @@ def load_site_lfp(
     filter/metric support. ``utc_offset_hours`` adds hours to LFP anchors only.
     Return calibrated float (sample,) uV values, native indices/validity and
     IRIG UTC seconds. Neither notch nor UTC resampling occurs here. Known AP
-    acquisition rate from sync metadata converts AP indices without erasing
-    IRIG drift; older metadata may use the existing inferred-rate fallback,
-    explicitly recorded in provenance.
+    nominal acquisition rate from sync metadata converts AP indices without
+    erasing IRIG drift. Missing/unverifiable nominal AP Hz is rejected: a rate
+    inferred from UTC anchor slopes cannot establish the resampling ratio.
     """
     sites, _ = select_metadata_inputs(session, site_ids=(site_id,))
     site = sites[0]
@@ -128,6 +128,11 @@ def load_site_lfp(
         with np.load(probe.alignment_file, allow_pickle=True) as archive:
             sync_meta = archive["meta"].item()
         acquisition_rate = sync_meta.get("sample_rate_hz")
+        if acquisition_rate is None or isinstance(acquisition_rate, bool):
+            raise ValueError("Open Ephys synchronization needs verified nominal sample_rate_hz")
+        acquisition_rate = float(acquisition_rate)
+        if not np.isfinite(acquisition_rate) or acquisition_rate <= 0:
+            raise ValueError("Open Ephys nominal acquisition sample_rate_hz must be finite and positive")
         sync = lfp_loading.build_open_ephys_lfp_irig_df(
             probe.alignment_file, rate_hz,
             continuous_sample_rate_hz=acquisition_rate,
@@ -139,7 +144,7 @@ def load_site_lfp(
         synchronization = {
             "file": _file_identity(probe.alignment_file),
             "acquisition_rate_hz": acquisition_rate,
-            "acquisition_rate_source": "sync_metadata" if acquisition_rate is not None else "irig_slope_fallback",
+            "acquisition_rate_source": "sync_metadata",
             "continuous_start_sample_ix": sync_meta.get("continuous_start_sample_ix", 0),
             "utc_offset_hours": utc_offset_hours,
         }

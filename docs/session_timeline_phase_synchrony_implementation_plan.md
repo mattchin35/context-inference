@@ -25,13 +25,13 @@ and before handoff. Append exact evidence to Section 10.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `6d58373` (WP3 source). Recheck; never reset to this observation. |
-| Package / authority | WP4 GREEN; full Round 1 authorized by user: "alright, then begin implementation". |
-| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`. WP4 GREEN; no experimental jobs/browser server. |
-| Feature files | WP1-WP3 source and tests committed; WP4 tests in progress. Plan maintained in working tree. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
+| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `11284ad` (WP5a tests). Recheck; never reset to this observation. |
+| Package / authority | WP5a GREEN; full Round 1 authorized by user: "alright, then begin implementation". |
+| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`. WP5a GREEN; no experimental jobs/browser server. |
+| Feature files | WP1-WP4 source/tests and WP5a tests committed; run_session.py core in progress. Plan maintained in working tree. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
-| Evidence | WP1-WP3 RED/GREEN/regressions and commits in Section 10; WP3 165 passing checks. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
-| Next action | Review WP4 GREEN; test commit `6f8650f`. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
+| Evidence | WP1-WP4 RED/GREEN/regressions and commits in Section 10; WP4 235 passing checks. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
+| Next action | Review WP5a execution-core GREEN. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
 
 Approval of the full Round 1 sequence includes its synthetic and designated
 single-session validation unless the user limits that approval. Record scope
@@ -50,7 +50,7 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | WP2 shared PSD/power/coherence | Sol worker, high | GREEN reviewed; complete | `705f8d8`; 1 expected missing-feature collection error, 0.52 s | Worker 107 passed; lead 96 plus 11 runtime regressions; source reviewed |
 | WP3 phase/LFP metrics/spike PPC | Sol worker, high | GREEN reviewed; complete | `14fc7ea`, `cd046db`; review RED `87952d2` (6 failures) | 165 passed, no warnings; lead reviewed and reproduced |
 | WP4 persistence/discovery | Sol worker, high | GREEN reviewed; complete | `6f8650f`; review RED `d867a0e` (10), `76bde37` (3) | 235 passed; lead reproduced and reviewed all source |
-| WP5a execution/timing core | Sol worker, high | Not started; freeze stage contracts | Not run | Not run |
+| WP5a execution/timing core | Sol worker, high | GREEN released after lead RED review | `11284ad`; 1 expected missing-runner collection error, 1.16 s | Pending |
 | WP5b thin CLI/batch | Optional Luna, medium, or lead | Not started; wrappers match frozen contracts | Not run | Not run |
 | WP6a scientific figures | Sol worker, high | Not started; accept geometry/units/scales | Not run | Not run |
 | WP6b route/widgets/Refresh | Optional Luna, medium, or lead | Not started; browser integration | Not run | Not run |
@@ -914,3 +914,50 @@ Exact next action, owner, and remaining authority or user-inspection gate:
   and unrelated changes preserved. No experimental signal reads/jobs or
   performance claims. Next: WP5a execution/timing core RED using frozen records
   and metadata-only cache discovery. CLI/batch remains the following gate.
+
+### 2026-11-04 21:26 America/New_York - WP5a / execution-core RED dispatch
+
+- Baseline HEAD `883803a`; same Sol/high worker. Exact writable path:
+  new src/tests/neural_analysis/phase_synchrony/test_runner.py. No source writes.
+- Test real temporary inputs and frozen scientific APIs: requested-only
+  prerequisites, shared preparation/PSD reuse, primary-first publication under
+  controlled holds, independent failure continuation, exclusive stage timing,
+  durable measurements and additive runs. Dry-run forbids signal arrays and
+  writes, including saved numeric preparation loads.
+- Execution-only API precedes CLI. Main script snapshot is required now;
+  batch snapshot is added when the actual wrapper exists in WP5b, with no fake
+  implementation before its tests. Experimental output gate remains closed
+  until synthetic acceptance; no experimental arrays have been loaded.
+- Next: lead reviews/reproduces/commits RED, releases run_session.py core.
+
+### 2026-11-04 21:35 America/New_York - WP5a / RED reviewed and committed
+
+- Lead reviewed all 301 runner-test lines and reproduced the expected missing
+  run_session collection error in 1.16 s. Test-only commit `11284ad`.
+- Same Sol/high worker GREEN writable source: new phase_synchrony/run_session.py
+  only. Frozen report: integer status, run directory, requested output paths,
+  stage dictionaries and timing summary. Numerical/IO helpers remain separate.
+- Rerun policy: recompute requested outputs while reusing compatible
+  prerequisites; preparation-only rerun forces its chosen preparation. This
+  supports incremental power-from-PSD measurement without changing bands.
+- Require controlled primary-first publication, failure isolation, stage costs
+  charged once, metadata-only dry-run, and new dated immutable session runs.
+  No experimental arrays/jobs, CLI/batch implementation, or new dependencies.
+- Next: review focused/combined GREEN and core before WP5b wrappers.
+
+### 2026-11-04 21:41 America/New_York - upstream clock-conversion correction
+
+- During WP5a work, lead identified that load_site_lfp's legacy inferred-AP-
+  rate fallback confounds nominal AP-to-LFP resampling ratio with measured
+  IRIG drift. This cannot establish verified native indices for strict alignment.
+  CT026 already records nominal AP 30000 Hz and is unaffected.
+- Lead added a real fixture removing only nominal sample_rate_hz. RED:
+  1 failed (did not raise), 22 deselected, 1.11 s; test commit `a04b101`.
+- Lead then changed only the new preparation.py loader to require a finite
+  positive nominal AP rate, rejecting missing/bool/unverifiable rates clearly
+  instead of silently inferring from UTC slopes. No external library changes.
+  Self-review of this small input-contract correction; worker owns only the
+  independent run_session.py file and was notified before lead edits.
+- GREEN: test_preparation.py plus existing test_lfp_loading.py, 34 passed in
+  1.26 s. No experimental arrays loaded. Next: integrate this correction and
+  continue WP5a core; invalid site inputs must not disable unrelated sites.
