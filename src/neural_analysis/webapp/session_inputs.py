@@ -64,6 +64,8 @@ PLOT_VIEW_CONTEXT_ENCODING = "Context encoding results"
 
 PLOT_VIEW_SESSION_TIMELINE = "Session timeline and PCA"
 
+PLOT_VIEW_PHASE_SYNCHRONY = "Session timeline: LFP power and synchrony"
+
 PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_UNIT_RASTER,
     PLOT_VIEW_TRIAL_SPIKES,
@@ -79,6 +81,7 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_INTERREGIONAL,
     PLOT_VIEW_CONTEXT_ENCODING,
     PLOT_VIEW_SESSION_TIMELINE,
+    PLOT_VIEW_PHASE_SYNCHRONY,
 ]
 
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
@@ -226,7 +229,7 @@ def metadata_view_availability(
             availability[view] = MetadataViewAvailability(True, "saved predictions available")
         elif not behavior_ready:
             availability[view] = MetadataViewAvailability(False, behavior_reason)
-        elif view == PLOT_VIEW_SESSION_TIMELINE:
+        elif view in {PLOT_VIEW_SESSION_TIMELINE, PLOT_VIEW_PHASE_SYNCHRONY}:
             # This view loads probes independently and also supports behavior only.
             availability[view] = MetadataViewAvailability(True, "available")
         elif view in lfp_only and not lfp_ready:

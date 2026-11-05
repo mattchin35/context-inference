@@ -157,6 +157,7 @@ from src.neural_analysis.webapp.session_inputs import (
     PLOT_VIEW_INTERREGIONAL,
     PLOT_VIEW_CONTEXT_ENCODING,
     PLOT_VIEW_SESSION_TIMELINE,
+    PLOT_VIEW_PHASE_SYNCHRONY,
     PLOT_VIEW_LFP_PHASE_CLUSTERING,
     PLOT_VIEW_LFP_SUMMARY,
     PLOT_VIEW_OPTIONS,
@@ -204,6 +205,7 @@ from src.neural_analysis.webapp.condition_generalization_views import (
 )
 from src.neural_analysis.webapp.task_decoding_views import render_task_decoding_view
 from src.neural_analysis.webapp.timeline_view import render_session_timeline_view
+from src.neural_analysis.webapp.phase_synchrony_view import render_phase_synchrony_view
 from src.neural_analysis.webapp.unit_views import (
     PAGE_SIZE_OPTIONS,
     POPULATION_PSTH_UNIT_SCOPE_OPTIONS,
@@ -684,6 +686,9 @@ def _start_metadata_webapp(session: ResolvedSession) -> str | None:
     if plot_view == PLOT_VIEW_SESSION_TIMELINE:
         render_session_timeline_view(st, session)
         return None
+    if plot_view == PLOT_VIEW_PHASE_SYNCHRONY:
+        render_phase_synchrony_view(st, session)
+        return None
     return plot_view
 
 
@@ -773,6 +778,10 @@ def main(argv: Sequence[str] = ()) -> None:
         )
         _render_path_browser()
         plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+
+    if plot_view == PLOT_VIEW_PHASE_SYNCHRONY:
+        st.info("Session LFP power and synchrony uses session metadata. Launch with --session-metadata <session_root>/neural_session.json.")
+        return
 
     if plot_view == PLOT_VIEW_SESSION_TIMELINE:
         st.info(

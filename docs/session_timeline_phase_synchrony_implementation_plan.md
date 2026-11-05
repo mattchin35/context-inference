@@ -26,12 +26,12 @@ and before handoff. Append exact evidence to Section 10.
 | Field | Current value |
 | --- | --- |
 | Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `8f9443f` (WP5b source). Recheck; never reset to this observation. |
-| Package / authority | WP6a accepted; WP6b GREEN next. Full Round 1 authorized by user: "alright, then begin implementation". |
-| Team / running work | Lead runtime model/effort not exposed; scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, stopped after plotting. Lead owns UI. No experimental jobs/browser server. |
+| Package / authority | WP6b corrected GREEN; WP7a browser next. Full Round 1 authorized by user: "alright, then begin implementation". |
+| Team / running work | Lead runtime model/effort not exposed; scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`, stopped after read-only UI review. Lead owns integration/browser. No experimental jobs/browser server yet. |
 | Feature files | WP1-WP5b source/tests and WP6a tests committed. Lead current-CLI usage additions in SESSION_TIMELINE.md/README.md are uncommitted. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
 | Evidence | WP1-WP4 RED/GREEN/regressions and commits in Section 10; WP4 235 passing checks. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
-| Next action | Implement thin WP6b UI against committed RED tests `f4bfd03`. CT026 uses `ProbeB:8` with `HPC1`; optional additional-unit timing question pending, no other units inferred. |
+| Next action | Review/commit WP6b source, inspect full seeded session in browser, then CT026 validation if accepted. CT026 uses `ProbeB:8` with `HPC1`; optional additional-unit timing question pending, no other units inferred. |
 
 Approval of the full Round 1 sequence includes its synthetic and designated
 single-session validation unless the user limits that approval. Record scope
@@ -53,8 +53,8 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | WP5a execution/timing core | Sol worker, high | GREEN reviewed; complete | `11284ad`; missing-runner RED; `109986e`, 7 input/reporting failures | 20 runner tests; lead 256 combined checks passed; source reviewed |
 | WP5b thin CLI/batch | Lead; Sol worker read-only review | GREEN reviewed; complete | `b800756`; fixture `6e11de7`; review `987fab4`; process context `db4aea1` | 196 combined; final 12 focused passed without warnings |
 | WP6a scientific figures | Sol worker, high | GREEN reviewed; complete | `0e3f57f`; review `e929a1d` (5); label `8063a0d` (1) | 17 plotting tests; lead 247 combined; PNGs visually reviewed |
-| WP6b route/widgets/Refresh | Lead | RED committed; GREEN next | `f4bfd03`, expected missing UI feature error, 1.76 s | Pending |
-| WP7a synthetic/regression/browser audit | Sol lead; sequential Sol review if useful | Not started; synthetic gate | Not run | Not run |
+| WP6b route/widgets/Refresh | Lead; worker read-only review | Corrected GREEN; source commit next | `f4bfd03`; fixture `721307e`; selection `6fa2d40` (3); status `d099477` (3); payload `5fee607` (1) | 12 UI tests passed; browser next |
+| WP7a synthetic/regression/browser audit | Lead | Seeded full pipeline passed; browser pending | Existing features already unit-TDD verified; acceptance tests `697a954` | 2 seeded integration tests passed, 3.67 s |
 | WP7b CT026 validation/timings | Sol lead | Not started; user inspects output | Not applicable unless correction needed | Not run |
 | WP8 usage/final handoff | Lead; optional Luna for literal docs | Not started; Round 1 acceptance | Not applicable for docs only | Not run |
 
@@ -1134,3 +1134,30 @@ WP6b implementation notes for the next gate (no UI source written yet):
   synthetic/browser gate. Optional async question asks whether to skip the
   plan's multi-unit timing or receive additional explicit IDs; ProbeB:8/HPC1
   single-unit validation proceeds independently.
+
+### 2026-11-04 22:30 America/New_York - WP6b / reviewed corrections and synthetic acceptance
+
+- Lead implemented the thin saved-only view and localized app/session-input
+  routes after WP6a acceptance. Corrected genuine test-only pandas repr
+  truncation in `721307e`, comparing actual dataframe path cells instead.
+- Review RED `6fa2d40`: 3 failed, 6 deselected, 2.27 s; explicit empty display
+  selections, actual saved unit's LFP site, and no-unit inspection now honored.
+- Worker read-only review found per-selection missing labels, irrelevant-setting
+  attempt filtering and missing-predecessor failure reporting. Lead RED
+  `d099477`: 3 failed, 1 passed, 8 deselected in 2.10 s. Corrected matching uses
+  each family's product_identity parameters and reports absent source as None;
+  attempts ordered by parsed UTC run identity, independent of filesystem mtime.
+- Payload RED `5fee607`: 1 failed in 1.97 s. Actual chart JSON bytes and separate
+  Python serialization seconds now shown; caption honestly notes the shared
+  renderer serializes again. No browser-latency claim. All 12 UI tests pass.
+- Lead wrote seeded full-pipeline acceptance tests `697a954`: 2 passed in
+  3.67 s on existing TDD-covered features; no new implementation/RED invented.
+  Two independent drifting probe clocks, three sites/pairs, all four families,
+  both intervals, 20 saved products, native reuse across separate invocations,
+  shared auto-PSDs, incremental power, saved/direct agreement, warm reuse and
+  restart after one pair failure. Observed 3/6 power products already durable
+  at each controlled primary/secondary coherence failure; independent pairs survive.
+- No experimental arrays loaded. Next: commit reviewed UI source after combined
+  regressions, launch seeded session locally and inspect hover/pan/Refresh.
+- Lead combined feature, metadata, timeline IO/webapp/chart and package checks:
+  302 passed in 12.32 s, bundled Node enabled; no warnings. UI source accepted.
