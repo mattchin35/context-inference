@@ -511,3 +511,6 @@ def test_interactive_labels_fit_the_app_grid_without_wide_colorbar_titles() -> N
     headings = [annotation for annotation in figure.layout.annotations if "repeat" in annotation.text and "n=" not in annotation.text]
     assert len(headings) == 4 and all("<br>" in annotation.text for annotation in headings)
     assert figure.layout.annotations[0].y > max(annotation.y for annotation in headings)
+    caption = figure.layout.annotations[-1]
+    assert caption.y <= -0.20
+    assert max(len(line) for line in caption.text.split("<br>")) <= 90
