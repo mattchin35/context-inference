@@ -29,6 +29,7 @@ def plot_synchrony_timeline(
     time_range_s: tuple[float, float] | None = None, viewport_revision: int = 0,
     event_tracks: tuple[str, ...] = (), show_context: bool = True,
     heatmap_selection: tuple[str, tuple[str, ...]] | None = None,
+    bands: tuple[str, ...] | None = None,
 ) -> go.Figure:
     """Plot saved per-choice scalar results on the original elapsed-session clock.
 
@@ -41,11 +42,16 @@ def plot_synchrony_timeline(
     Optional (family,selection) heatmap uses actual interval edges/Hz and blank
     gaps, or separate true tiles when intervals overlap. No analysis or file
     reads occur. Time-axis uirevision changes only with explicit navigation.
+    bands optionally selects categorical summary band names (for example theta
+    or gamma); None retains all summary rows. This display filter does not
+    change saved arrays, frequency inspection, units or full-product limits.
     """
     if phase_metric not in {"plv", "ppc"}:
         raise ValueError("phase_metric must be plv or ppc")
     selected = _validated_products(behavior, tuple(products), interval)
     rows = _metric_rows(selected, phase_metric)
+    if bands is not None:
+        rows = [row for row in rows if row["product"].record.band_names[row["band"]] in bands]
     tracks = tuple(track for track in event_tracks if track in behavior_plotting.available_event_tracks(behavior.events))
     heatmap = next((product for product in selected if heatmap_selection is not None
                     and product.meta["identity"]["family"] == heatmap_selection[0]
@@ -92,6 +98,8 @@ def plot_synchrony_timeline(
                         row=len(titles), col=1)
     missing = [family for family in METRIC_FAMILIES if not any(row["family"] == family for row in rows)]
     caption = _caption(interval) + (" Unavailable saved tracks: " + ", ".join(missing) + "." if missing else "")
+    if bands is not None:
+        caption += " Displayed summary bands: " + ", ".join(bands) + "."
     _light_layout(figure, caption, height=height, navigator_height_px=navigator_height_px)
     figure.update_layout(uirevision=f"{behavior.session_id}:{behavior.time_origin_s}:{viewport_revision}",
                          meta={"caption": caption, "interval": interval, "unavailable": missing,

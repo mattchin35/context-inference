@@ -1261,3 +1261,27 @@ WP6b implementation notes for the next gate (no UI source written yet):
   Validation review_notes.md/summary.md include figure links and user-review
   status. No additional units, sessions, batch, Round 2 or major optimization.
   User's pre-existing staged/unstaged/untracked work remains preserved.
+
+### 2026-11-05 - requested viewer clarity update
+
+- User requested actual centered-window labels and a less crowded view with
+  one band visible at once. Scoped plan: format the existing interval selector;
+  add a display-only summary-band selector; filter rows before figure assembly.
+  No dependencies, cache/config identities, units, shapes or computations change.
+- Tests first: explicit formatted windows preserving primary/secondary saved
+  keys; theta default, gamma and both display choices; unchanged saved scalars,
+  full-product limits and stable chart/navigation identity; forbidden analysis
+  calls during switching. RED: 4 failed, 31 deselected in 2.40 s; `ad56f45`.
+- Genuine test-only correction `201cf4f`: decode Plotly's base64 typed-array
+  transport instead of assuming JSON lists; retain exact saved-value comparison.
+- Implementation extends plot_synchrony_timeline with optional bands tuple;
+  default None preserves existing all-band figures/exports. The UI defaults to
+  theta and offers gamma/both. Frequency inspection remains independently
+  controlled. New labels derive seconds from INTERVAL_BOUNDS_S.
+- GREEN: feature directory and native chart lifecycle checks, 238 passed in
+  11.01 s (Node enabled). Saved CT026 products reused for browser verification;
+  no experimental computation rerun. Existing unrelated staged/dirty work kept.
+- Live CT026 viewer verified both explicit interval choices and theta/gamma
+  switching. Gamma displayed only gamma rows with the panned choice positions
+  preserved; restored primary/theta for review at localhost:8505. Screenshot
+  saved in ignored .pytest_cache/ct026_band_selector_20261105.png.

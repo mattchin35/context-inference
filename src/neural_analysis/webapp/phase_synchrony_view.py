@@ -141,7 +141,14 @@ def render_phase_synchrony_view(st_module: object, session: ResolvedSession) -> 
         settings = st_module.sidebar.selectbox("Saved analysis settings", options=list(range(len(configs))),
                                                format_func=lambda index: _settings_label(configs[index]), key=f"{scope}_settings")
         base = configs[settings]
-        interval = st_module.sidebar.selectbox("Centered interval", ("primary", "secondary"), key=f"{scope}_interval")
+        interval_labels = {name: f"{name.title()}: [{start:g}, {stop:+g}) s around choice"
+                           for name, (start, stop) in results.INTERVAL_BOUNDS_S.items()}
+        interval = st_module.sidebar.selectbox("Centered interval", tuple(interval_labels),
+                                               format_func=interval_labels.__getitem__, key=f"{scope}_interval")
+        band_labels = {band.name: f"{band.name.title()} ({band.lower_hz:g}-{band.upper_hz:g} Hz)" for band in base.bands}
+        band_labels["both"] = "Both bands"
+        band = st_module.sidebar.selectbox("Summary band", tuple(band_labels),
+                                           format_func=band_labels.__getitem__, key=f"{scope}_band")
         metric = st_module.sidebar.radio("LFP phase metric", ("plv", "ppc"), format_func=str.upper, key=f"{scope}_metric")
         site_ids = [site.site_id for site in session.sites]
         sites = st_module.sidebar.multiselect("LFP sites", site_ids, default=site_ids, key=f"{scope}_sites")
@@ -188,11 +195,14 @@ def render_phase_synchrony_view(st_module: object, session: ResolvedSession) -> 
             st_module.info("Not prepared / unavailable: " + "; ".join(f"{family} {' / '.join(selection)} ({window})"
                                                                       for family, selection, window in missing)
                            + ". Prepare in a separate terminal, then Refresh results.")
-        st_module.caption(_settings_label(config) + "; gamma excludes 58-62 Hz. No significance tests; no causal interpretation.")
+        exclusions = "; gamma excludes 58-62 Hz" if band in {"gamma", "both"} else ""
+        st_module.caption(f"Showing {band_labels[band]} summaries. " + _settings_label(config) + exclusions
+                          + ". No significance tests; no causal interpretation.")
         started = perf_counter()
         figure = plotting.plot_synchrony_timeline(behavior, products, interval=interval, phase_metric=metric,
                                                   time_range_s=visible, viewport_revision=revision,
-                                                  event_tracks=tuple(tracks), show_context=context, heatmap_selection=heatmap)
+                                                  event_tracks=tuple(tracks), show_context=context, heatmap_selection=heatmap,
+                                                  bands=None if band == "both" else (band,))
         construction_s = perf_counter() - started
         started = perf_counter()
         payload_bytes = len(figure.to_json().encode("utf-8"))

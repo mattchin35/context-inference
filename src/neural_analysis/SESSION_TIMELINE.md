@@ -762,6 +762,15 @@ Every unavailable selected component is identified, including a missing site
 when other sites already have power results. Switching interval does not compute
 an unprepared interval.
 
+The interval dropdown shows **Primary: [-1, +1) s around choice** and
+**Secondary: [-2, +2) s around choice**. **Summary band** initially shows
+**Theta (6-10 Hz)** only. Select **Gamma (30-80 Hz)** to show gamma summaries
+instead, or **Both bands** for the complete set. Gamma still excludes 58-62 Hz.
+Band switching filters summary rows across power, coherence, LFP PLV/PPC and
+selected-unit PPC; it does not recompute, alter saved values, or reset the
+current panned interval. The optional frequency heatmap and selected-choice
+frequency inspection remain separate controls.
+
 Time zero and choice labels use the same original behavior as the PCA timeline.
 Use **Visible duration (s)**, **Window start (s)** or **Jump to trial** to request
 a range. Dragging the chart or its compact navigator changes the range locally.
