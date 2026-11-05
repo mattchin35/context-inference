@@ -25,13 +25,13 @@ and before handoff. Append exact evidence to Section 10.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `cd046db` (WP3 tests). Recheck; never reset to this observation. |
-| Package / authority | WP3 GREEN; full Round 1 authorized by user: "alright, then begin implementation". |
-| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`. WP3 GREEN; no experimental jobs/browser server. |
-| Feature files | WP1/WP2 source and tests committed; WP3 tests committed, implementation in progress. Plan maintained in working tree. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
+| Date / branch / inspected HEAD | 2026-11-04 / `refactor` / `6d58373` (WP3 source). Recheck; never reset to this observation. |
+| Package / authority | WP4 GREEN; full Round 1 authorized by user: "alright, then begin implementation". |
+| Team / running work | Lead runtime model/effort not exposed; one scientific worker `gpt-6.1-sol` / `high`, agent `/root/scientific_worker`. WP4 GREEN; no experimental jobs/browser server. |
+| Feature files | WP1-WP3 source and tests committed; WP4 tests in progress. Plan maintained in working tree. Scientific spec remains user-staged with unstaged refinements; HEAD alone omits it. |
 | Other dirty work | Staged PCA spec, single-unit plan, and ridge spec; unstaged `src/main.py` and `src/neural_analysis/sync_ephys.py`; other untracked files. Preserve all of it. |
-| Evidence | WP1/WP2 RED/GREEN/regressions and commits in Section 10; WP3 RED committed. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
-| Next action | Review WP3 GREEN, then WP4 RED. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
+| Evidence | WP1-WP3 RED/GREEN/regressions and commits in Section 10; WP3 165 passing checks. No experimental signal arrays loaded or feature runtime benchmarks yet. Metadata confirms selected unit eligibility. |
+| Next action | Review WP4 GREEN; test commit `6f8650f`. CT026 spike validation selected by user: `ProbeB:8` with `HPC1`; no other units inferred. |
 
 Approval of the full Round 1 sequence includes its synthetic and designated
 single-session validation unless the user limits that approval. Record scope
@@ -49,7 +49,7 @@ diff and evidence. Replace `not run` with commands/results/commits when obtained
 | WP1 inputs/config/preparation contracts | Sol worker, high | GREEN reviewed; complete | `0726ee1`; fixture/acceptance follow-up `ef27189` | 44 feature tests passed; 44 metadata/loading regressions passed; source reviewed by lead |
 | WP2 shared PSD/power/coherence | Sol worker, high | GREEN reviewed; complete | `705f8d8`; 1 expected missing-feature collection error, 0.52 s | Worker 107 passed; lead 96 plus 11 runtime regressions; source reviewed |
 | WP3 phase/LFP metrics/spike PPC | Sol worker, high | GREEN reviewed; complete | `14fc7ea`, `cd046db`; review RED `87952d2` (6 failures) | 165 passed, no warnings; lead reviewed and reproduced |
-| WP4 persistence/discovery | Sol worker, high | Not started; accept identities/publication | Not run | Not run |
+| WP4 persistence/discovery | Sol worker, high | GREEN reviewed; complete | `6f8650f`; review RED `d867a0e` (10), `76bde37` (3) | 235 passed; lead reproduced and reviewed all source |
 | WP5a execution/timing core | Sol worker, high | Not started; freeze stage contracts | Not run | Not run |
 | WP5b thin CLI/batch | Optional Luna, medium, or lead | Not started; wrappers match frozen contracts | Not run | Not run |
 | WP6a scientific figures | Sol worker, high | Not started; accept geometry/units/scales | Not run | Not run |
@@ -841,3 +841,76 @@ Exact next action, owner, and remaining authority or user-inspection gate:
   signal arrays or feature performance benchmarks yet.
 - Lead commits results.py/preparation.py/computation.py and this handoff only.
   Next gate: WP4 tests for atomic persistence, compatibility and discovery.
+
+### 2026-11-04 21:03 America/New_York - WP4 / RED dispatch
+
+- Accepted WP3 source commit `6d58373`; same Sol/high worker. Exact writable
+  tests: new test_results.py and test_stage_independence.py under
+  src/tests/neural_analysis/phase_synchrony/. No source changes released.
+- Cover all prepared/result records (including calibrated continuous LFP and
+  its IRIG anchors), named arrays/meta, inspection inputs, no mutation,
+  atomic immutable publication, legacy/alignment/threshold rejection,
+  deterministic completion-time selection, independent stages and writer locks.
+- No general provenance/workflow engine, extra per-NPZ receipt or dependencies.
+  Next: inspect/reproduce/commit RED, then release bounded persistence GREEN.
+
+### 2026-11-04 21:11 America/New_York - WP4 / RED reviewed and committed
+
+- Lead reviewed 457 lines in both persistence test files and reproduced RED:
+  42 expected missing-API AttributeErrors in 1.80 s; all scientific fixtures
+  and dependencies ran successfully. Lead test commit `6f8650f` only.
+- Frozen families: native-lfp, unit-spikes, waveforms, psd, phase, power,
+  coherence, lfp-phase, spike-ppc. Native/unit interval identity is None;
+  windowed families preserve primary/secondary. Nine typed records, named
+  clock arrays and ragged-spike flat/offset arrays; dictionary-valued meta.
+- Metadata-only discovery is separately testable and restricted to feature
+  roots, so dry-run does not load saved scientific arrays. Artifact run stamps
+  must not mutate records or scientific identities.
+- Same Sol/high worker GREEN writable source results.py only. No source
+  changes elsewhere, general workflow machinery, new dependencies or
+  experimental reads. Next: inspect source and verify corrected GREEN.
+
+### 2026-11-04 21:19 America/New_York - WP4 / scientific binding and planning RED
+
+- Initial worker GREEN: 222 feature/metadata/work-cache/timeline-IO checks
+  passed in 2.57 s. Lead read the explicit codecs, identities, publication,
+  discovery and lock implementation. Source edits stopped for review findings.
+- Record type alone did not bind publication to actual site/unit, interval,
+  phase frequencies, Welch settings, bands or native notch settings. Lead
+  added eight publication mismatch cases and one self-consistent identity
+  relabeling case on load. Also added metadata-only discovery before a
+  numerical preparation ID is known, required by cold/warm dry-run planning.
+- Focused pytest -k 'publication_identity or relabelled or resolve_known_inputs'
+  failed 10 cases, 42 deselected, in 1.32 s. Lead committed tests `d867a0e`
+  before releasing fixes. No weakened tests or numerical estimator changes.
+- Narrow GREEN: results.py plus computation.py only to relocate its existing
+  phase validator into a shared public data-contract helper, avoiding duplicate
+  validation/private cross-module import cycles. No new general framework.
+- Next: verify bindings and metadata-only planning, then accept WP4 source.
+
+### 2026-11-04 21:24 America/New_York - WP4 / preprocessing provenance RED
+
+- Identity/planning fixes passed 52 persistence tests and 232 feature/existing
+  checks. Lead reviewed the binding implementation and common phase-validator
+  move (results.validate_phase_contract, imported by computation).
+- Coherence lacked flat actual-notch metadata, and derived phase binding
+  checked notch enabled but not source Q. Lead added three explicit mismatch
+  tests: coherence false -> claimed true, and Q=30 -> claimed Q=20 in LFP
+  phase/spike PPC. RED: 3 failed, 37 deselected, 1.20 s; commit `76bde37`.
+- Released only coherence metadata fields and derived-source Q validation
+  fixes. No numerical estimator or test weakening. Next: final WP4 GREEN.
+
+### 2026-11-04 21:25 America/New_York - WP4 / final GREEN reviewed
+
+- Lead read all codecs, identities, atomic publication, metadata/full loading,
+  discovery and writer-lock source, then reviewed the common validator and
+  actual settings bindings. Metadata-only discovery supports planning without
+  numerical preparation hashes; full loading validates actual content/settings.
+- Final focused preprocessing checks: 3 passed. Lead full command: uv/cache
+  environment above, pytest -q src/tests/neural_analysis/phase_synchrony plus
+  test_session_metadata.py, test_lfp_summary_work_cache.py and
+  test_session_timeline_io.py: 235 passed in 2.74 s. Worker: 235 passed 2.77 s.
+- Lead commits results.py, computation.py and this handoff only. User staging
+  and unrelated changes preserved. No experimental signal reads/jobs or
+  performance claims. Next: WP5a execution/timing core RED using frozen records
+  and metadata-only cache discovery. CLI/batch remains the following gate.
