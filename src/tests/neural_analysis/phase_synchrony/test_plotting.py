@@ -184,6 +184,29 @@ def test_frequency_heatmap_honors_saved_validity_even_for_finite_stored_values(s
     assert np.isnan(np.asarray(heatmap.z)[frequency, 0])
 
 
+def test_long_timeline_uses_compact_navigator_and_local_heatmap_colorbar(saved_view):
+    """Browser-visible controls remain compact when many metric rows make a tall figure."""
+    behavior, products = saved_view
+    figure = plotting.plot_synchrony_timeline(behavior, products, heatmap_selection=("lfp-phase", ("SiteA", "SiteB")))
+    navigator = figure.layout[figure.layout.meta["time_axes"][-1]]
+    assert navigator.rangeslider.thickness is not None
+    assert navigator.rangeslider.thickness * figure.layout.height <= 80
+    heatmap = next(trace for trace in figure.data if trace.type == "heatmap")
+    domain = _axis(figure, heatmap).domain
+    assert heatmap.colorbar.len <= domain[1] - domain[0] + 1e-12
+    assert domain[0] <= heatmap.colorbar.y <= domain[1]
+    caption = next(annotation for annotation in figure.layout.annotations if "temporal dependence" in annotation.text)
+    assert caption.y == 0 and caption.yshift < 0
+
+
+def test_hover_reports_only_the_metric_observation_type(saved_view):
+    """Physical power hovers omit null spike fields; unit PPC hovers omit irrelevant Welch counts."""
+    behavior, products = saved_view
+    figure = plotting.plot_synchrony_timeline(behavior, products)
+    assert all("spike" not in trace.hovertemplate.lower() for trace in _metric_traces(figure, "power"))
+    assert all("segments" not in trace.hovertemplate.lower() for trace in _metric_traces(figure, "spike-ppc"))
+
+
 def test_lfp_band_hover_counts_only_retained_band_frequencies(saved_view, scientific_records):
     """Unsupported 2-Hz samples cannot change the support count shown for a fully supported theta band."""
     behavior, products = saved_view
