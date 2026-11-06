@@ -339,7 +339,7 @@ def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
         lambda _sessions: (_ for _ in ()).throw(AssertionError("HMM path reached")),
     )
 
-    result = main_module.main_multisession(agent_agreement_only=True)
+    result = main_module.main_multisession(agent_agreement_only=True, choice_window_sizes=())
 
     assert result is None
     assert calls == ["agreement"]
