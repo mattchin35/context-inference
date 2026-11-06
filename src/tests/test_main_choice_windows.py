@@ -178,7 +178,8 @@ def test_multisession_collection_only_skips_windows_full_mode_includes_them(
     calls = []
     monkeypatch.setattr(main, "resolve_multisession_dates", lambda **kwargs: ["date"])
     monkeypatch.setattr(main, "find_saved_session_by_date", lambda **kwargs: object())
-    monkeypatch.setattr(main, "load_saved_session_analysis", lambda session: object())
+    monkeypatch.setattr(main, "load_saved_session_analysis",
+                        lambda session: SimpleNamespace(session=SimpleNamespace()))
     monkeypatch.setattr(main, "concatenate_saved_sessions", lambda sessions: object())
     monkeypatch.setattr(main, "build_multisession_session", lambda **kwargs: object())
     monkeypatch.setattr(main, "run_or_collect_multisession_analysis", lambda **kwargs: calls.append("collection"))

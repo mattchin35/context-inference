@@ -29,6 +29,10 @@ def test_save_roundtrip_cache_and_provenance(tmp_path, trial_df, monkeypatch):
     assert metadata["discarded_choices"] == {"10": 3, "20": 3}
     assert metadata["generator"]
     assert metadata["parameters"]["window_sizes"] == [10, 20]
+    assert metadata["context_transition_trial_positions"] == [7, 14]
+    assert metadata["analysis_source_digest"]
+    assert (path.parent / "run.log").exists()
+    assert (path.parent / "main.py").exists()
     with np.load(path, allow_pickle=True) as saved:
         assert "meta" in saved.files
         assert saved["valid_choice_trial_positions"].tolist() == list(range(23))
@@ -66,6 +70,16 @@ def test_empty_artifact_retains_schema(tmp_path, trial_df):
     pd.testing.assert_frame_equal(table, loaded)
     assert loaded.empty
     assert metadata["discarded_choices"] == {"10": 3, "20": 3}
+
+
+def test_analysis_version_changes_invalidate_cache(tmp_path, trial_df, monkeypatch):
+    """A new analysis version cannot reuse or overwrite an older result."""
+    _, first = results.save_choice_window_results(trial_df, tmp_path, "session")
+    monkeypatch.setattr(results, "ANALYSIS_VERSION", "test-new-version")
+    _, second = results.save_choice_window_results(trial_df, tmp_path, "session")
+    assert second != first
+    assert first.exists()
+    assert results.load_choice_window_results(second)[1]["analysis_version"] == "test-new-version"
 
 
 def test_plot_saved_results_uses_trial_coordinates_and_counts(tmp_path, trial_df, monkeypatch):
