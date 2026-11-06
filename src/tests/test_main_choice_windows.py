@@ -145,3 +145,55 @@ def test_multisession_collection_resets_windows_and_preserves_blocks(main_module
     assert path.exists()
     for saved, original in zip(sessions, originals):
         pd.testing.assert_frame_equal(saved.block_performance, original)
+
+
+def test_multisession_parallel_matches_serial_and_dry_run_writes_nothing(main_module, tmp_path):
+    """Session workers agree with serial scoring; dry runs create no artifacts."""
+    sessions = []
+    for index in range(2):
+        session = SimpleNamespace(sess_id_full=f"session_{index}", date=f"date_{index}",
+                                  processed_data_path=tmp_path / str(index))
+        trial = pd.DataFrame({"action": [0] * 13, "Qlearning_rel_value": [-1.0] * 13})
+        sessions.append(SimpleNamespace(session=session, augmented_trial_df=trial))
+    _, dry_path = main_module.save_and_plot_multisession_choice_window_agreement(
+        sessions, tmp_path, "mouse", n_jobs=1, dry_run=True
+    )
+    assert dry_path is None
+    assert list(tmp_path.iterdir()) == []
+    serial, _ = main_module.save_and_plot_multisession_choice_window_agreement(
+        sessions, tmp_path, "mouse", n_jobs=1
+    )
+    parallel, _ = main_module.save_and_plot_multisession_choice_window_agreement(
+        sessions, tmp_path, "mouse", n_jobs=2, rerun=True
+    )
+    pd.testing.assert_frame_equal(serial, parallel)
+
+
+@pytest.mark.parametrize("collection_only", [True, False])
+def test_multisession_collection_only_skips_windows_full_mode_includes_them(
+    main_module, monkeypatch, collection_only
+):
+    """Windows respect the existing collection-only gate before full modeling."""
+    main = main_module
+    calls = []
+    monkeypatch.setattr(main, "resolve_multisession_dates", lambda **kwargs: ["date"])
+    monkeypatch.setattr(main, "find_saved_session_by_date", lambda **kwargs: object())
+    monkeypatch.setattr(main, "load_saved_session_analysis", lambda session: object())
+    monkeypatch.setattr(main, "concatenate_saved_sessions", lambda sessions: object())
+    monkeypatch.setattr(main, "build_multisession_session", lambda **kwargs: object())
+    monkeypatch.setattr(main, "run_or_collect_multisession_analysis", lambda **kwargs: calls.append("collection"))
+    monkeypatch.setattr(main, "save_and_plot_multisession_choice_window_agreement",
+                        lambda **kwargs: calls.append("windows"))
+
+    def stop_before_unrelated_analysis(**kwargs):
+        """Stop after the integration boundary; inputs unused, raises sentinel."""
+        raise RuntimeError("full workflow reached")
+
+    monkeypatch.setattr(main, "prepare_learning_curve_data", stop_before_unrelated_analysis)
+    if collection_only:
+        main.main_multisession()
+        assert calls == ["collection"]
+    else:
+        with pytest.raises(RuntimeError, match="full workflow reached"):
+            main.main_multisession(multisession_collection_only=False)
+        assert calls == ["windows"]
