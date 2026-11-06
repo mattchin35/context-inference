@@ -82,6 +82,19 @@ def test_analysis_version_changes_invalidate_cache(tmp_path, trial_df, monkeypat
     assert results.load_choice_window_results(second)[1]["analysis_version"] == "test-new-version"
 
 
+def test_failed_computation_records_error_without_caching_results(tmp_path, trial_df):
+    """A failed numerical run logs its error and cannot become a cache hit."""
+    import json
+
+    trial_df.loc[0, "Qlearning_rel_value"] = np.inf
+    with pytest.raises(ValueError, match="finite"):
+        results.save_choice_window_results(trial_df, tmp_path, "session")
+    logs = list(tmp_path.glob("choice_window_agreement/**/run.log"))
+    assert len(logs) == 1
+    assert "finite" in json.loads(logs[0].read_text())["errors"][0]
+    assert not list(tmp_path.glob("choice_window_agreement/**/results.npz"))
+
+
 def test_plot_saved_results_uses_trial_coordinates_and_counts(tmp_path, trial_df, monkeypatch):
     """Plotting uses saved values, labels denominators, and supports empty data."""
     from src.behavior_analysis.performance_plots import plot_session_choice_window_agreement
