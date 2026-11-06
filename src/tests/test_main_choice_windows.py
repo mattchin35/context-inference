@@ -124,6 +124,28 @@ def fail_if_reached(*args, **kwargs):
     pytest.fail("Unexpected full-analysis execution")
 
 
+def test_single_session_windows_plot_in_figures_even_for_cached_results(main_module, tmp_path):
+    """Figures use the session figure root; cached numerical outputs stay processed."""
+    session = SimpleNamespace(
+        sess_id_full="session", processed_data_path=tmp_path / "processed",
+        figure_path=tmp_path / "figures",
+    )
+    trial = pd.DataFrame({"action": [0] * 23, "Qlearning_rel_value": [-1.0] * 23})
+    _, first = main_module.save_and_plot_choice_window_agreement_for_session(trial, session)
+    assert first["results"].is_relative_to(session.processed_data_path)
+    assert first["plot"].is_relative_to(session.figure_path)
+    assert not list(session.processed_data_path.rglob("*.png"))
+    first["plot"].unlink()
+    _, cached = main_module.save_and_plot_choice_window_agreement_for_session(trial, session)
+    assert cached["results"] == first["results"]
+    assert cached["plot"] == first["plot"]
+    assert cached["plot"].exists()
+    _, rerun = main_module.save_and_plot_choice_window_agreement_for_session(trial, session, rerun=True)
+    assert rerun["plot"].is_relative_to(session.figure_path)
+    assert rerun["plot"] != first["plot"]
+    assert first["plot"].exists()
+
+
 def test_multisession_collection_resets_windows_and_preserves_blocks(main_module, tmp_path):
     """Each 13-choice session yields one ten-choice window, not a joined window."""
     sessions = []
@@ -131,7 +153,7 @@ def test_multisession_collection_resets_windows_and_preserves_blocks(main_module
         processed = tmp_path / str(index)
         processed.mkdir()
         session = SimpleNamespace(sess_id_full=f"session_{index}", date=f"date_{index}",
-                                  processed_data_path=processed, figure_path=processed)
+                                  processed_data_path=processed, figure_path=tmp_path / "figures" / str(index))
         trial = pd.DataFrame({"action": np.zeros(13), "Qlearning_rel_value": [-1.0] * 13})
         sessions.append(SimpleNamespace(session=session, augmented_trial_df=trial,
                                         block_performance=pd.DataFrame({"original": [index]})))
@@ -146,6 +168,8 @@ def test_multisession_collection_resets_windows_and_preserves_blocks(main_module
     assert (path.parent / "run.log").exists()
     for saved, original in zip(sessions, originals):
         pd.testing.assert_frame_equal(saved.block_performance, original)
+        assert list(saved.session.figure_path.rglob("*_choice_window_agreement.png"))
+        assert not list(saved.session.processed_data_path.rglob("*.png"))
 
 
 def test_multisession_parallel_matches_serial_and_dry_run_writes_nothing(main_module, tmp_path):
@@ -153,7 +177,8 @@ def test_multisession_parallel_matches_serial_and_dry_run_writes_nothing(main_mo
     sessions = []
     for index in range(2):
         session = SimpleNamespace(sess_id_full=f"session_{index}", date=f"date_{index}",
-                                  processed_data_path=tmp_path / str(index))
+                                  processed_data_path=tmp_path / str(index),
+                                  figure_path=tmp_path / "figures" / str(index))
         trial = pd.DataFrame({"action": [0] * 13, "Qlearning_rel_value": [-1.0] * 13})
         sessions.append(SimpleNamespace(session=session, augmented_trial_df=trial))
     _, dry_path = main_module.save_and_plot_multisession_choice_window_agreement(
