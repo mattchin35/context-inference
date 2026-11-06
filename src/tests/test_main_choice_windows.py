@@ -1,5 +1,7 @@
 """Workflow tests ensuring windows supplement existing context-block outputs."""
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -166,6 +168,15 @@ def test_multisession_collection_resets_windows_and_preserves_blocks(main_module
     assert table.window_size.tolist() == [10, 10]
     assert path.exists()
     assert (path.parent / "run.log").exists()
+    metadata = json.loads((path.parent / "metadata.json").read_text())
+    assert len(metadata["figures"]) == 2
+    for figure in metadata["figures"]:
+        assert Path(figure).parent == tmp_path
+        assert Path(figure).exists()
+    assert len(list(tmp_path.glob("*_choice-window-10_agreement.png"))) == 1
+    assert len(list(tmp_path.glob("*_choice-window-20_agreement.png"))) == 1
+    summary = pd.read_csv(path.parent / "mouse_choice_window_summary.csv")
+    assert {"agreement_q1", "agreement_q3", "n_scored_windows"}.issubset(summary.columns)
     for saved, original in zip(sessions, originals):
         pd.testing.assert_frame_equal(saved.block_performance, original)
         assert list(saved.session.figure_path.rglob("*_choice_window_agreement.png"))

@@ -150,3 +150,47 @@ def test_window_computation_preserves_context_block_analysis(trial_df):
     windows.summarize_choice_window_agreement(trial_df, scores, 10, "mouse_session")
     after = add_block_agent_mouse_agreement_columns(blocks, trial_df, mapping)
     pd.testing.assert_frame_equal(before, after)
+
+
+@pytest.fixture
+def multisession_windows():
+    """Return seven window-agent rows; agreement is unitless, counts are choices."""
+    return pd.DataFrame({
+        "session_id": ["s1", "s1", "s1", "s2", "s2", "s1", "s2"],
+        "date": ["2026-11-01"] * 7,
+        "window_size": [10, 10, 10, 10, 10, 20, 20],
+        "window_index": [0, 1, 2, 0, 1, 0, 0],
+        "agent": ["qlearning_mouse_agreement"] * 7,
+        "agreement": [0.0, 1.0, np.nan, 0.25, 0.75, 0.8, np.nan],
+        "n_comparisons": [10, 5, 0, 4, 4, 20, 0],
+        "n_agreements": [0, 5, 0, 1, 3, 16, 0],
+    })
+
+
+def test_session_window_summary_separates_sizes_sessions_and_missing_scores(multisession_windows):
+    """Plot summaries use window quartiles while retaining counts and pooled means."""
+    original = multisession_windows.copy(deep=True)
+    summary = windows.summarize_choice_window_sessions(multisession_windows)
+    assert len(summary) == 4
+    first = summary.loc[summary.session_id.eq("s1") & summary.window_size.eq(10)].iloc[0]
+    assert first.n_windows == 3
+    assert first.n_scored_windows == 2
+    assert first.agreement_q1 == 0.25
+    assert first.agreement_median == 0.5
+    assert first.agreement_q3 == 0.75
+    assert first.agreement_pooled == pytest.approx(1 / 3)
+    other = summary.loc[summary.session_id.eq("s2") & summary.window_size.eq(10)].iloc[0]
+    assert other.agreement_q1 == 0.375
+    assert other.agreement_q3 == 0.625
+    missing = summary.loc[summary.session_id.eq("s2") & summary.window_size.eq(20)].iloc[0]
+    assert missing.n_scored_windows == 0
+    assert np.isnan(missing.agreement_median)
+    assert np.isnan(missing.agreement_pooled)
+    pd.testing.assert_frame_equal(multisession_windows, original)
+
+
+def test_empty_session_window_summary_has_quartile_schema(multisession_windows):
+    """No complete windows still produces a table suitable for placeholder figures."""
+    summary = windows.summarize_choice_window_sessions(multisession_windows.iloc[:0])
+    assert summary.empty
+    assert {"session_id", "window_size", "agent", "agreement_q1", "agreement_q3"}.issubset(summary.columns)
