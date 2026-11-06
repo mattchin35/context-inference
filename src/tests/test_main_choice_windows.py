@@ -206,6 +206,16 @@ def test_multisession_parallel_matches_serial_and_dry_run_writes_nothing(main_mo
     pd.testing.assert_frame_equal(serial, parallel)
 
 
+def test_empty_multisession_collection_saves_placeholder_figures(main_module, tmp_path):
+    """An empty selection produces readable agreement figures at both resolutions."""
+    table, path = main_module.save_and_plot_multisession_choice_window_agreement(
+        [], tmp_path, "empty", window_sizes=(10, 20), n_jobs=1,
+    )
+    assert table.empty
+    assert path.exists()
+    assert len(list(tmp_path.glob("*_choice-window-*_agreement.png"))) == 2
+
+
 @pytest.mark.parametrize("collection_only", [True, False])
 def test_multisession_collection_only_skips_windows_full_mode_includes_them(
     main_module, monkeypatch, collection_only
