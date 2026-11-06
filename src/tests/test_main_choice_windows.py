@@ -143,6 +143,7 @@ def test_multisession_collection_resets_windows_and_preserves_blocks(main_module
     assert table.trial_start.tolist() == [0, 0]
     assert table.window_size.tolist() == [10, 10]
     assert path.exists()
+    assert (path.parent / "run.log").exists()
     for saved, original in zip(sessions, originals):
         pd.testing.assert_frame_equal(saved.block_performance, original)
 
