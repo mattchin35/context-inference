@@ -85,7 +85,7 @@ def test_single_session_keeps_block_outputs_and_hmm_inputs(
             pd.testing.assert_frame_equal(args[0], blocks)
             pd.testing.assert_frame_equal(args[1], trial)
         assert kwargs["rerun"] is not cached_hmm
-        return blocks, trial, SimpleNamespace(), tmp_path / "results.npz"
+        return blocks, trial, SimpleNamespace(model_names=["fixed"]), tmp_path / "results.npz"
 
     monkeypatch.setattr(main, "run_dynamax_block_analysis", hmm)
     main.run_single_session_workflow(session, config)
