@@ -222,6 +222,9 @@ def test_empty_and_invalid_results_roundtrip_without_inventing_states(
     assert second.block_performance["inferred_strategy"].isna().all()
     assert inherited["inherited_block_strategy"].isna().all()
     pd.testing.assert_frame_equal(first.block_performance, second.block_performance)
+    metadata = json.loads((path.parent / "metadata.json").read_text())
+    assert metadata["status"] == "no_valid_blocks"
+    assert metadata["n_valid_blocks"] == 0
 
 
 def test_rerun_creates_another_immutable_result(results_module, blocks, trials, specs, tmp_path):
