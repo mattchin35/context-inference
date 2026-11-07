@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 def test_fresh_main_import_does_not_import_ssm():
@@ -95,3 +96,26 @@ def test_concatenation_records_ordered_manifest_including_empty_sessions():
         "same_day_a", "same_day_b",
     ]
     assert [entry["n_blocks"] for entry in combined.source_session_manifest] == [0, 0]
+
+
+def test_single_workflow_preserves_exports_before_upstream_regeneration(tmp_path, monkeypatch):
+    """Pre-migration tables are archived before any preprocessing can overwrite."""
+    import src.main as main
+
+    original = tmp_path / "synthetic_block_performance.csv"
+    original.write_text("block_ix,hardcoded_strategy\n3,legacy\n", encoding="ascii")
+    session = SimpleNamespace(
+        processed_data_path=tmp_path, sess_id_full="synthetic", session_info={},
+        raw_behavior_folder=tmp_path,
+    )
+
+    def stop_before_preprocessing(**kwargs):
+        """Stop after export preservation; inputs unused, no returned data."""
+        raise RuntimeError("synthetic stop")
+
+    monkeypatch.setattr(main, "load_or_preprocess_session", stop_before_preprocessing)
+    with pytest.raises(RuntimeError, match="synthetic stop"):
+        main.run_single_session_workflow(session, main.SingleSessionAnalysisConfig())
+    archived = list((tmp_path / "exemplar_hmm" / "archives").rglob(original.name))
+    assert len(archived) == 1
+    assert archived[0].read_bytes() == original.read_bytes()
