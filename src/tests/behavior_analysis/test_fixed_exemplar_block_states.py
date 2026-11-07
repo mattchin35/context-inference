@@ -222,3 +222,18 @@ def test_inheritance_rejects_missing_block_identity(blocks, parameters, missing_
             result.block_performance,
             pd.DataFrame({"cur_block": [3], "source_session_id": [missing_key]}),
         )
+
+
+def test_removed_model_outputs_do_not_survive_full_block_recomputation(blocks, parameters):
+    """Full inference clears obsolete native outputs while retaining raw inputs."""
+    stale_columns = [
+        "exemplar_z_residual_removed", "exemplar_log_likelihood_removed",
+        "exemplar_independent_prob_removed", "exemplar_hmm_smoothed_prob_removed",
+    ]
+    for column in stale_columns:
+        blocks[column] = 1.0
+    blocks["removed_exemplar_residual_TTS"] = 3.0
+    result = modeling.compute_fixed_exemplar_block_states(blocks, parameters)
+    assert not set(stale_columns).intersection(result.block_performance)
+    assert "removed_exemplar_residual_TTS" in result.block_performance
+    assert set(stale_columns).issubset(blocks)
