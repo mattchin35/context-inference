@@ -76,3 +76,22 @@ def test_multisession_normal_runner_matches_continuous_reference(tmp_path):
     np.testing.assert_allclose(result.smoothing_result.smoothed_probs, reference.smoothing_result.smoothed_probs)
     assert modeled["prev_n_rewarded"].tolist() == [3., 8., 3., 8.]
     assert inherited["source_session_id"].tolist() == ["a", "a", "b", "b"]
+
+
+def test_concatenation_records_ordered_manifest_including_empty_sessions():
+    """Zero-row sources remain part of the continuous sequence cache identity."""
+    from src.main import SavedSessionAnalysis, concatenate_saved_sessions
+
+    sessions = []
+    for session_id in ["same_day_a", "same_day_b"]:
+        session = SimpleNamespace(sess_id_full=session_id, mouse="synthetic", date="2026-01-01")
+        blocks = pd.DataFrame(columns=[
+            "block_ix", "prev_rewards_session_centered", "block_side_code", "prev_n_rewarded",
+        ])
+        trials = pd.DataFrame(columns=["cur_block"])
+        sessions.append(SavedSessionAnalysis(session, blocks, trials))
+    combined = concatenate_saved_sessions(sessions)
+    assert [entry["session_id"] for entry in combined.source_session_manifest] == [
+        "same_day_a", "same_day_b",
+    ]
+    assert [entry["n_blocks"] for entry in combined.source_session_manifest] == [0, 0]
