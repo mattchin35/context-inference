@@ -57,6 +57,7 @@ first = plots.plot_multisession_summary_grid(**kwargs)
 second = plots.plot_multisession_summary_grid(**kwargs)
 assert first != second and first.parent == root and first.exists()
 pixels = mpimg.imread(first)
+assert pixels.shape[1] / pixels.shape[0] < 2.5, 'out-of-axis annotations expanded the grid'
 assert np.allclose(pixels[0, 0, :3], 1.)
 assert pixels.shape[2] != 4 or pixels[0, 0, 3] == 1.
 assert 'ssm' not in sys.modules
