@@ -92,6 +92,19 @@ def load_main_module():
     assert module_spec.loader is not None
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
+    # Production imports now use the src package. Keep this legacy fixture's
+    # deliberate lightweight dependencies local to the loaded test module.
+    for name in ["performance_plots", "raster_plots", "session_analysis", "simulate_priors",
+                 "plot_model_values", "expectant_switching_selectivity"]:
+        setattr(module, name, getattr(behavior_analysis_pkg, name))
+    module.gtf = behavior_analysis_pkg.gather_trial_features
+    module.bssm = behavior_analysis_pkg.block_state_space_modeling
+    module.tssm = behavior_analysis_pkg.trial_state_space_modeling
+    sys.modules["src.behavior_analysis.block_state_space_modeling"] = module.bssm
+    sys.modules["src.behavior_analysis.trial_state_space_modeling"] = module.tssm
+    import src.behavior_analysis as canonical_package
+    canonical_package.block_state_space_modeling = module.bssm
+    canonical_package.trial_state_space_modeling = module.tssm
     return module
 
 
@@ -2331,7 +2344,7 @@ def test_load_saved_multisession_augmented_trials_errors_when_inherited_columns_
         )
 
 
-def test_run_multisession_analysis_uses_saved_augmented_trials_when_requested(tmp_path, monkeypatch):
+def test_run_legacy_multisession_analysis_uses_saved_augmented_trials_when_requested(tmp_path, monkeypatch):
     """Saved-trial mode should skip block modeling and return the saved trial CSV.
 
     Parameters
@@ -2380,7 +2393,7 @@ def test_run_multisession_analysis_uses_saved_augmented_trials_when_requested(tm
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("block modeling should be skipped")),
         raising=False,
     )
-    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_legacy_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         trial_num_states=3,
@@ -2442,7 +2455,7 @@ def test_load_saved_block_hmm_outputs_loads_block_and_trial_csvs(tmp_path):
     assert trial_df["inherited_block_strategy"].tolist() == [1, 0]
 
 
-def test_run_multisession_analysis_skips_block_modeling_when_outputs_exist(tmp_path, monkeypatch):
+def test_run_legacy_multisession_analysis_skips_block_modeling_when_outputs_exist(tmp_path, monkeypatch):
     """Existing block HMM outputs should be reused when the skip flag is enabled."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
@@ -2479,7 +2492,7 @@ def test_run_multisession_analysis_skips_block_modeling_when_outputs_exist(tmp_p
         raising=False,
     )
 
-    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_legacy_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         trial_predictor_columns=("FQlearning_rel_value",),
@@ -2492,7 +2505,7 @@ def test_run_multisession_analysis_skips_block_modeling_when_outputs_exist(tmp_p
     assert modeled_trial_df["inherited_block_strategy"].tolist() == [1, 0]
 
 
-def test_run_multisession_analysis_runs_block_modeling_when_skip_outputs_missing(tmp_path, monkeypatch):
+def test_run_legacy_multisession_analysis_runs_block_modeling_when_skip_outputs_missing(tmp_path, monkeypatch):
     """The skip flag should not suppress modeling when required outputs are absent."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
@@ -2538,7 +2551,7 @@ def test_run_multisession_analysis_runs_block_modeling_when_skip_outputs_missing
         raising=False,
     )
 
-    _block_selection, _trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+    _block_selection, _trial_selection, modeled_block_df, modeled_trial_df = main_module.run_legacy_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         trial_predictor_columns=("FQlearning_rel_value",),
@@ -2551,7 +2564,7 @@ def test_run_multisession_analysis_runs_block_modeling_when_skip_outputs_missing
     assert modeled_trial_df["inherited_block_strategy"].tolist() == [0, 1]
 
 
-def test_run_multisession_analysis_rejects_unknown_trial_input_source(tmp_path):
+def test_run_legacy_multisession_analysis_rejects_unknown_trial_input_source(tmp_path):
     """Multisession trial input source should fail fast on unsupported values."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
@@ -2565,7 +2578,7 @@ def test_run_multisession_analysis_rejects_unknown_trial_input_source(tmp_path):
     )
 
     with pytest.raises(ValueError, match="trial_input_source"):
-        main_module.run_multisession_analysis(
+        main_module.run_legacy_multisession_analysis(
             concatenated=concatenated,
             session=synthetic_session,
             trial_predictor_columns=("FQlearning_rel_value",),
@@ -2573,7 +2586,7 @@ def test_run_multisession_analysis_rejects_unknown_trial_input_source(tmp_path):
         )
 
 
-def test_run_multisession_analysis_forwards_block_plot_settings(tmp_path, monkeypatch):
+def test_run_legacy_multisession_analysis_forwards_block_plot_settings(tmp_path, monkeypatch):
     """Multisession analysis should forward block-state plotting settings."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
@@ -2619,7 +2632,7 @@ def test_run_multisession_analysis_forwards_block_plot_settings(tmp_path, monkey
     monkeypatch.setattr(main_module.tssm, "run_trial_modeling", lambda trial_df, **_kwargs: trial_df, raising=False)
     monkeypatch.setattr(main_module, "save_concatenated_multisession_inputs", lambda *_args, **_kwargs: None)
 
-    main_module.run_multisession_analysis(
+    main_module.run_legacy_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         trial_predictor_columns=("FQlearning_rel_value",),
@@ -2641,7 +2654,7 @@ def test_run_multisession_analysis_forwards_block_plot_settings(tmp_path, monkey
     }
 
 
-def test_run_multisession_analysis_runs_block_modeling_on_concatenated_inputs(tmp_path, monkeypatch):
+def test_run_legacy_multisession_analysis_runs_block_modeling_on_concatenated_inputs(tmp_path, monkeypatch):
     """Multisession orchestration should run block modeling on concatenated data."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
@@ -2709,7 +2722,7 @@ def test_run_multisession_analysis_runs_block_modeling_on_concatenated_inputs(tm
         raising=False,
     )
 
-    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_legacy_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         block_num_states=2,
