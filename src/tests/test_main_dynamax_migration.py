@@ -119,3 +119,60 @@ def test_single_workflow_preserves_exports_before_upstream_regeneration(tmp_path
     archived = list((tmp_path / "exemplar_hmm" / "archives").rglob(original.name))
     assert len(archived) == 1
     assert archived[0].read_bytes() == original.read_bytes()
+
+
+def test_full_single_workflow_runs_real_dynamax_on_current_features(tmp_path, monkeypatch):
+    """Synthetic upstream data reaches real save/inherit/plot model integration."""
+    import src.main as main
+
+    blocks = pd.DataFrame({
+        "block_ix": [2, 7, 9], "trials_to_correct": [2., np.nan, 8.],
+        "prev_n_rewarded": [4., 3., 9.], "bias_full_flag": [False, True, False],
+    })
+    trials = pd.DataFrame({"cur_block": [2, 7, 9], "fresh_feature": [11, 12, 13]})
+    summary = pd.DataFrame({"date": ["2026-01-01"], "prev_n_rewarded_slope": [1.],
+                            "prev_n_rewarded_intercept": [0.]})
+    session = SimpleNamespace(
+        session_info={}, raw_behavior_folder=tmp_path, processed_data_path=tmp_path / "processed",
+        figure_path=tmp_path / "figures", sess_id_full="synthetic_full",
+        sess_id_abbreviated="synthetic", date="2026-01-01",
+    )
+    session.processed_data_path.mkdir()
+    monkeypatch.setattr(main, "load_or_preprocess_session", lambda **kwargs: (trials, trials, None))
+    monkeypatch.setattr(main, "load_or_run_session_analysis", lambda **kwargs: (trials, blocks, summary))
+    monkeypatch.setattr(main, "ensure_session_side_bias_metrics", lambda **kwargs: summary)
+    monkeypatch.setattr(main, "collect_configured_trial_features", lambda **kwargs: (trials, {}))
+    monkeypatch.setattr(main, "plot_session", _no_output)
+    for name in ["add_block_explore_counts_from_trials", "add_block_explore_run_counts_from_trials",
+                 "_add_single_session_metadata_columns"]:
+        monkeypatch.setattr(main, name, _unchanged_blocks)
+    for name in ["add_block_agent_mouse_agreement_columns", "add_session_block_collection_variables"]:
+        monkeypatch.setattr(main.session_analysis, name, _unchanged_blocks)
+    for name in ["save_and_plot_switch_persistence_for_session", "save_and_plot_post_first_correct_accuracy_for_session",
+                 "plot_expectant_switching_for_session", "save_and_plot_expectant_model_selectivity_for_session",
+                 "plot_mouse_history_ideal_observer_for_session"]:
+        monkeypatch.setattr(main, name, _no_output)
+    for name in ["plot_session_correct", "plot_session_correct_after_first_correct",
+                 "plot_session_history_ideal_mouse_agreement", "plot_session_trials_to_correct",
+                 "plot_session_nswitches", "plot_block_bias_quadrants",
+                 "plot_session_block_trials_to_correct_summary", "plot_session_zero_trials_to_correct_fraction",
+                 "plot_session_side_bias_ratios", "plot_session_signed_side_bias", "scatter_trials_to_correct",
+                 "plot_session_explore_trials", "plot_session_explore_runs", "plot_session_agent_mouse_agreement",
+                 "plot_single_session_summary_grid"]:
+        monkeypatch.setattr(main.performance_plots, name, _no_output)
+    main.run_single_session_workflow(session, main.SingleSessionAnalysisConfig(choice_window_sizes=()))
+    saved_trials = pd.read_csv(session.processed_data_path / "synthetic_full_augmented_trials.csv")
+    assert saved_trials["fresh_feature"].tolist() == [11, 12, 13]
+    assert saved_trials["inherited_block_model"].notna().sum() == 2
+    assert list(session.figure_path.glob("*.png"))
+    assert list((session.processed_data_path / "exemplar_hmm").rglob("results.npz"))
+
+
+def _no_output(*args, **kwargs):
+    """Accept arbitrary unrelated UI/summary inputs and return no data."""
+    return None
+
+
+def _unchanged_blocks(block_performance, *args, **kwargs):
+    """Return the input N-row block table unchanged, in its original units."""
+    return block_performance
