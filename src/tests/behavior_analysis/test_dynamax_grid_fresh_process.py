@@ -87,6 +87,7 @@ def test_summary_panel_labels_source_ids_and_probability_units():
         assert "probability" in axes[0].get_ylabel().lower()
         assert any("same_day_b" in text.get_text() for text in axes[0].texts)
         assert list(axes[0].lines[0].get_xdata()) == [0, 1, 2, 3]
+        assert axes[0].lines[0].get_marker() not in (None, "None", "")
         assert any("regression" in text.get_text().lower() for text in axes[1].texts)
     finally:
         plt.close(fig)

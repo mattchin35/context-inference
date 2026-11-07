@@ -83,6 +83,7 @@ def test_exemplar_plot_uses_full_rows_and_disambiguates_sessions(tmp_path: Path,
         equal_nan=True,
     )
     assert captured["axes"][-1].get_ylim() == (0.0, 1.0)
+    assert captured["axes"][-1].lines[0].get_marker() not in (None, "None", "")
     assert any("mouse_2024-01-01_b" in text.get_text() for text in captured["axes"][0].texts)
 
 
