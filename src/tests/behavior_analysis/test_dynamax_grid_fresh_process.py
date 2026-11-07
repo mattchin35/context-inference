@@ -78,10 +78,11 @@ def test_summary_panel_labels_source_ids_and_probability_units():
         "source_session_id": ["same_day_a", "same_day_a", "same_day_b", "same_day_b"],
         "exemplar_hmm_smoothed_prob_A": [.9, np.nan, .3, .1],
         "exemplar_hmm_smoothed_prob_B": [.1, np.nan, .7, .9],
+        "exemplar_hmm_smoothed_prob_C": [0., np.nan, 0., 0.],
     })
     fig, axes = plt.subplots(1, 2)
     try:
-        plots._plot_exemplar_summary_grid_panels(axes[0], axes[1], blocks, ["A", "B"], 2, 1)
+        plots._plot_exemplar_summary_grid_panels(axes[0], axes[1], blocks, ["A", "B", "C"], 2, 1)
         assert axes[0].get_ylim() == (0., 1.)
         assert "probability" in axes[0].get_ylabel().lower()
         assert any("same_day_b" in text.get_text() for text in axes[0].texts)
