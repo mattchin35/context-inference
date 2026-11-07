@@ -170,3 +170,55 @@ def test_multisession_smoothing_is_continuous_across_session_boundaries(paramete
     combined = modeling.compute_fixed_exemplar_block_states(pd.concat(frames), parameters, 0.99)
     reset = modeling.compute_fixed_exemplar_block_states(frames[1], parameters, 0.99)
     assert not np.allclose(combined.smoothing_result.smoothed_probs[2:], reset.smoothing_result.smoothed_probs)
+
+
+@pytest.mark.parametrize("name", ["example_state", "example_model"])
+def test_model_name_suffix_does_not_change_numeric_score_types(name):
+    """Safe exemplar names ending in state/model still produce floating scores."""
+    parameters = pd.DataFrame({"name": [name], "residual_sd": [2.0]})
+    blocks = pd.DataFrame({
+        "block_ix": [4],
+        modeling.exemplar_raw_residual_column(name): [0.75],
+        modeling.exemplar_normalized_residual_column(name): [0.375],
+    })
+    result = modeling.compute_fixed_exemplar_block_states(blocks, parameters)
+    assert pd.api.types.is_float_dtype(result.block_performance[f"exemplar_z_residual_{name}"])
+    assert result.block_performance[f"exemplar_z_residual_{name}"].iloc[0] == 0.375
+
+
+def test_numerical_helper_does_not_call_persistence_or_plotting(blocks, parameters, monkeypatch):
+    """Computation returns data without creating directories, files or plots."""
+    def reject_side_effect(*args, **kwargs):
+        """Reject arbitrary side-effect API calls; inputs/return carry no units."""
+        pytest.fail("Numerical helper attempted a filesystem or plotting side effect")
+
+    monkeypatch.setattr("pathlib.Path.mkdir", reject_side_effect)
+    monkeypatch.setattr(pd.DataFrame, "to_csv", reject_side_effect)
+    monkeypatch.setattr(modeling.plt, "subplots", reject_side_effect)
+    result = modeling.compute_fixed_exemplar_block_states(blocks, parameters)
+    assert result.valid_positions.tolist() == [0, 2]
+
+
+def test_inheritance_removes_probabilities_for_previous_model_set(blocks, parameters):
+    """Recomputed inherited columns cannot retain a removed model's probability."""
+    result = modeling.compute_fixed_exemplar_block_states(blocks, parameters)
+    trials = pd.DataFrame({
+        "cur_block": [3], "inherited_block_strategy": [999],
+        "inherited_block_model": ["removed"], "inherited_block_prob_removed": [1.0],
+    })
+    inherited = modeling.inherit_fixed_exemplar_block_states(result.block_performance, trials)
+    assert "inherited_block_prob_removed" not in inherited
+    assert inherited["inherited_block_model"].iloc[0] != "removed"
+    assert "inherited_block_prob_removed" in trials
+
+
+@pytest.mark.parametrize("missing_key", [None, "None", "", "nan"])
+def test_inheritance_rejects_missing_block_identity(blocks, parameters, missing_key):
+    """Missing block IDs, including CSV sentinels, cannot form valid source keys."""
+    result = modeling.compute_fixed_exemplar_block_states(blocks.iloc[[0]], parameters)
+    result.block_performance["source_session_id"] = missing_key
+    with pytest.raises(ValueError, match="missing"):
+        modeling.inherit_fixed_exemplar_block_states(
+            result.block_performance,
+            pd.DataFrame({"cur_block": [3], "source_session_id": [missing_key]}),
+        )
