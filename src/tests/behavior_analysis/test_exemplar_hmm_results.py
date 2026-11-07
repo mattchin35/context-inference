@@ -249,6 +249,22 @@ def test_default_manifest_distinguishes_same_date_sessions_and_preserves_scope(
     assert not (tmp_path / "same_day_b").exists()
 
 
+@pytest.mark.parametrize("explicit_manifest", [None, [], [{"session_id": "only_source", "n_blocks": 4}]])
+def test_joint_scope_is_preserved_with_one_or_zero_manifest_entries(
+    results_module, blocks, trials, specs, tmp_path, explicit_manifest,
+):
+    """Explicit joint source metadata defines scope even for one selected session."""
+    blocks = blocks.assign(source_session_id="only_source")
+    trials = trials.assign(source_session_id="only_source")
+    _, _, path = results_module.save_or_load_exemplar_hmm_results(
+        blocks, trials, tmp_path, "joint", specs=specs, source_manifest=explicit_manifest,
+    )
+    metadata = json.loads((path.parent / "metadata.json").read_text())
+    assert metadata["scope"] == "multisession"
+    assert metadata["export_record_directory"] == str(path.parent)
+    assert metadata["numerical_artifact"] == str(path)
+
+
 def test_failed_inference_writes_log_without_reusable_npz(
     results_module, blocks, trials, specs, tmp_path, monkeypatch,
 ):
