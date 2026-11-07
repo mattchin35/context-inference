@@ -81,6 +81,7 @@ def test_new_result_persists_named_plain_arrays_and_complete_provenance(
         assert (run / filename).exists(), filename
     assert "main.py" in (run / "summary.md").read_text()
     assert "source" in (run / "batch.py").read_text().lower()
+    assert "def run_multisession_analysis(" in (run / "batch.py").read_text()
     assert result.valid_positions.tolist() == [0, 2, 3]
     assert inherited["fresh_feature"].tolist() == trials["fresh_feature"].tolist()
     assert (tmp_path / "mouse_session_block_performance.csv").exists()
