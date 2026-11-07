@@ -51,9 +51,13 @@ def test_exemplar_plot_uses_full_rows_and_disambiguates_sessions(tmp_path: Path,
         "date": ["2024-01-01"] * 4,
         "source_session_id": ["mouse_2024-01-01_a"] * 2 + ["mouse_2024-01-01_b"] * 2,
         "exemplar_z_residual_A": [0.1, np.nan, 0.3, 0.4],
+        "exemplar_z_residual_B": [-0.1, np.nan, -0.3, -0.4],
         "exemplar_log_likelihood_A": [-1.0, np.nan, -3.0, -4.0],
+        "exemplar_log_likelihood_B": [-4.0, np.nan, -2.0, -1.0],
         "exemplar_independent_prob_A": [0.8, np.nan, 0.4, 0.2],
+        "exemplar_independent_prob_B": [0.2, np.nan, 0.6, 0.8],
         "exemplar_hmm_smoothed_prob_A": [0.7, np.nan, 0.5, 0.3],
+        "exemplar_hmm_smoothed_prob_B": [0.3, np.nan, 0.5, 0.7],
         "exemplar_hmm_smoothed_state": [0, np.nan, 1, 1],
         "exemplar_ll_argmax_state": [0, np.nan, 1, 1],
     })
@@ -65,15 +69,15 @@ def test_exemplar_plot_uses_full_rows_and_disambiguates_sessions(tmp_path: Path,
         return original_savefig(self, *args, **kwargs)
 
     monkeypatch.setattr(plt.Figure, "savefig", capture_figure)
-    path = exemplar_hmm_plotting.plot_exemplar_block_diagnostic(frame, ["A"], tmp_path, "mouse")
+    path = exemplar_hmm_plotting.plot_exemplar_block_diagnostic(frame, ["A", "B"], tmp_path, "mouse")
     assert path.exists()
     first_axis = captured["axes"][0]
     assert list(first_axis.lines[0].get_xdata()) == [0, 1, 2, 3]
     assert np.isnan(first_axis.lines[0].get_ydata()[1])
-    assert "block" in first_axis.get_xlabel().lower()
+    assert "block" in captured["axes"][3].get_xlabel().lower()
     assert len(captured["axes"]) == 4
     assert captured["axes"][2].get_yticklabels()[0].get_text() == "A"
-    assert captured["axes"][3].get_ylim() == (0.0, 1.0)
+    assert captured["axes"][-1].get_ylim() == (0.0, 1.0)
     assert any("mouse_2024-01-01_b" in text.get_text() for text in captured["axes"][0].texts)
 
 
