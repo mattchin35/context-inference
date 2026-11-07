@@ -74,9 +74,14 @@ def test_exemplar_plot_uses_full_rows_and_disambiguates_sessions(tmp_path: Path,
     first_axis = captured["axes"][0]
     assert list(first_axis.lines[0].get_xdata()) == [0, 1, 2, 3]
     assert np.isnan(first_axis.lines[0].get_ydata()[1])
-    assert "block" in captured["axes"][3].get_xlabel().lower()
-    assert len(captured["axes"]) == 4
+    assert "block" in captured["axes"][-1].get_xlabel().lower()
+    assert len(captured["axes"]) == 5
     assert captured["axes"][2].get_yticklabels()[0].get_text() == "A"
+    assert captured["axes"][3].get_yticklabels()[0].get_text() == "A"
+    np.testing.assert_allclose(
+        captured["axes"][3].lines[0].get_ydata(), frame["exemplar_hmm_smoothed_state"],
+        equal_nan=True,
+    )
     assert captured["axes"][-1].get_ylim() == (0.0, 1.0)
     assert any("mouse_2024-01-01_b" in text.get_text() for text in captured["axes"][0].texts)
 
@@ -102,4 +107,4 @@ def test_empty_diagnostic_marks_every_panel_as_missing(tmp_path: Path, monkeypat
     frame = pd.DataFrame({"exemplar_z_residual_A": [np.nan, np.nan]})
     exemplar_hmm_plotting.plot_exemplar_block_diagnostic(frame, ["A"], tmp_path, "empty")
     assert all(any("No valid modeled block data" in text.get_text() for text in ax.texts)
-               for ax in captured["axes"][:3])
+               for ax in captured["axes"])
