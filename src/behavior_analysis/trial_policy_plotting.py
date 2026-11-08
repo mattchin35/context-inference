@@ -12,13 +12,25 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.colors import to_rgba
 
 
 _KNOWN_COLORS = {
     "forgetting_q_learning": "#1f77b4",
     "bayesian_hmm": "#ff7f0e",
     "win_stay_lose_switch": "#2ca02c",
+    "q_learning": "#d62728",
+    "reward_decay_hmm": "#9467bd",
+    "ideal_observer": "#8c564b",
     "synthetic_fourth": "#9467bd",
+}
+_MODEL_LABELS = {
+    "forgetting_q_learning": "FQL",
+    "bayesian_hmm": "Bayes HMM",
+    "win_stay_lose_switch": "WSLS",
+    "q_learning": "QL",
+    "reward_decay_hmm": "Decay HMM",
+    "ideal_observer": "Observer",
 }
 
 
@@ -128,7 +140,7 @@ def _draw_result_panels(
     has_hmm = len(axes) == 5
     for result, offset in zip(results, offsets):
         positions = _row_positions(result, offset)
-        for axis in axes[:3]:
+        for axis in axes[:2]:
             _shade_excluded(axis, result, positions)
         observed = np.asarray(result.observed_action, dtype=float)
         observed_valid = np.isfinite(observed) & np.isin(observed, (0, 1))
@@ -145,9 +157,7 @@ def _draw_result_panels(
                          label=str(model_id) if result is results[0] else "_nolegend_")
             axes[1].plot(positions, log_likelihoods[:, model_index], color=color, linewidth=1.1,
                          label=str(model_id) if result is results[0] else "_nolegend_")
-            winner_rows = np.flatnonzero(independent_winners[:, model_index])
-            axes[2].scatter(positions[winner_rows], np.full(len(winner_rows), model_index),
-                            color=color, marker="s", s=20, label="_nolegend_", zorder=3)
+        _draw_winner_grid(axes[2], independent_winners, result.comparison_valid, positions, model_ids)
 
         if has_hmm:
             smoothed = np.asarray(result.hmm_smoothed_probs, dtype=float)
@@ -156,13 +166,28 @@ def _draw_result_panels(
                 axes[3].plot(positions, smoothed[:, model_index], color=color, linewidth=1.2,
                              label=str(model_id) if result is results[0] else "_nolegend_")
             hmm_winners = np.asarray(result.hmm_smoothed_best_model_mask, dtype=bool)
-            for model_index, model_id in enumerate(model_ids):
-                rows = np.flatnonzero(hmm_winners[:, model_index])
-                axes[4].scatter(positions[rows], np.full(len(rows), model_index),
-                                color=_model_color(str(model_id)), marker="s", s=20,
-                                label="_nolegend_", zorder=3)
-            for axis in (axes[3], axes[4]):
-                _shade_excluded(axis, result, positions)
+            _draw_winner_grid(axes[4], hmm_winners, result.comparison_valid, positions, model_ids)
+            _shade_excluded(axes[3], result, positions)
+
+
+def _draw_winner_grid(axis: Axes, winners: np.ndarray, comparison_valid: np.ndarray,
+                      positions: np.ndarray, model_ids: Sequence[str]) -> None:
+    """Draw saved bool[T,K] maxima as K model rows by T trial columns; return None.
+
+    comparison_valid is bool[T], positions is integer[T] in displayed trial-row
+    units, and model_ids defines the K axis. The RGBA image has shape (K,T,4),
+    transposing the saved trial/model axes for display only. Excluded evidence
+    is gray; any saved HMM maxima there remain visible over that background.
+    """
+    if not len(positions):
+        return
+    cells = np.ones((len(model_ids), len(positions), 4), dtype=float)
+    cells[:, ~np.asarray(comparison_valid, dtype=bool)] = to_rgba("#d9d9d9")
+    for model_index, model_id in enumerate(model_ids):
+        cells[model_index, winners[:, model_index]] = to_rgba(_model_color(str(model_id)))
+    axis.imshow(cells, origin="lower", aspect="auto", interpolation="nearest",
+                extent=(positions[0] - .5, positions[-1] + .5, -.5, len(model_ids) - .5),
+                zorder=2, gid="winner-membership")
 
 
 def _caption(results: Sequence[Any], metadata_records: Sequence[dict[str, Any]],
@@ -200,8 +225,9 @@ def _caption(results: Sequence[Any], metadata_records: Sequence[dict[str, Any]],
     caption = (
         f"Candidates: {', '.join(map(str, model_ids))}. Shared opposite-action error probability: "
         f"{', '.join(error_values)}. "
+        "Filled cells mark winning models; multiple filled cells in a trial column show a tie. "
         f"All tied maxima are shown; no tied winner is selected.{tie_text} "
-        "Gray spans mark excluded comparisons. "
+        "Gray marks excluded comparison evidence; HMM maxima there remain visible. "
         f"Sources: {', '.join(source_names)}. Policy histories initialize independently by source. "
         f"{temporal_text}"
         f"{status_text}"
@@ -227,7 +253,11 @@ def _make_figure(
     if any((result.hmm_smoothed_probs is not None) != has_hmm for result in results):
         raise ValueError("All source results must either include HMM arrays or omit them")
     panel_count = 5 if has_hmm else 3
-    figure, grid = plt.subplots(panel_count, 1, figsize=(13, 2.7 * panel_count),
+    panel_heights = [2.7] * panel_count
+    for panel_index in (2, 4) if has_hmm else (2,):
+        panel_heights[panel_index] = max(2.7, .4 * len(model_ids) + .3)
+    figure, grid = plt.subplots(panel_count, 1, figsize=(13, sum(panel_heights)),
+                                gridspec_kw={"height_ratios": panel_heights},
                                 facecolor="white", sharex=True, squeeze=False)
     axes = tuple(grid[:, 0])
     offsets: list[int] = []
@@ -242,21 +272,27 @@ def _make_figure(
     axes[0].set_yticks((0, 1), labels=("Left", "Right"))
     axes[1].set_ylabel("Log likelihood\n(natural log)", fontsize=12)
     axes[2].set_ylabel("Independent\nwinner(s)", fontsize=12)
-    axes[2].set_yticks(range(len(model_ids)), labels=model_ids)
+    display_labels = [_MODEL_LABELS.get(model_id, model_id) for model_id in model_ids]
+    axes[2].set_yticks(range(len(model_ids)), labels=display_labels)
+    axes[2].set_ylim(-.5, len(model_ids) - .5)
     if has_hmm:
         axes[3].set_ylabel("Smoothed\nprobability", fontsize=12)
         axes[3].set_ylim(-0.05, 1.05)
         axes[4].set_ylabel("HMM marginal\nassignment(s)", fontsize=12)
-        axes[4].set_yticks(range(len(model_ids)), labels=model_ids)
+        axes[4].set_yticks(range(len(model_ids)), labels=display_labels)
+        axes[4].set_ylim(-.5, len(model_ids) - .5)
     axes[-1].set_xlabel("Retained trial position (zero-based)", fontsize=12)
     axes[-1].set_xlim(-0.5, max(total_rows - 0.5, 0.5))
     for axis in axes:
         axis.grid(axis="y", color="#e5e5e5", linewidth=0.6)
+    for axis in (axes[2], axes[4]) if has_hmm else (axes[2],):
+        axis.grid(False)
     _draw_boundaries(axes, results, offsets)
     _set_axes_style(figure, axes)
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
-        figure.legend(handles, labels, loc="upper center", ncol=min(len(labels), 5),
+        legend_labels = [_MODEL_LABELS.get(label, label) for label in labels]
+        figure.legend(handles, legend_labels, loc="upper center", ncol=min(len(labels), 4),
                       frameon=False, bbox_to_anchor=(0.5, 0.995), fontsize=10)
     caption = figure.text(0.01, 0.005, _caption(results, metadata_records, model_ids),
                           ha="left", va="bottom", fontsize=12, color="black", linespacing=1.15)

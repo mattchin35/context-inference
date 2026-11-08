@@ -24,11 +24,11 @@ if TYPE_CHECKING:
     from .trial_policy_models import PreparedTrialHistory, TrialPolicyCandidate
     from .gather_trial_features import TaskParams
 
-ANALYSIS_VERSION = "trial_policy_hmm_v1"
+ANALYSIS_VERSION = "trial_policy_hmm_v2"
 ANALYSIS_SOURCE_FILES = (
     "trial_policy_models.py", "trial_policy_analysis.py", "trial_policy_results.py",
     "trial_features.py", "project_utils.py", "gather_trial_features.py",
-    "exemplar_hmm_modeling.py", "main.py",
+    "exemplar_hmm_modeling.py", "main.py", "../behavior_modeling/counterfactual_doubt.py",
 )
 
 
@@ -78,13 +78,15 @@ def build_trial_policy_metadata(history: "PreparedTrialHistory", candidates: "Se
         "package_versions": packages,
         "analysis_source_digest": _analysis_source_digest(),
         "units": {"probabilities": "unitless", "log_likelihoods": "natural log probability",
-                  "policy_scores": "dimensionless; FQL uses reward-indicator scale"},
+                  "policy_scores": "dimensionless; Q-learning/FQL use reward-indicator scale",
+                  "omission_counts": "trials", "omission_lam": "inverse trials"},
         "axis_conventions": {"arrays": "retained trial rows by ordered candidate IDs",
                              "actions": "0=Right, 1=Left", "states": "zero-based candidate indices"},
         "eligibility_rules": "common valid non-manual Left/Right animal choice; absent flag column assumes animal control",
         "history_update_rule": "manual/no-choice/unknown-flag rows skip updates; missing reward scores choice and freezes all candidate updates",
         "tie_rule": "absolute probability tolerance; preserve every maximum; no arbitrary tie break",
         "score_indifference_rule": "exact_zero",
+        "candidate_indifference_rules": {candidate.model_id: candidate.indifference_rule for candidate in candidates},
         "transition_probability_floor": 1e-6,
         "transition_roundoff_atol": 1e-12,
         "jax_probability_dtype": _jax_probability_dtype(),
@@ -241,13 +243,15 @@ def write_trial_policy_export(trial_df: pd.DataFrame, *, export_directory: str |
     trial_df is the current attached `(T,C)` snapshot. Numerical NPZ is never
     copied or modified; None links the joint source manifest without claiming
     one joint numerical file. Optional current CSV is archived before replacement.
+    Returns the snapshot Path named trial_policy_export.csv, distinct from the
+    conventional session input. No table axes or physical units are transformed.
     """
     directory = Path(export_directory)
     directory.mkdir(parents=True, exist_ok=False)
     if current_csv_path is not None:
         _archive_current_csv(Path(current_csv_path))
         trial_df.to_csv(current_csv_path, index=False, na_rep="")
-    exported = directory / "augmented_trials.csv"
+    exported = directory / "trial_policy_export.csv"
     trial_df.to_csv(exported, index=False, na_rep="")
     record = dict(metadata, export_artifact=str(exported))
     if numerical_path is None:
@@ -296,13 +300,18 @@ def _timestamp() -> str:
 
 
 def _archive_current_csv(path: Path) -> None:
-    """Archive current CSV bytes once under a content-addressed local directory."""
+    """Preserve CSV Path bytes once with an .archived.csv suffix; return None.
+
+    Existing legacy-named archives also count as preserved and remain unchanged.
+    The CSV contents, column axes, and units are not transformed.
+    """
     if not path.exists():
         return
     content = path.read_bytes()
     digest = sha256(content).hexdigest()
-    target = path.parent / "trial_policy_hmm" / "archives" / digest / path.name
-    if target.exists():
+    directory = path.parent / "trial_policy_hmm" / "archives" / digest
+    target = directory / f"{path.stem}.archived.csv"
+    if target.exists() or (directory / path.name).exists():
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("xb") as output:

@@ -17,13 +17,25 @@ import pandas as pd
 
 from src.behavior_analysis import trial_features
 from src.behavior_analysis.project_utils import MISSING_STRINGS, NO_CHOICE_ACTION_LABELS
+from src.behavior_modeling.counterfactual_doubt import (
+    CounterfactualDoubtState,
+    counterfactual_doubt_raw_value,
+    update_counterfactual_doubt,
+)
 
 if TYPE_CHECKING:
     from src.behavior_analysis.gather_trial_features import TaskParams
 
 
-DEFAULT_MODEL_IDS = ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch")
+DEFAULT_MODEL_IDS = (
+    "forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
+    "q_learning", "reward_decay_hmm", "ideal_observer",
+)
 FLAG_COLUMN_NAMES = ("give_reward", "experimenter_reward_given")
+_BELIEF_PARAMETER_NAMES = (
+    "state_transition_prob", "active_reward_probability", "inactive_reward_probability",
+    "correct_reward_size", "incorrect_reward_size", "tanh_scale",
+)
 
 
 @dataclass(frozen=True)
@@ -179,11 +191,16 @@ def resolve_trial_policy_candidates(
     if len(set(model_ids)) != len(model_ids):
         raise ValueError("model_ids contains duplicate policy IDs")
     definitions = (
-        TrialPolicyCandidate(DEFAULT_MODEL_IDS[0], "Forgetting Q-learning", _replay_fql, ("FQL_decay", "n_actions")),
-        TrialPolicyCandidate(DEFAULT_MODEL_IDS[1], "Bayesian HMM", _replay_bayesian,
-                             ("state_transition_prob", "active_reward_probability", "inactive_reward_probability",
-                              "correct_reward_size", "incorrect_reward_size", "tanh_scale")),
-        TrialPolicyCandidate(DEFAULT_MODEL_IDS[2], "Win-stay lose-switch", _replay_wsls),
+        TrialPolicyCandidate("forgetting_q_learning", "Forgetting Q-learning", _replay_fql, ("FQL_decay", "n_actions")),
+        TrialPolicyCandidate("bayesian_hmm", "Bayesian HMM", _replay_bayesian, _BELIEF_PARAMETER_NAMES),
+        TrialPolicyCandidate("win_stay_lose_switch", "Win-stay lose-switch", _replay_wsls),
+        TrialPolicyCandidate("q_learning", "Q-learning", _replay_q_learning, ("QL_learning_rate", "n_actions")),
+        TrialPolicyCandidate("reward_decay_hmm", "Reward-decay HMM", _replay_reward_decay_hmm,
+                             _BELIEF_PARAMETER_NAMES + ("hmm_reward_decay_lambda",),
+                             "exact_zero_after_equal_belief_correction"),
+        TrialPolicyCandidate("ideal_observer", "Ideal observer", _replay_ideal_observer,
+                             _BELIEF_PARAMETER_NAMES + ("hmm_reward_decay_lambda", "omission_lam"),
+                             "exact_zero_after_belief_correction_and_raw_doubt_subtraction"),
     )
     by_id = {definition.model_id: definition for definition in definitions}
     unknown = [model_id for model_id in model_ids if model_id not in by_id]
@@ -204,12 +221,16 @@ def effective_trial_policy_parameters(
     """
     effective = {}
     for candidate in candidates:
-        if candidate.model_id == DEFAULT_MODEL_IDS[0]:
-            decay = _finite_parameter(feature_params, "FQL_decay", 0, 1)
+        if candidate.model_id in ("forgetting_q_learning", "q_learning"):
             if feature_params.n_actions != 2:
                 raise ValueError("n_actions must be 2 for the two-action trial policies")
-            parameters = {"decay": decay, "reward_update_rate": 1 - decay, "n_actions": 2}
-        elif candidate.model_id == DEFAULT_MODEL_IDS[1]:
+            if candidate.model_id == "forgetting_q_learning":
+                decay = _finite_parameter(feature_params, "FQL_decay", 0, 1)
+                parameters = {"decay": decay, "reward_update_rate": 1 - decay, "n_actions": 2}
+            else:
+                parameters = {"learning_rate": _finite_parameter(feature_params, "QL_learning_rate", 0, 1),
+                              "n_actions": 2}
+        elif candidate.model_id in ("bayesian_hmm", "reward_decay_hmm", "ideal_observer"):
             parameters = {name: _finite_parameter(feature_params, name, 0, 1) for name in (
                 "state_transition_prob", "active_reward_probability", "inactive_reward_probability")}
             for name in ("correct_reward_size", "incorrect_reward_size"):
@@ -218,6 +239,12 @@ def effective_trial_policy_parameters(
             if parameters["tanh_scale"] == 0:
                 raise ValueError("tanh_scale must be strictly positive")
             parameters["value_mode"] = "bayesian_log_odds"
+            if candidate.model_id != "bayesian_hmm":
+                parameters["lambda_decay"] = _finite_parameter(feature_params, "hmm_reward_decay_lambda", 0, 1)
+            if candidate.model_id == "ideal_observer":
+                parameters["omission_lam"] = _finite_parameter(feature_params, "omission_lam", 0, np.inf)
+                if parameters["omission_lam"] == 0:
+                    raise ValueError("omission_lam must be strictly positive")
         else:
             parameters = {name: _finite_parameter(feature_params, name, -np.inf, np.inf)
                           for name in candidate.parameter_names}
@@ -334,21 +361,21 @@ def _feature_arrays(values: Any, skip_flags: np.ndarray) -> tuple[np.ndarray, np
 
 def _replay_fql(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
     """Replay observed history[T] with TaskParams; return reward-scale left-positive float/bool[T]."""
-    parameters = effective_trial_policy_parameters(resolve_trial_policy_candidates((DEFAULT_MODEL_IDS[0],)), params)
+    parameters = effective_trial_policy_parameters(resolve_trial_policy_candidates(("forgetting_q_learning",)), params)
     return _feature_arrays(trial_features.forgetting_qlearning_relative_value(
         actions=history.actions, rewards=history.rewards,
         experimenter_reward_given=history.adapter_skip_flags,
-        **parameters[DEFAULT_MODEL_IDS[0]],
+        **parameters["forgetting_q_learning"],
     ), history.adapter_skip_flags)
 
 
 def _replay_bayesian(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
     """Replay history[T] and explicit belief parameters; return dimensionless left-positive float/bool[T]."""
-    parameters = effective_trial_policy_parameters(resolve_trial_policy_candidates((DEFAULT_MODEL_IDS[1],)), params)
+    parameters = effective_trial_policy_parameters(resolve_trial_policy_candidates(("bayesian_hmm",)), params)
     return _feature_arrays(trial_features.hmm_relative_value(
         actions=history.actions, rewards=history.rewards,
         experimenter_reward_given=history.adapter_skip_flags,
-        validate_outcome_evidence=True, **parameters[DEFAULT_MODEL_IDS[1]],
+        validate_outcome_evidence=True, **parameters["bayesian_hmm"],
     ), history.adapter_skip_flags)
 
 
@@ -358,3 +385,44 @@ def _replay_wsls(history: PreparedTrialHistory, params: "TaskParams") -> tuple[n
         actions=history.actions, rewards=history.rewards,
         experimenter_reward_given=history.adapter_skip_flags,
     ), history.adapter_skip_flags)
+
+
+def _replay_q_learning(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
+    """Replay observed history[T]/TaskParams; return reward-scale left-positive float/bool[T]."""
+    parameters = effective_trial_policy_parameters(resolve_trial_policy_candidates(("q_learning",)), params)
+    return _feature_arrays(trial_features.qlearning_relative_value(
+        actions=history.actions, rewards=history.rewards,
+        experimenter_reward_given=history.adapter_skip_flags,
+        **parameters["q_learning"],
+    ), history.adapter_skip_flags)
+
+
+def _replay_reward_decay_hmm(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
+    """Replay history[T]/TaskParams; return dimensionless pre-choice belief scores and validity[T]."""
+    parameters = effective_trial_policy_parameters(resolve_trial_policy_candidates(("reward_decay_hmm",)), params)
+    return _feature_arrays(trial_features.hmm_relative_value_reward_decay(
+        actions=history.actions, rewards=history.rewards,
+        experimenter_reward_given=history.adapter_skip_flags,
+        validate_outcome_evidence=True, **parameters["reward_decay_hmm"],
+    ), history.adapter_skip_flags)
+
+
+def _replay_ideal_observer(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
+    """Replay history[T]/TaskParams; return dimensionless belief-minus-doubt scores and bool[T].
+
+    Omission counts are in trials and omission_lam is in inverse trials. Read
+    doubt before each observed outcome; skipped/missing outcomes freeze both
+    belief and doubt history. Positive scores favor Left, as for every adapter.
+    """
+    scores, available = _replay_reward_decay_hmm(history, params)
+    parameters = effective_trial_policy_parameters(resolve_trial_policy_candidates(("ideal_observer",)), params)
+    omission_lam = parameters["ideal_observer"]["omission_lam"]
+    doubt_state = CounterfactualDoubtState()
+    for row in range(len(history.actions)):
+        if not available[row]:
+            continue
+        scores[row] -= counterfactual_doubt_raw_value(doubt_state, omission_lam)
+        if history.history_update_valid[row]:
+            doubt_state = update_counterfactual_doubt(
+                doubt_state, int(history.actions[row]), float(history.rewards[row]))
+    return scores, available

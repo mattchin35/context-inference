@@ -71,6 +71,13 @@ The normal single-session and full multisession workflows will invoke the analys
 
 The reward-decay HMM and history ideal observer are required subsequent additions. Round one provides the extension point and verifies a synthetic fourth candidate, but does not advertise those two production adapters as implemented. No learning-rule changes, emission fitting, parameter searches, residualized policy regressors, or legacy trial GLM-HMM execution are included.
 
+Subsequent-round status (2026-11-08): those adapters and standard Q-learning are
+now implemented under the approved
+[candidate expansion plan](trial_policy_candidate_expansion_plan.md). All six
+are defaults, subsets remain selectable, and the new membership grids preserve
+ties with one row per model. The linked handoff records the v2 validation and
+artifact paths; the first-round implementation history below remains unchanged.
+
 ## 2. Existing code to reuse and localized changes
 
 | Current location | Use in this implementation |

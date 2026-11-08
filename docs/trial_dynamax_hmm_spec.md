@@ -18,6 +18,13 @@ The Bayesian candidate updates beliefs from both rewards and omissions. Its inte
 
 **Required subsequent round:** make the existing reward-decay HMM (`HMM_rel_value_logodds_decay`) and mouse-history ideal observer (`observer_value`, reward-decay HMM minus relative doubt) available as additional selectable candidates. They are not first-round deliverables, but adding them must not require rewriting likelihood calculation, smoothing, persistence, or plotting.
 
+**Subsequent-round status (2026-11-08):** implemented, together with standard
+Q-learning. All six candidates are now the approved defaults, with selectable
+subsets. The original three retain their order; `q_learning`, `reward_decay_hmm`,
+and `ideal_observer` are appended. See
+[the expansion plan and validation handoff](trial_policy_candidate_expansion_plan.md)
+for parameters, the belief-symmetry correction, general tie grids, and v2 results.
+
 Those future adapters must use the raw causal policy values. Session-wide residualized columns such as `HMM_decay_res` and `rel_hazard_res` can depend on later observations and are not substitutes for these policies.
 
 Use a small ordered collection of candidate definitions and ordinary adapter functions. Each adapter receives one chronological session's observed history and explicit parameters, and returns aligned left-positive pre-choice scores and prediction availability, each with shape `(n_trials,)`. Its definition records its stable ID, parameter provenance, and indifference rule. Common stages operate on `(n_trials, n_models)` arrays and model labels; they must not assume exactly three models. Avoid a new agent class hierarchy or plugin framework.
