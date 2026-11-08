@@ -93,6 +93,55 @@ class FixedExemplarHMMSmoothingResult:
     marginal_loglik: float
 
 
+@dataclass
+class FixedExemplarBlockStateResult:
+    """Data-only fixed-exemplar inference result retaining the full block axis.
+
+    Attributes
+    ----------
+    block_performance : pandas.DataFrame
+        All original block rows, index, order and input columns, with current
+        exemplar scores, probabilities and states. Obsolete native exemplar
+        output columns are removed. Invalid rows have missing outputs.
+        `inferred_strategy` aliases the zero-based exemplar smoothed state.
+    valid_mask : np.ndarray
+        Boolean mask of shape `(n_blocks,)` on the original positional axis.
+    valid_positions : np.ndarray
+        Integer positions of shape `(n_valid_blocks,)` into the full table.
+    model_names : list[str]
+        Model identifiers in state-index/array-column order, length `n_models`.
+    parameters : pandas.DataFrame
+        Validated copy of the input parameter table, preserving model order.
+    sigmas : np.ndarray
+        Residual standard deviations, shape `(n_models,)`, in trials.
+    raw_residuals, z_residuals : np.ndarray
+        Saved residuals on valid rows, shape `(n_valid_blocks, n_models)`,
+        in trials and residual-SD units respectively. Z values are not recomputed.
+    log_likelihoods, independent_probs : np.ndarray
+        Valid-row matrices, shape `(n_valid_blocks, n_models)`, containing
+        Gaussian log likelihoods and unitless independent probabilities.
+    smoothing_result : FixedExemplarHMMSmoothingResult
+        Valid-row posterior and fixed transition probabilities. With no valid
+        rows, state/probability arrays are empty and marginal_loglik is 0.0
+        (the log likelihood of an empty sequence); no inference is performed.
+    stay_prob : float
+        Requested unitless diagonal transition probability.
+    """
+
+    block_performance: pd.DataFrame
+    valid_mask: np.ndarray
+    valid_positions: np.ndarray
+    model_names: list[str]
+    parameters: pd.DataFrame
+    sigmas: np.ndarray
+    raw_residuals: np.ndarray
+    z_residuals: np.ndarray
+    log_likelihoods: np.ndarray
+    independent_probs: np.ndarray
+    smoothing_result: FixedExemplarHMMSmoothingResult
+    stay_prob: float
+
+
 def default_exemplar_normalized_residual_columns() -> list[str]:
     """Return normalized residual columns for the default exemplar models.
 
@@ -890,6 +939,196 @@ def add_fixed_exemplar_hmm_outputs(
     output_df["exemplar_ll_argmax_model"] = [names[state] for state in ll_states]
     output_df["exemplar_hmm_smoothed_state"] = smoothed_states
     output_df["exemplar_hmm_smoothed_model"] = [names[state] for state in smoothed_states]
+    return output_df
+
+
+def compute_fixed_exemplar_block_states(
+    block_performance: pd.DataFrame,
+    parameters: pd.DataFrame,
+    stay_prob: float = 0.9,
+) -> FixedExemplarBlockStateResult:
+    """Score and smooth saved residuals without I/O or dropping block rows.
+
+    Parameters
+    ----------
+    block_performance : pandas.DataFrame
+        Table `(n_blocks, n_columns)`, in the desired sequential order. Each
+        parameter name requires `<name>_exemplar_residual_TTS` (trials) and
+        `<name>_exemplar_normalized_residual_TTS` (residual-SD units). Only rows
+        finite in every raw and normalized residual enter the HMM. Invalid rows
+        are skipped on its sequence axis and receive missing output values.
+    parameters : pandas.DataFrame
+        Table `(n_models, n_parameter_columns)` with at least `name` and
+        `residual_sd` (positive finite SD in trials). Names must be unique safe
+        exemplar identifiers; table order defines zero-based state indices.
+    stay_prob : float, default=0.9
+        Unitless diagonal transition probability in [0, 1]. The valid rows form
+        one continuous sequence, including across source session boundaries.
+
+    Returns
+    -------
+    FixedExemplarBlockStateResult
+        Full block table with its original index/order, positional validity
+        mapping and valid-row numerical arrays; see the dataclass contracts.
+        Inputs are copied and no files, figures or model objects are created.
+    """
+    validated_parameters = _validate_fixed_exemplar_parameters(parameters)
+    model_names = validated_parameters["name"].tolist()
+    sigmas = validated_parameters["residual_sd"].to_numpy(dtype=float)
+    transition_matrix = build_sticky_transition_matrix(len(model_names), stay_prob)
+    raw_columns = [exemplar_raw_residual_column(name) for name in model_names]
+    z_columns = [exemplar_normalized_residual_column(name) for name in model_names]
+    require_columns(block_performance, [*raw_columns, *z_columns], "block_performance")
+    raw_values = block_performance[raw_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    z_values = block_performance[z_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    valid_mask = np.isfinite(raw_values).all(axis=1) & np.isfinite(z_values).all(axis=1)
+    valid_positions = np.flatnonzero(valid_mask)
+    raw_residuals = raw_values[valid_mask]
+    z_residuals = z_values[valid_mask]
+    log_likelihoods = compute_fixed_exemplar_log_likelihoods(raw_residuals, sigmas)
+    independent_probs = independent_model_probabilities(log_likelihoods)
+    if valid_positions.size:
+        smoothing_result = smooth_fixed_exemplar_likelihoods_with_dynamax(log_likelihoods, stay_prob)
+    else:
+        smoothing_result = FixedExemplarHMMSmoothingResult(
+            initial_distribution=np.full(len(model_names), 1.0 / len(model_names)),
+            transition_matrix=transition_matrix,
+            smoothed_probs=np.empty((0, len(model_names)), dtype=float),
+            smoothed_states=np.empty(0, dtype=int),
+            marginal_loglik=0.0,
+        )
+
+    # Restore scores by position, since the source index may repeat or be unordered.
+    valid_outputs = add_fixed_exemplar_hmm_outputs(
+        pd.DataFrame(index=np.arange(valid_positions.size)), model_names, z_residuals,
+        log_likelihoods, independent_probs, smoothing_result.smoothed_probs,
+    )
+    output_df = block_performance.drop(columns=[
+        column for column in block_performance
+        if column.startswith(("exemplar_z_residual_", "exemplar_log_likelihood_",
+                              "exemplar_independent_prob_", "exemplar_hmm_smoothed_prob_"))
+    ]).copy()
+    for column in valid_outputs.columns:
+        if column in ("exemplar_ll_argmax_state", "exemplar_hmm_smoothed_state"):
+            values = pd.array([pd.NA] * len(output_df), dtype="Int64")
+        elif column in ("exemplar_ll_argmax_model", "exemplar_hmm_smoothed_model"):
+            values = np.full(len(output_df), np.nan, dtype=object)
+        else:
+            values = np.full(len(output_df), np.nan, dtype=float)
+        values[valid_positions] = valid_outputs[column].to_numpy()
+        output_df[column] = values
+    output_df["inferred_strategy"] = output_df["exemplar_hmm_smoothed_state"].copy()
+    return FixedExemplarBlockStateResult(
+        block_performance=output_df, valid_mask=valid_mask, valid_positions=valid_positions,
+        model_names=model_names, parameters=validated_parameters, sigmas=sigmas,
+        raw_residuals=raw_residuals, z_residuals=z_residuals,
+        log_likelihoods=log_likelihoods, independent_probs=independent_probs,
+        smoothing_result=smoothing_result, stay_prob=float(stay_prob),
+    )
+
+
+def inherit_fixed_exemplar_block_states(
+    block_performance: pd.DataFrame,
+    trial_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Map fixed-exemplar states and separate bias flags onto trials by block ID.
+
+    Parameters
+    ----------
+    block_performance : pandas.DataFrame
+        Full modeled table `(n_blocks, n_columns)` containing `block_ix`,
+        `exemplar_hmm_smoothed_state`, `exemplar_hmm_smoothed_model` and
+        `exemplar_hmm_smoothed_prob_<name>` columns. Optional `bias_full_flag`
+        supplies bias independently of whether a residual row was modeled.
+    trial_df : pandas.DataFrame
+        Trial table `(n_trials, n_trial_columns)` with explicit `cur_block` IDs
+        matching `block_ix`, rather than block row positions. If either table
+        contains `source_session_id`, both must contain it; the pair of full
+        session ID and block ID forms the key. Dates are not identity keys.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with original trial index/order and `inherited_block_strategy`
+        (zero-based index), `inherited_block_model`, unitless
+        `inherited_block_prob_<name>`, and `inherited_block_bias`. Unmatched or
+        invalid state rows remain missing. Absent bias columns yield missing
+        bias. Duplicate or missing source keys raise ValueError.
+    """
+    require_columns(block_performance, [
+        "block_ix", "exemplar_hmm_smoothed_state", "exemplar_hmm_smoothed_model",
+    ], "block_performance")
+    require_columns(trial_df, ["cur_block"], "trial_df")
+    block_keys = ["block_ix"]
+    trial_keys = ["cur_block"]
+    if "source_session_id" in block_performance or "source_session_id" in trial_df:
+        require_columns(block_performance, ["source_session_id"], "block_performance")
+        require_columns(trial_df, ["source_session_id"], "trial_df")
+        block_keys.insert(0, "source_session_id")
+        trial_keys.insert(0, "source_session_id")
+    source_keys = block_performance[block_keys]
+    if source_keys.isna().any().any() or source_keys.isin(["", "None", "nan"]).any().any():
+        raise ValueError("block_performance contains missing block identity keys.")
+    if block_performance.duplicated(block_keys).any():
+        raise ValueError(f"block_performance requires unique block keys: {block_keys}.")
+    block_index = pd.MultiIndex.from_frame(block_performance[block_keys])
+    trial_index = pd.MultiIndex.from_frame(trial_df[trial_keys])
+    probability_prefix = "exemplar_hmm_smoothed_prob_"
+    source_columns = {
+        "exemplar_hmm_smoothed_state": "inherited_block_strategy",
+        "exemplar_hmm_smoothed_model": "inherited_block_model",
+    }
+    for column in block_performance:
+        if column.startswith(probability_prefix):
+            source_columns[column] = f"inherited_block_prob_{column[len(probability_prefix):]}"
+    if "bias_full_flag" in block_performance:
+        source_columns["bias_full_flag"] = "inherited_block_bias"
+    # A changed model set must not leave old inherited probabilities in the table.
+    stale_columns = [
+        column for column in trial_df
+        if column in ("inherited_block_strategy", "inherited_block_model")
+        or column.startswith("inherited_block_prob_")
+    ]
+    output_df = trial_df.drop(columns=stale_columns).copy()
+    for source, destination in source_columns.items():
+        values_by_block = pd.Series(block_performance[source].array, index=block_index)
+        output_df[destination] = values_by_block.reindex(trial_index).array
+    if "inherited_block_bias" not in source_columns.values():
+        output_df["inherited_block_bias"] = np.nan
+    return output_df
+
+
+def _validate_fixed_exemplar_parameters(parameters: pd.DataFrame) -> pd.DataFrame:
+    """Return a validated copy of fixed-exemplar name/scale parameters.
+
+    Parameters
+    ----------
+    parameters : pandas.DataFrame
+        Table `(n_models, n_parameter_columns)` with `name` and `residual_sd`
+        (trials). At least one unique safe string name and positive finite SD
+        are required. Other parameter columns are retained without conversion.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Copy with unchanged row order and numeric `residual_sd` in trials.
+        Invalid required parameters raise ValueError.
+    """
+    require_columns(parameters, ["name", "residual_sd"], "exemplar parameter table")
+    if parameters.empty:
+        raise ValueError("exemplar parameter table must contain at least one model.")
+    names = parameters["name"]
+    for name in names:
+        if (not isinstance(name, str) or name == "None"
+                or not block_exemplar_models.SAFE_MODEL_NAME_PATTERN.fullmatch(name)):
+            raise ValueError("exemplar parameter table contains invalid or missing model names.")
+    if names.duplicated().any():
+        raise ValueError("exemplar parameter table contains duplicated model names.")
+    output_df = parameters.copy()
+    output_df["residual_sd"] = pd.to_numeric(output_df["residual_sd"], errors="raise")
+    sigmas = output_df["residual_sd"].to_numpy(dtype=float)
+    if not np.isfinite(sigmas).all() or (sigmas <= 0).any():
+        raise ValueError("residual_sd must contain only positive finite values in trials.")
     return output_df
 
 

@@ -10,10 +10,14 @@ except ImportError:
     from behavior_analysis import session_analysis
 from typing import Callable, Iterable
 import re
+from datetime import datetime, timezone
 
 from src.behavior_analysis.expectant_switching_analysis import (
     post_reward_excursion_rate,
 )
+from src.behavior_analysis.block_regression import compute_sliding_block_regression
+from src.behavior_analysis import state_space_plotting
+from src.behavior_analysis.exemplar_hmm_plotting import plot_exemplar_block_diagnostic
 
 
 cmap = plt.cm.tab20
@@ -1764,6 +1768,96 @@ def plot_session_agent_mouse_agreement(
     return save_path
 
 
+def plot_session_choice_window_agreement(
+    window_table: pd.DataFrame,
+    metadata: dict,
+    plot_path: Path,
+    sess_id_full: str,
+) -> Path:
+    """Plot saved window agreement and comparison counts with a light theme.
+
+    Parameters
+    ----------
+    window_table : pandas.DataFrame, shape (n_window_agent_rows, n_columns)
+        Saved choice-window output. Required columns are window_size, agent,
+        trial_start, trial_stop (zero-based half-open original row positions),
+        agreement (unitless fraction), and n_comparisons (valid choices).
+    metadata : dict
+        Saved provenance containing parameters.window_sizes, agent mappings,
+        discarded_choices, and optionally context_transition_trial_positions.
+    plot_path : pathlib.Path
+        Destination for the standalone PNG; existing files are reused.
+    sess_id_full : str
+        Session identifier used in the title and output filename.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved opaque-white PNG. Reads saved results only; no agent scoring,
+        model fitting, or window aggregation occurs.
+    """
+    plot_path = Path(plot_path)
+    plot_path.mkdir(parents=True, exist_ok=True)
+    save_path = plot_path / f"{sess_id_full}_choice_window_agreement.png"
+    if save_path.exists():
+        return save_path
+    sizes = metadata["parameters"]["window_sizes"]
+    required = {"window_size", "agent", "trial_start", "trial_stop", "agreement", "n_comparisons"}
+    missing = sorted(required.difference(window_table.columns))
+    if missing:
+        raise ValueError(f"window_table is missing plotting columns: {missing}")
+    agent_labels = {column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()}
+    style = {
+        "figure.facecolor": "white", "axes.facecolor": "white",
+        "text.color": "black", "axes.labelcolor": "black", "axes.edgecolor": "black",
+        "xtick.color": "black", "ytick.color": "black", "font.size": 13,
+    }
+    with plt.rc_context(style):
+        fig, axes = plt.subplots(len(sizes), 2, figsize=(15, 4.5 * len(sizes)), squeeze=False)
+        for row, size in enumerate(sizes):
+            agreement_ax, count_ax = axes[row]
+            selected = window_table.loc[window_table["window_size"].eq(size)]
+            agents = metadata["parameters"].get("agent_value_columns", {})
+            for agent_index, agent in enumerate(agents):
+                agent_rows = selected.loc[selected["agent"].eq(agent)]
+                if agent_rows.empty:
+                    continue
+                positions = (agent_rows["trial_start"] + agent_rows["trial_stop"] - 1) / 2
+                label = agent_labels.get(agent, agent)
+                color = AGENT_MOUSE_AGREEMENT_COLORS.get(label, all_colors[agent_index % len(all_colors)])
+                agreement_ax.plot(positions, agent_rows["agreement"], marker="o", color=color, label=label)
+                count_ax.plot(positions, agent_rows["n_comparisons"], marker="o", color=color, label=label)
+            if selected.empty:
+                agreement_ax.text(0.5, 0.5, "No complete choice windows", ha="center", va="center",
+                                  transform=agreement_ax.transAxes)
+            agreement_ax.set_ylim(-0.05, 1.05)
+            count_ax.set_ylim(-0.5, size + 0.5)
+            agreement_ax.set_ylabel("Mouse-agent agreement")
+            count_ax.set_ylabel("Usable comparisons (choices)")
+            agreement_ax.set_title(f"{size}-choice windows")
+            count_ax.set_title(f"{size}-choice prediction coverage")
+            for ax in (agreement_ax, count_ax):
+                for boundary in metadata.get("context_transition_trial_positions", []):
+                    ax.axvline(boundary - 0.5, color="gray", linewidth=0.6, linestyle=":", alpha=0.5)
+                ax.set_xlabel("Original recorded trial position (zero-based)")
+                ax.spines[["right", "top"]].set_visible(False)
+            if agreement_ax.get_legend_handles_labels()[0]:
+                agreement_ax.legend(fontsize=9, ncol=3, loc="best")
+        fig.suptitle(f"{sess_id_full} Choice-Window Agreement", fontsize=17)
+        tails = metadata.get("discarded_choices", {})
+        caption = (
+            "Consecutive non-overlapping valid mouse choices; no-choice/manual-reward trials excluded.\n"
+            f"Incomplete tails discarded: {tails}. Agent history continues across windows and contexts.\n"
+            "Missing predictions reduce each agent's denominator; dotted lines mark context transitions. "
+            "Descriptive agreement; no statistical tests."
+        )
+        fig.text(0.02, 0.015, caption, fontsize=10, va="bottom")
+        fig.tight_layout(rect=(0, 0.11, 1, 0.96))
+        fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
+        plt.close(fig)
+    return save_path
+
+
 def plot_session_side_bias_ratios(
     session_summary: pd.DataFrame,
     plot_path: Path,
@@ -2865,6 +2959,95 @@ def _load_block_model_dict_for_summary(
         return None
 
 
+def _apply_light_summary_style(fig: plt.Figure) -> None:
+    """Set all text, axes, and figure backgrounds to opaque white/black styling.
+
+    Input is a Matplotlib Figure with any number of axes/artists. Mutates only
+    its presentation colors; returns None and leaves data and axis coordinates
+    unchanged.
+    """
+    fig.set_facecolor("white")
+    fig.patch.set_alpha(1.0)
+    for text in fig.texts:
+        text.set_color("black")
+    for ax in fig.axes:
+        ax.set_facecolor("white")
+        ax.title.set_color("black")
+        ax.xaxis.label.set_color("black")
+        ax.yaxis.label.set_color("black")
+        ax.tick_params(colors="black")
+        for spine in ax.spines.values():
+            spine.set_color("black")
+        for text in ax.texts:
+            text.set_color("black")
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.get_frame().set_facecolor("white")
+            legend.get_frame().set_alpha(1.0)
+            for text in legend.get_texts():
+                text.set_color("black")
+
+
+def _plot_exemplar_summary_grid_panels(
+    state_ax: plt.Axes, regression_ax: plt.Axes, block_performance: pd.DataFrame,
+    model_names: Iterable[str], window_size: int, step_size: int,
+) -> bool:
+    """Draw full-row probability and compact-axis regression panels.
+
+    The block table retains its `(n_blocks, n_columns)` rows. State panels use
+    full-table ordinals; regression positions use valid-block ordinal centers.
+    Probabilities are unitless; regression slopes/intercepts retain trials per
+    reward and trials units. Inputs are a pair of Matplotlib Axes, full
+    `(n_blocks, n_columns)` DataFrame, ordered model names and integer windows;
+    returns True when the exemplar panel path is selected.
+    """
+    names = list(model_names)
+    state_ax.set_ylim(0, 1)
+    state_ax.set_yticks(np.linspace(0, 1, 5))
+    state_ax.set_ylabel("Smoothed probability")
+    for model_index, name in enumerate(names):
+        column = f"exemplar_hmm_smoothed_prob_{name}"
+        if column in block_performance:
+            state_ax.plot(np.arange(len(block_performance)), pd.to_numeric(block_performance[column], errors="coerce"),
+                          label=name, color=plt.get_cmap("tab10")(model_index % 10), marker=".")
+    state_ax.set_title("Exemplar Smoothed Probabilities")
+    state_ax.set_xlabel("Full-block ordinal")
+    has_observations = any(
+        np.isfinite(np.asarray(line.get_ydata(), dtype=float)).any()
+        for line in state_ax.lines
+    )
+    if has_observations:
+        state_ax.legend(fontsize=8)
+    else:
+        _plot_summary_placeholder(state_ax, "No exemplar state data")
+    if "source_session_id" in block_performance:
+        source_ids = block_performance["source_session_id"].astype(str).to_numpy()
+        starts = np.r_[0, np.flatnonzero(source_ids[1:] != source_ids[:-1]) + 1] if len(source_ids) else []
+        for start in starts:
+            if start:
+                state_ax.axvline(start - 0.5, color="0.5", linewidth=0.8, linestyle="--")
+            state_ax.text(
+                start, 0.98, source_ids[start], transform=state_ax.get_xaxis_transform(),
+                rotation=90, va="top", ha="left", fontsize=8,
+            )
+    try:
+        regression = compute_sliding_block_regression(
+            block_performance, predictor_column="prev_n_rewarded", response_column="trials_to_correct",
+            window_size=window_size, step_size=step_size,
+        )
+    except KeyError:
+        regression = pd.DataFrame()
+    regression_ax.set_title("Windowed Block Regression (valid-block ordinal)")
+    if regression.empty:
+        _plot_summary_placeholder(regression_ax, "Not enough valid blocks for regression")
+    else:
+        state_space_plotting.plot_sliding_block_regression(
+            regression_ax, regression, axis_label_size=12, tick_label_size=10, legend_font_size=9,
+        )
+        regression_ax.set_xlabel("Valid-block ordinal (invalid rows omitted)")
+    return True
+
+
 def _plot_hmm_summary_grid_panels(
     map_ax: plt.Axes,
     regression_ax: plt.Axes,
@@ -3001,6 +3184,7 @@ def plot_single_session_summary_grid(
     sliding_regression_plotter: Callable | None = None,
     sliding_regression_window_size: int = 10,
     sliding_regression_step_size: int = 5,
+    exemplar_model_names: Iterable[str] | None = None,
 ) -> Path:
     """Plot a 3x3 single-session behavioral and block-HMM summary grid.
 
@@ -3073,7 +3257,7 @@ def plot_single_session_summary_grid(
             from behavior_analysis import plot_model_values
         observer_axis_plotter = plot_model_values.plot_mouse_history_ideal_observer_value_on_ax
 
-    if block_model_dict is None:
+    if block_model_dict is None and exemplar_model_names is None and block_hmm_module is not None:
         block_model_dict = _load_block_model_dict_for_summary(
             processed_data_path=processed_data_path,
             figure_id=figure_id,
@@ -3127,7 +3311,11 @@ def plot_single_session_summary_grid(
         title="Switches in Block",
         use_summary_side_colors=True,
     )
-    hmm_available = _plot_hmm_summary_grid_panels(
+    hmm_available = _plot_exemplar_summary_grid_panels(
+        state_ax=axes[1, 2], regression_ax=axes[2, 2], block_performance=block_performance,
+        model_names=exemplar_model_names, window_size=sliding_regression_window_size,
+        step_size=sliding_regression_step_size,
+    ) if exemplar_model_names is not None else _plot_hmm_summary_grid_panels(
         map_ax=axes[1, 2],
         regression_ax=axes[2, 2],
         block_performance=block_performance,
@@ -3164,6 +3352,7 @@ def plot_single_session_summary_grid(
 
     fig.suptitle(f"{figure_title} Single-Session Summary", fontsize=14)
     save_path = plot_path / f"{figure_id}_single-session-summary-grid.png"
+    _apply_light_summary_style(fig)
     save_performance_figure(fig, save_path)
     return save_path
 
@@ -5551,6 +5740,96 @@ def plot_multisession_agent_mouse_agreement_quality(
     return save_path
 
 
+def plot_multisession_choice_window_agreement(
+    summary_df: pd.DataFrame,
+    plot_path: Path,
+    figure_id: str,
+    window_size: int,
+) -> Path:
+    """Plot one choice-window resolution across sessions without coverage axes.
+
+    Parameters
+    ----------
+    summary_df : pandas.DataFrame, shape (n_session_size_agent_groups, n_columns)
+        Saved session/window-size/agent summaries. Required columns are
+        session_id, date, window_size, agent, agreement_median, agreement_q1,
+        and agreement_q3. Agreement quartiles are unitless fractions in [0, 1].
+        First-seen session order is retained; same-date sessions remain distinct.
+    plot_path : pathlib.Path
+        Cross-session output directory; the PNG is written directly here.
+    figure_id : str
+        Mouse/run identifier used in the title and filename. The caller adds
+        a run timestamp to preserve figures from earlier runs.
+    window_size : int
+        Positive number of valid mouse choices per non-overlapping window.
+
+    Returns
+    -------
+    pathlib.Path
+        Saved opaque-white PNG, named
+        ``{figure_id}_choice-window-{window_size}_agreement.png``. Contains one
+        agreement axis with model medians and Q1-Q3 ranges, using existing
+        agent colors. No prediction coverage or model recomputation occurs.
+    """
+    from .choice_window_analysis import validate_window_size
+
+    size = validate_window_size(window_size)
+    required = {"session_id", "date", "window_size", "agent", "agreement_median",
+                "agreement_q1", "agreement_q3"}
+    missing = sorted(required.difference(summary_df.columns))
+    if missing:
+        raise ValueError(f"summary_df is missing choice-window plotting columns: {missing}")
+    selected = summary_df.loc[summary_df["window_size"].eq(size)].copy()
+    sessions = selected[["session_id", "date"]].drop_duplicates()
+    labels_by_agent = {column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()}
+    selected["agent"] = selected["agent"].map(labels_by_agent).fillna(selected["agent"])
+    # The existing agreement plot uses date as its categorical key. Supply
+    # session IDs as keys, then restore readable labels, so repeated dates do
+    # not combine distinct sessions or connect their points at the same x value.
+    selected["date"] = selected["session_id"]
+    repeated_dates = sessions["date"].duplicated(keep=False)
+    tick_labels = [
+        f"{date}\n{session_id}" if repeated else str(date)
+        for session_id, date, repeated in zip(sessions["session_id"], sessions["date"], repeated_dates)
+    ]
+    style = {
+        "figure.facecolor": "white", "axes.facecolor": "white", "text.color": "black",
+        "axes.labelcolor": "black", "axes.edgecolor": "black", "xtick.color": "black",
+        "ytick.color": "black", "font.size": 13,
+    }
+    plot_path = Path(plot_path)
+    plot_path.mkdir(parents=True, exist_ok=True)
+    save_path = plot_path / f"{figure_id}_choice-window-{size}_agreement.png"
+    with plt.rc_context(style):
+        fig, ax = plt.subplots(figsize=(max(11, len(sessions) * 0.32), 6))
+        if selected["agreement_median"].notna().any():
+            plot_multisession_agent_mouse_agreement_quality_on_ax(
+                ax=ax, summary_df=selected,
+                block_points_df=pd.DataFrame(columns=["date", "agent", "agreement"]),
+                figure_id=figure_id, show_raw_blocks=False,
+            )
+        else:
+            ax.text(0.5, 0.5, "No complete windows with usable model comparisons",
+                    ha="center", va="center", transform=ax.transAxes)
+            ax.set_ylim(-0.05, 1.05)
+            ax.set_ylabel("Mouse-Agent Agreement")
+            ax.spines[["right", "top"]].set_visible(False)
+        ax.set_xticks(np.arange(1, len(sessions) + 1))
+        ax.set_xticklabels(tick_labels, rotation=60, fontsize=9)
+        ax.set_xlabel("Session date")
+        ax.set_title(f"{figure_id}: {size}-Choice Model Agreement Across Sessions")
+        caption = (
+            f"Non-overlapping {size}-choice windows; lines show session medians, ranges show Q1-Q3.\n"
+            "Windows cross contexts but never sessions; incomplete tails and missing scores are excluded.\n"
+            "Missing predictions use per-agent denominators. Descriptive summaries; no statistical tests."
+        )
+        fig.text(0.02, 0.015, caption, fontsize=10, va="bottom")
+        fig.tight_layout(rect=(0, 0.14, 1, 1))
+        fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
+        plt.close(fig)
+    return save_path
+
+
 def plot_multisession_oracle_behavior(
     overall_df: pd.DataFrame,
     plot_path: Path,
@@ -5929,6 +6208,7 @@ def plot_multisession_summary_grid(
     point_jitter: float = 0.08,
     jitter_seed: int = 0,
     trial_display_cap: float = 25,
+    exemplar_model_names: Iterable[str] | None = None,
 ) -> Path:
     """Plot a 2x3 multisession behavior and block-HMM summary grid.
 
@@ -6007,7 +6287,7 @@ def plot_multisession_summary_grid(
     if ideal_choices_axis_plotter is None:
         ideal_choices_axis_plotter = plot_multisession_ideal_observer_choices_on_ax
 
-    if block_model_dict is None:
+    if block_model_dict is None and exemplar_model_names is None and block_hmm_module is not None:
         model_session_id = figure_id if block_model_session_id is None else block_model_session_id
         block_model_dict = _load_block_model_dict_for_summary(
             processed_data_path=processed_data_path,
@@ -6017,7 +6297,11 @@ def plot_multisession_summary_grid(
 
     fig, axes = plt.subplots(2, 3, figsize=(22, 12))
 
-    hmm_available = _plot_hmm_summary_grid_panels(
+    hmm_available = _plot_exemplar_summary_grid_panels(
+        state_ax=axes[0, 0], regression_ax=axes[1, 0], block_performance=block_performance,
+        model_names=exemplar_model_names, window_size=sliding_regression_window_size,
+        step_size=sliding_regression_step_size,
+    ) if exemplar_model_names is not None else _plot_hmm_summary_grid_panels(
         map_ax=axes[0, 0],
         regression_ax=axes[1, 0],
         block_performance=block_performance,
@@ -6063,7 +6347,27 @@ def plot_multisession_summary_grid(
     )
 
     fig.suptitle(f"{figure_id} Multisession Summary", fontsize=14)
-    save_path = plot_path / f"{figure_id}_multisession-summary-grid.png"
+    if exemplar_model_names is not None:
+        # Single-date panels otherwise autoscale tightly around x=1, leaving
+        # their existing overflow/no-correct labels far outside the figure.
+        for axis, table in (
+            (axes[0, 1], side_trials_to_correct_summary),
+            (axes[0, 2], block_switch_summary),
+            (axes[1, 1], correct_after_first_summary),
+            (axes[1, 2], overall_df),
+        ):
+            n_dates = table["date"].dropna().nunique() if "date" in table else 0
+            axis.set_xlim(0.5, max(n_dates, 1) + 0.5)
+        fig.suptitle(
+            f"{figure_id} Multisession Summary\n"
+            "Fixed-exemplar probabilities use full block rows; regression uses valid blocks. "
+            "All panels are descriptive.", fontsize=14,
+        )
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S_%f_UTC")
+        save_path = plot_path / f"{figure_id}_multisession-summary-grid_{timestamp}.png"
+    else:
+        save_path = plot_path / f"{figure_id}_multisession-summary-grid.png"
+    _apply_light_summary_style(fig)
     save_performance_figure(fig, save_path)
     return save_path
 
