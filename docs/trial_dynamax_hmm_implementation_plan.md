@@ -1,6 +1,6 @@
 # Trial-policy Dynamax analysis: implementation plan and live handoff
 
-Status: WP0-WP6 complete; code and synthetic validation accepted. WP7 awaits a user-designated experimental session.
+Status: WP0-WP6 complete. WP7 ran CT026 2026-08-28 successfully and awaits user inspection; Bayesian/WSLS identifiability limitation recorded. No batch authorized.
 
 This plan implements [trial_dynamax_hmm_spec.md](trial_dynamax_hmm_spec.md) using the principles in [SoftwareDesign.md](SoftwareDesign.md). The specification owns scientific decisions; this document describes modules, interfaces, tests, integration, and delivery order.
 
@@ -13,14 +13,14 @@ This is the durable handoff for a DIFFERENT implementing agent/chat. The plannin
 | Field | Current value |
 |---|---|
 | Inspected checkout | 2026-11-07; branch `refactor`; starting HEAD `9ffe30e859b95e5fdeb49b90892abd05154b5ea7`. Observation only: recheck, never reset to it. |
-| Authority | User: "plan has been pushed. begin implementation". WP0-WP6 authorized; no experimental session or batch authorized. |
+| Authority | Implementation authorized, then user: "you can try CT026 8/28". This authorizes only the resolved `CT026_2026-08-28_134630` single-session validation; no batch authorized. |
 | Implementation owner | Lead `/root`; sequential WP1 Sol-high, WP3/WP4 Luna-medium workers complete; independent WP6 Sol-high audit complete. No active worker/job. |
 | Feature state | Four feature modules, Bayesian guard, and tests committed. Main integration is implemented/tested but remains uncommitted alongside the pre-existing main migration; feature-only patch is preserved in ignored `.cache/trial_policy_implementation/trial_policy_main_changes.patch`. |
 | Dependencies not recoverable from HEAD alone | Pre-existing main/block migration in dirty `src/main.py`; untracked `exemplar_hmm_results.py` and `exemplar_hmm_plotting.py`. Preserve actual working files. `block_regression.py` and `exemplar_hmm_modeling.py` are tracked. |
 | Other work | Pre-existing `sync_ephys.py` edit and untracked files retained. Unexpected `docs/SAC_behavior_prep.md` entered commit `de94775`; user explicitly instructed ignoring that document and continuing. Leave its current changes and commit intact. |
 | Verification | Final suites: 268 numerical/plot/feature/block + 89 legacy main/window + 11 new workflow = 368 passed. Fresh main import excludes `ssm`; synthetic single/joint/four-adapter figures saved and visually reviewed. |
-| Exact next action | User designates one experimental session for WP7. No experimental analysis or batch has run. Preserve dirty-main dependencies when transferring this checkout. |
-| Experimental validation | No session designated, no data-run approval or batch approval recorded. Ask for the session when code/synthetic validation is ready. |
+| Exact next action | User inspects the CT026 August 28 diagnostic and identical Bayesian/WSLS-policy finding before deciding any subsequent candidate/configuration or batch work. Preserve dirty-main dependencies. |
+| Experimental validation | `CT026_2026-08-28_134630`: 698 rows, 695 comparisons, three unknown-flag exclusions; saved/visually inspected outputs and preservation checks pass. User inspection pending; no batch run. |
 
 ### Package ledger
 
@@ -35,7 +35,7 @@ States advance only after the receiving lead reviews the actual diff and evidenc
 | WP4 saved-result figures | `/root/wp4_plotting`, Luna medium; lead review | Accepted; actual PNGs reviewed | `fa496e5`; fixture correction `d45e2ec`; audit `8e24b2f` | 10 current cases pass; source `9753c34`, `c66fcae`, `8c41826` |
 | WP5 main/batch integration | Lead `/root`; WP6 independent Sol review | Accepted in working tree | `3575d6b`, `0537290`, `1d1f0b5`; scoped legacy fixtures | 11 new + 89 legacy cases pass; main source intentionally uncommitted |
 | WP6 synthetic/regression audit | `/root/wp6_audit`, Sol high; lead | Complete | Two plotting findings fixed tests-first; import fixture corrected | 368 final tests passed; synthetic artifacts and figure evidence below |
-| WP7 designated-session inspection | Receiving lead + user | Not started; depends WP6 and session designation | Not applicable | Not run; no batch authorized |
+| WP7 designated-session inspection | Lead `/root` + user | Run complete; user inspection pending | User-designated CT026 8/28 | Numerical/preservation/visual checks pass; identical Bayesian/WSLS recommendations on 695 comparisons; no batch authorized |
 
 ### Receiving/resuming procedure
 
@@ -448,3 +448,15 @@ For each gate, append: date/time; package/gate and authorization; actual owner/m
 - Main implementation is a 402-insertion/two-deletion feature delta against `.cache/trial_policy_implementation/starting_main.py`; exact isolated diff is `.cache/trial_policy_implementation/trial_policy_main_changes.patch`. The working `src/main.py` must accompany this branch/handoff because its pre-existing migration and new integration are deliberately uncommitted. Original `sync_ephys.py` change and unrelated untracked files were not modified.
 - Interruption: unexpected staged `docs/SAC_behavior_prep.md` entered `de94775` together with the fixture fix. Lead stopped; user explicitly replied "ignore that document and keep going". Commit and current document edits are left intact; no history rewrite performed. Future commits use explicit path ownership.
 - All test/tool sessions and workers complete; no active process/log tail to resume. WP0-WP6 accepted. Exact next action: user selects the full ID/path of one experimental session for WP7 validation, then inspects its outputs before any batch. No session or batch authorization is inferred from implementation completion.
+
+### 2026-11-07 - WP7 CT026 August 28 experimental validation
+
+- Authority: user "you can try CT026 8/28". Resolved the existing session uniquely to `CT026_2026-08-28_134630` under `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/`. Lead `/root`; no worker delegation, upstream recomputation, fitting, code edits or experimental batch.
+- Read the existing augmented-trial CSV with `na_filter=False`; explicit parameters came from that source's `processed/trial_feature_params.json` (SHA-256 `961411b66878ef1f91de681732678793d375a70da185ab49aabd47a76eb884c7`). Effective first-round parameters match approved defaults: FQL decay .7/update .3, Bayesian switch .2/active .8/inactive 0/reward sizes 1 and 0/tanh scale 1; error .10, trial stay .90, smoothing enabled. Retained original IDs run from 0 through 697; initialization is first retained row.
+- Preflight found 698 retained rows, 695 eligible comparisons/updates, no existing `trial_policy_` columns. Unknown manual flags on original trials 136, 436 and 578 exclude scoring and history updates while retaining all HMM time steps. No missing-reward continuation warning on this session.
+- Exact driver: `UV_CACHE_DIR=.cache/uv MPLCONFIGDIR=.cache/matplotlib MPLBACKEND=Agg uv run --frozen --no-sync python -B .cache/trial_policy_implementation/run_ct026_2026_08_28.py` -> exit 0. Explicitly authorized session-directory writes ran through sandbox escalation. JAX used CPU because CUDA-enabled jaxlib is absent; no dependency was changed.
+- Numerical artifact: `processed/trial_policy_hmm/trial_policy_hmm_v1/350250c87646836d339a54d6e13583d0a248cf09cbe200d2c8ea5166792342b8/2026-11-08_04-27-34_445475_UTC/results.npz` beneath that session directory. Status `ok`, likelihood/posterior shape (698,3), finite normalized smoothed probabilities, common excluded likelihood rows unavailable, no independent winners on excluded rows, and saved-array round trip verified.
+- Current augmented CSV refreshed with only new trial-owned columns. Original column values/order/index were checked unchanged in memory. Original CSV bytes were verified in `processed/trial_policy_hmm/archives/33a0fc8628bb56df422d4ec78217248b745fbe681dd61641a9f2936d9ae8b719/CT026_2026-08-28_134630_augmented_trials.csv`. Block-performance and saved parameter file byte hashes are unchanged. Existing upstream/block outputs were retained.
+- Figure and human review directory: `figures/trial_policy_hmm/2026-11-08_04-27-33_791289_UTC/` containing `trial_policy_diagnostic.png`, `validation_report.json`, `validation_summary.md`, `validation_driver.py`, and actual `main.py`/`batch.py` snapshots. Root visually inspected the real 698-row five-panel PNG: dense expected overlapping greedy traces; preserved tied winners; block boundaries and excluded-row cues; readable caption. Parent log/metadata: `processed/trial_policy_hmm/runs/2026-11-08_04-27-33_791289_UTC/`.
+- Scientific identifiability finding: saved Bayesian-HMM and WSLS p_right columns are identical on all 695 eligible comparisons, with zero disagreements. Maximum smoothed probability difference is 1.4901161193847656e-7 (below tie tolerance). Independent comparisons contain 603 tied rows and smoothed assignments 522 tied rows; labels preserve them. This configuration cannot distinguish those two policies on this session; each still receives a separate equal prior share. Recorded in the validation report/summary; no candidate was silently removed or retuned.
+- All tool sessions (36435 preflight, 47409 execution, 58841 identifiability check, 30331 report update) complete. Existing unrelated source/document edits remain untouched. No tests rerun because no production code changed. Exact next gate is user inspection of this session's output and the policy-identifiability issue; no later session/batch authorization inferred.
