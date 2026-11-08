@@ -72,7 +72,7 @@ def test_saved_result_plot_panels_tied_winners_and_excluded_rows(tmp_path, captu
         np.testing.assert_allclose(cells[model, [0, 1, 3, 4]],
                                    np.tile(to_rgba(plotting._model_color(str(model_id))), (4, 1)))
     np.testing.assert_allclose(cells[:, 2], np.tile(to_rgba("#d9d9d9"), (models, 1)))
-    caption = " ".join(text.get_text() for text in figure.texts).lower()
+    caption = " ".join(" ".join(text.get_text() for text in figure.texts).lower().split())
     assert "0.1" in caption and "tie" in caption
     if smoothing:
         assert "retrospective" in caption
