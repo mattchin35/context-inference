@@ -956,6 +956,32 @@ def test_summarize_block_performance_sums_string_encoded_rewards_numerically():
     assert block_performance["prev_n_rewarded"].tolist() == [0, 1.0, 1.0]
 
 
+@pytest.mark.parametrize("excluded_row", [None, "manual_reward", "no_choice"])
+def test_block_summary_masks_float_rewards_without_mutating_input(excluded_row):
+    """Exclusion mode yields correct block metrics from float64 rewards[T].
+
+    Pandas may expose these rewards as read-only arrays. Summary masking must
+    preserve the input table's values, row order, dtypes, and reward units
+    (binary delivery indicators), including rewards on excluded rows.
+    """
+    trial_df = make_simulated_trial_df().astype({"action": object})
+    trial_df["reward"] = np.array([0., 1., 1., 0., 1., 0.], dtype=np.float64)
+    trial_df["experimenter_reward_given"] = 0
+    if excluded_row == "manual_reward":
+        trial_df.loc[1, "experimenter_reward_given"] = 1
+    elif excluded_row == "no_choice":
+        trial_df.loc[1, "action"] = "no_choice"
+    augmented = session_analysis.make_augmented_trial_df(trial_df)
+    original = augmented.copy(deep=True)
+
+    blocks = session_analysis.summarize_block_performance(augmented, session_id="float_rewards")
+
+    assert blocks.loc[0, "n_rewarded"] == (1. if excluded_row is None else 0.)
+    assert blocks.loc[1, "terminal_omission_streak_inclusive"] == (0 if excluded_row is None else 1)
+    pd.testing.assert_frame_equal(augmented, original)
+    assert augmented.loc[1, "reward"] == 1.
+
+
 def test_summarize_block_performance_counts_explore_trials_by_block():
     """Block summaries should save the number of explore-tagged trials per block."""
     trial_df = make_simulated_trial_df()
