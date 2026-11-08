@@ -3,6 +3,7 @@
 from dataclasses import replace
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 import numpy as np
 import pandas as pd
@@ -42,7 +43,7 @@ def diagnostic_result(models=3, smoothing=True, session_id="source"):
 
 
 @pytest.mark.parametrize("smoothing,panels", [(True, 5), (False, 3)])
-@pytest.mark.parametrize("models", [1, 3, 4])
+@pytest.mark.parametrize("models", [1, 3, 4, 6])
 def test_saved_result_plot_panels_tied_winners_and_excluded_rows(tmp_path, capture_figure, monkeypatch, smoothing, panels, models):
     """Numerical artifacts yield opaque PNG panels without any inference call."""
     from src.behavior_analysis import trial_policy_plotting as plotting
@@ -64,10 +65,13 @@ def test_saved_result_plot_panels_tied_winners_and_excluded_rows(tmp_path, captu
     assert all(axis.get_facecolor() == (1., 1., 1., 1.) for axis in figure.axes)
     assert any(patch.get_gid() == "excluded-row" for patch in figure.axes[0].patches)
     assert any(line.get_gid() == "block-boundary" for line in figure.axes[0].lines)
-    offsets = [collection.get_offsets() for collection in figure.axes[2].collections]
-    actual = {(int(x), int(y)) for values in offsets for x, y in values}
-    expected = {(row, model) for row in (0, 1, 3, 4) for model in range(models)}
-    assert actual == expected
+    assert len(figure.axes[2].images) == 1
+    cells = np.asarray(figure.axes[2].images[0].get_array())
+    assert cells.shape == (models, 5, 4)
+    for model, model_id in enumerate(result.model_ids):
+        np.testing.assert_allclose(cells[model, [0, 1, 3, 4]],
+                                   np.tile(to_rgba(plotting._model_color(str(model_id))), (4, 1)))
+    np.testing.assert_allclose(cells[:, 2], np.tile(to_rgba("#d9d9d9"), (models, 1)))
     caption = " ".join(text.get_text() for text in figure.texts).lower()
     assert "0.1" in caption and "tie" in caption
     if smoothing:
@@ -79,6 +83,35 @@ def test_saved_result_plot_panels_tied_winners_and_excluded_rows(tmp_path, captu
     assert "source" in caption
     choices = next(collection for collection in figure.axes[0].collections if collection.get_label() == "Mouse choice")
     np.testing.assert_array_equal(choices.get_offsets(), [[0, 1], [1, 0], [3, 1], [4, 0]])
+
+
+def test_membership_grid_has_model_rows_for_every_tie_combination(tmp_path, capture_figure):
+    """Path/Figure fixtures show unique/partial/all ties with exactly six rows."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+
+    result, metadata = diagnostic_result(models=6)
+    winners = np.array([[1, 0, 0, 0, 0, 0], [0, 1, 1, 0, 0, 0],
+                        [0, 0, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1],
+                        [1, 0, 1, 0, 1, 0]], dtype=bool)
+    smoothed = winners.copy()
+    smoothed[2] = [0, 0, 0, 0, 0, 1]
+    result = replace(result, independent_best_model_mask=winners, hmm_smoothed_best_model_mask=smoothed)
+    plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "ties.png")
+    figure = capture_figure[-1]
+    for axis, mask in ((figure.axes[2], winners), (figure.axes[4], smoothed)):
+        assert len(axis.get_yticks()) == 6 and len(axis.images) == 1
+        assert not axis.collections
+        image = axis.images[0]
+        assert image.get_interpolation() == "nearest"
+        np.testing.assert_allclose(image.get_extent(), [-.5, 4.5, -.5, 5.5])
+        cells = np.asarray(image.get_array())
+        for model, model_id in enumerate(result.model_ids):
+            expected = np.tile(to_rgba("white"), (5, 1))
+            expected[2] = to_rgba("#d9d9d9")
+            expected[mask[:, model]] = to_rgba(plotting._model_color(str(model_id)))
+            np.testing.assert_allclose(cells[model], expected)
+    caption = " ".join(text.get_text() for text in figure.texts).lower()
+    assert "filled" in caption and "column" in caption
 
 
 def test_model_colors_are_stable_under_candidate_reordering(tmp_path, capture_figure):

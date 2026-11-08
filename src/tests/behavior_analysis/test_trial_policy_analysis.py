@@ -96,7 +96,7 @@ def test_interior_neutral_row_matches_enumerated_paths(history, monkeypatch):
     assert not np.allclose(expected[[0, 2, 3]], compressed)
 
 
-@pytest.mark.parametrize("models", [1, 2, 3, 4])
+@pytest.mark.parametrize("models", [1, 2, 3, 4, 6])
 def test_identical_policies_uniform_transition_and_model_permutation(history, models):
     """Generic K matrices preserve uniform ties, independent inference and ordering."""
     from src.behavior_analysis import trial_policy_analysis as analysis
@@ -120,7 +120,7 @@ def test_identical_policies_uniform_transition_and_model_permutation(history, mo
 
 @pytest.mark.parametrize("rows,valid,status", [(0, False, "empty"), (1, False, "no_valid_comparisons"),
                                               (3, False, "no_valid_comparisons"), (1, True, "ok")])
-@pytest.mark.parametrize("models", [1, 4])
+@pytest.mark.parametrize("models", [1, 4, 6])
 def test_empty_single_row_and_prior_only_status(rows, valid, status, models):
     """Edge shapes have defined evidence status and optional aligned HMM outputs."""
     from src.behavior_analysis import trial_policy_analysis as analysis
@@ -149,7 +149,7 @@ def test_invalid_error_probabilities_raise(history, error):
                                                   ("a",), opposite_action_error_prob=error)
 
 
-@pytest.mark.parametrize("models", [2, 3, 4])
+@pytest.mark.parametrize("models", [2, 3, 4, 6])
 def test_transition_boundaries_and_long_reversals(history, models):
     """Inclusive bounds work in real Dynamax and adjacent outside requests fail."""
     from src.behavior_analysis import trial_policy_analysis as analysis

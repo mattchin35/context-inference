@@ -41,7 +41,9 @@ def test_default_single_runner_saves_aligned_outputs_and_reuses_only_arrays(tmp_
     source = source_session(tmp_path)
     trials = source.augmented_trial_df.assign(inherited_block_model="fixed")
     attached, result, path = main.run_dynamax_trial_analysis(trials, source.session, feature_params=TaskParams(), plot=True)
-    assert result.p_right.shape == (6, 3) and path.exists()
+    assert result.p_right.shape == (6, 6) and path.exists()
+    assert tuple(result.model_ids) == ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
+                                       "q_learning", "reward_decay_hmm", "ideal_observer")
     assert attached["inherited_block_model"].tolist() == ["fixed"] * 6
     assert len(list(source.session.figure_path.glob("trial_policy_hmm/*/*.png"))) == 1
     before = path.read_bytes()
@@ -76,6 +78,24 @@ def test_smoothing_disabled_refresh_clears_saved_hmm_fields(tmp_path):
     assert "trial_policy_independent_model" in current
 
 
+@pytest.mark.parametrize("ids", [("ideal_observer", "q_learning"),
+                                   ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch")])
+def test_single_runner_retains_explicit_ordered_subsets(tmp_path, ids):
+    """Path/IDs[K] yield only the selected ordered policy outputs and metadata."""
+    import src.main as main
+    from src.behavior_analysis.trial_policy_results import load_trial_policy_results
+
+    source = source_session(tmp_path)
+    current, comparison, path = main.run_dynamax_trial_analysis(
+        source.augmented_trial_df, source.session, feature_params=TaskParams(),
+        model_ids=ids, smoothing=False, plot=False)
+    assert tuple(comparison.model_ids) == ids and comparison.p_right.shape == (6, len(ids))
+    assert {column.removeprefix("trial_policy_p_right_") for column in current
+            if column.startswith("trial_policy_p_right_")} == set(ids)
+    _, metadata = load_trial_policy_results(path)
+    assert tuple(metadata["candidate_parameters"]) == ids
+
+
 def test_validation_failure_records_parent_error_without_success_artifact(tmp_path):
     """Malformed inputs produce a contextual parent log before numerical signature exists."""
     import src.main as main
@@ -88,7 +108,8 @@ def test_validation_failure_records_parent_error_without_success_artifact(tmp_pa
     assert len(logs) == 1 and "action" in logs[0].read_text()
     record = json.loads((logs[0].parent / "metadata.json").read_text())
     assert record["requested_options"]["error_prob"] == .1
-    assert record["requested_options"]["model_ids"] == ["forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch"]
+    assert record["requested_options"]["model_ids"] == ["forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
+                                                         "q_learning", "reward_decay_hmm", "ideal_observer"]
     assert not list(source.session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
 
 
@@ -99,7 +120,8 @@ def test_joint_results_equal_separate_sources_with_mixed_schemas_and_parameters(
     from src.behavior_analysis import trial_policy_results as persistence
 
     sources = [source_session(tmp_path, "first"), source_session(tmp_path, "second", flag_column="give_reward")]
-    parameters = {"first": TaskParams(FQL_decay=.6), "second": TaskParams(state_transition_prob=.1)}
+    parameters = {"first": TaskParams(FQL_decay=.6, QL_learning_rate=.6, omission_lam=.2),
+                  "second": TaskParams(state_transition_prob=.1, hmm_reward_decay_lambda=.3)}
     references, source_csvs = [], {}
     for source in sources:
         _, reference, _ = main.run_dynamax_trial_analysis(source.augmented_trial_df, source.session,
@@ -208,7 +230,7 @@ def test_joint_saved_parameters_overrides_and_empty_sources(tmp_path):
     assert "trial_feature_params.json" in first_meta["parameter_source"]
     empty_artifact = next(sources[1].session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
     empty_result, empty_meta = load_trial_policy_results(empty_artifact)
-    assert empty_result.status == "empty" and empty_result.p_right.shape == (0, 3)
+    assert empty_result.status == "empty" and empty_result.p_right.shape == (0, 6)
     before = set(sources[0].session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
     main.run_multisession_analysis(combined, joint, source_sessions=sources, trial_policy_n_jobs=1,
                                    trial_feature_params_by_session={"first": TaskParams(FQL_decay=.6)})
