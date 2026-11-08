@@ -1,0 +1,133 @@
+"""Saved-result trial diagnostics preserve ties, exclusions and session separation."""
+
+from dataclasses import replace
+
+from matplotlib.figure import Figure
+import numpy as np
+import pandas as pd
+import pytest
+
+
+@pytest.fixture
+def capture_figure(monkeypatch):
+    """Capture actual Matplotlib Figure objects while still writing real PNGs."""
+    captured = []
+    original = Figure.savefig
+
+    def capture(self, *args, **kwargs):
+        """Figure and standard savefig args produce an actual saved image and capture."""
+        captured.append(self)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", capture)
+    return captured
+
+
+def diagnostic_result(models=3, smoothing=True, session_id="source"):
+    """Return all-tied numerical result (T=5,K) plus plain diagnostic metadata."""
+    from src.behavior_analysis import trial_policy_analysis as analysis
+    from src.behavior_analysis.trial_policy_models import DEFAULT_MODEL_IDS, prepare_trial_policy_history
+
+    table = pd.DataFrame({"cur_trial": [2, 3, 5, 6, 7], "cur_block": [1, 1, 2, 2, 2],
+                          "action": [0, 1, "no_choice", 0, 1], "reward": [1, 0, 0, 1, 0]})
+    history = prepare_trial_policy_history(table, session_id=session_id)
+    ids = (*DEFAULT_MODEL_IDS, "synthetic_fourth")[:models]
+    result = analysis.compute_trial_policy_comparison(history, np.zeros((5, models)),
+                                                       np.ones((5, models), bool), ids)
+    if smoothing:
+        result = analysis.smooth_trial_policy_comparison(result)
+    return result, {"session_id": session_id, "model_ids": list(ids), "status": result.status,
+                    "parameters": {"opposite_action_error_prob": .1, "stay_prob": .9, "smoothing": smoothing}}
+
+
+@pytest.mark.parametrize("smoothing,panels", [(True, 5), (False, 3)])
+@pytest.mark.parametrize("models", [1, 3, 4])
+def test_saved_result_plot_panels_tied_winners_and_excluded_rows(tmp_path, capture_figure, monkeypatch, smoothing, panels, models):
+    """Numerical artifacts yield opaque PNG panels without any inference call."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+    from src.behavior_analysis import trial_policy_analysis as analysis
+
+    result, metadata = diagnostic_result(models, smoothing)
+
+    def reject_inference(*args, **kwargs):
+        """Arbitrary numerical call arguments fail; plotting consumes saved arrays only."""
+        pytest.fail("Plotting must not rerun inference")
+
+    monkeypatch.setattr(analysis, "compute_trial_policy_comparison", reject_inference)
+    monkeypatch.setattr(analysis, "smooth_trial_policy_comparison", reject_inference)
+    path = plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "figure.png")
+    assert path.exists() and path.stat().st_size > 1000
+    figure = capture_figure[-1]
+    assert len(figure.axes) == panels
+    assert figure.get_facecolor() == (1., 1., 1., 1.)
+    assert all(axis.get_facecolor() == (1., 1., 1., 1.) for axis in figure.axes)
+    assert any(patch.get_gid() == "excluded-row" for patch in figure.axes[0].patches)
+    assert any(line.get_gid() == "block-boundary" for line in figure.axes[0].lines)
+    offsets = [collection.get_offsets() for collection in figure.axes[2].collections]
+    actual = {(int(x), int(y)) for values in offsets for x, y in values}
+    expected = {(row, model) for row in (0, 1, 3, 4) for model in range(models)}
+    assert actual == expected
+    caption = " ".join(text.get_text() for text in figure.texts).lower()
+    assert "0.1" in caption and "tie" in caption and "retrospective" in caption
+    assert "source" in caption
+    choices = next(collection for collection in figure.axes[0].collections if collection.get_label() == "Mouse choice")
+    np.testing.assert_array_equal(choices.get_offsets(), [[0, 1], [1, 0], [3, 1], [4, 0]])
+
+
+def test_model_colors_are_stable_under_candidate_reordering(tmp_path, capture_figure):
+    """Stable model IDs determine trace colors independently of selected order."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+
+    result, metadata = diagnostic_result()
+    plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "first.png")
+    first = {line.get_label(): line.get_color() for line in capture_figure[-1].axes[0].lines if line.get_label() in result.model_ids}
+    permutation = [2, 0, 1]
+    changes = {}
+    for name in ("model_ids",):
+        changes[name] = getattr(result, name)[permutation]
+    for name in ("p_right", "log_likelihoods", "independent_best_model_mask", "hmm_smoothed_probs", "hmm_smoothed_best_model_mask"):
+        changes[name] = getattr(result, name)[:, permutation]
+    permuted = replace(result, **changes)
+    plotting.plot_trial_policy_diagnostic(permuted, metadata, output_path=tmp_path / "second.png")
+    second = {line.get_label(): line.get_color() for line in capture_figure[-1].axes[0].lines if line.get_label() in result.model_ids}
+    assert first == second
+
+
+def test_multisession_traces_break_at_source_boundaries(tmp_path, capture_figure):
+    """Two source-local results share display positions but no connecting traces."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+
+    first, first_meta = diagnostic_result(session_id="first")
+    second, second_meta = diagnostic_result(session_id="second")
+    path = plotting.plot_multisession_trial_policy_diagnostic(
+        [first, second], [first_meta, second_meta], output_path=tmp_path / "joint.png")
+    assert path.exists()
+    figure = capture_figure[-1]
+    for axis in figure.axes:
+        assert any(line.get_gid() == "session-boundary" and line.get_xdata()[0] == 4.5 for line in axis.lines)
+        for line in axis.lines:
+            if line.get_gid() in ("session-boundary", "block-boundary"):
+                continue
+            values = np.asarray(line.get_xdata())
+            if len(values):
+                assert not (np.min(values) < 5 and np.max(values) >= 5)
+    assert "first" in " ".join(text.get_text() for text in figure.texts)
+    assert "second" in " ".join(text.get_text() for text in figure.texts)
+
+
+def test_empty_and_no_comparison_figures_explain_evidence_status(tmp_path, capture_figure):
+    """Prior-only/empty results remain renderable and visibly report their status."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+    from src.behavior_analysis import trial_policy_analysis as analysis
+    from src.behavior_analysis.trial_policy_models import prepare_trial_policy_history
+
+    for rows, status in ((0, "empty"), (3, "no_valid_comparisons")):
+        history = prepare_trial_policy_history(pd.DataFrame({"cur_trial": range(rows), "cur_block": [0] * rows,
+                                                            "action": [None] * rows, "reward": [None] * rows}), session_id="empty_source")
+        result = analysis.compute_trial_policy_comparison(history, np.zeros((rows, 1)), np.ones((rows, 1), bool), ("single",))
+        result = analysis.smooth_trial_policy_comparison(result)
+        metadata = {"session_id": "empty_source", "status": status, "parameters": {"opposite_action_error_prob": .1, "stay_prob": .9}}
+        plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / f"{status}.png")
+        texts = [text.get_text().lower() for text in capture_figure[-1].texts]
+        texts += [text.get_text().lower() for axis in capture_figure[-1].axes for text in axis.texts]
+        assert any(status in text or "no comparison" in text for text in texts)
