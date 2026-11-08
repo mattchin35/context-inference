@@ -683,6 +683,61 @@ def test_find_saved_session_by_date_errors_when_date_is_missing(tmp_path):
         )
 
 
+def test_find_saved_session_by_date_ignores_archived_and_exported_csvs(tmp_path):
+    """Path fixture yields one live session despite identical nested CSV names."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    home = write_saved_session(
+        data_root, "CT014", "2025-12-05", "165240",
+        pd.DataFrame({"block_ix": [0]}), pd.DataFrame({"cur_block": [0]}),
+    )
+    current = home / "processed" / "CT014_2025-12-05_165240_augmented_trials.csv"
+    for relative_directory in (
+        "processed/trial_policy_hmm/archives/old_digest",
+        "processed/exemplar_hmm/archives/old_digest",
+        "processed/trial_policy_hmm/run/export",
+        "figures/old_export",
+    ):
+        copied = home / relative_directory / current.name
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        copied.write_bytes(current.read_bytes())
+
+    session = main_module.find_saved_session_by_date(
+        "CT014", "2025-12-05", data_root, data_root / "cross_session_analysis",
+    )
+    assert session.processed_data_path == current.parent
+    assert session.sess_id_full == "CT014_2025-12-05_165240"
+
+
+def test_find_saved_session_by_date_rejects_two_live_timestamps(tmp_path):
+    """Path fixture yields an ambiguity error for two actual current sessions."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    home = write_saved_session(
+        data_root, "CT014", "2025-12-05", "165240",
+        pd.DataFrame({"block_ix": [0]}), pd.DataFrame({"cur_block": [0]}),
+    )
+    pd.DataFrame({"cur_block": [0]}).to_csv(
+        home / "processed" / "CT014_2025-12-05_175240_augmented_trials.csv", index=False,
+    )
+    with pytest.raises(ValueError, match="found 2"):
+        main_module.find_saved_session_by_date(
+            "CT014", "2025-12-05", data_root, data_root / "cross_session_analysis",
+        )
+
+
+def test_find_saved_session_by_date_does_not_use_archive_as_missing_live_session(tmp_path):
+    """Path fixture with an archive only must raise rather than load stale data."""
+    main_module = load_main_module()
+    archived = tmp_path / "CT014" / "session" / "processed" / "trial_policy_hmm" / "archives" / "old_digest"
+    archived.mkdir(parents=True)
+    (archived / "CT014_2025-12-05_165240_augmented_trials.csv").write_text("cur_block\n0\n")
+    with pytest.raises(FileNotFoundError, match="2025-12-05"):
+        main_module.find_saved_session_by_date(
+            "CT014", "2025-12-05", tmp_path / "CT014", tmp_path / "cross_session_analysis",
+        )
+
+
 def test_resolve_multisession_dates_returns_explicit_dates_without_discovery(tmp_path):
     """Explicit multisession dates should be preserved when discovery is off."""
     main_module = load_main_module()

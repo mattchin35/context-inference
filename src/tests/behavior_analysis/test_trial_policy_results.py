@@ -232,15 +232,45 @@ def test_export_refreshes_current_table_without_mutating_cached_npz(trial_table,
     export_directory = path.parent.parent / "fresh_export"
     exported = results.write_trial_policy_export(attached, export_directory=export_directory,
                                                  numerical_path=path, metadata=meta, current_csv_path=current)
-    assert exported == export_directory / "augmented_trials.csv"
+    assert exported == export_directory / "trial_policy_export.csv"
     assert pd.read_csv(current)["fresh_feature"].tolist() == [77] * 5
     assert path.read_bytes() == numerical_bytes
-    assert any(archived.read_bytes() == old_bytes for archived in tmp_path.rglob("*augmented_trials.csv") if archived != current)
+    archives = list((tmp_path / "trial_policy_hmm" / "archives").rglob("source_augmented_trials.archived.csv"))
+    assert len(archives) == 1 and archives[0].read_bytes() == old_bytes
+    assert list(tmp_path.rglob("*augmented_trials.csv")) == [current]
     assert not (export_directory / "results.npz").exists()
     for filename in ("run.log", "metadata.json", "summary.md", "main.py", "batch.py"):
         assert (export_directory / filename).exists()
     record = json.loads((export_directory / "metadata.json").read_text())
     assert record["numerical_artifact"] == str(path)
+    assert record["export_artifact"] == str(exported)
+
+
+@pytest.mark.parametrize("legacy_archive", [False, True])
+def test_trial_exports_archive_identical_content_once_and_preserve_legacy_archives(tmp_path, legacy_archive):
+    """Path/bool fixtures retain identical CSV bytes once across repeated exports."""
+    from hashlib import sha256
+    from src.behavior_analysis import trial_policy_results as results
+
+    current = tmp_path / "source_augmented_trials.csv"
+    table = pd.DataFrame({"action": [0, 1], "reward": [1, 0]})
+    table.to_csv(current, index=False)
+    content = current.read_bytes()
+    archive_root = tmp_path / "trial_policy_hmm" / "archives"
+    if legacy_archive:
+        legacy = archive_root / sha256(content).hexdigest() / current.name
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(content)
+    for run_index in range(2):
+        snapshot = results.write_trial_policy_export(
+            table, export_directory=tmp_path / f"export_{run_index}",
+            numerical_path=None, metadata={}, current_csv_path=current,
+        )
+        assert snapshot.name == "trial_policy_export.csv"
+    archives = list(archive_root.rglob("*.csv"))
+    assert len(archives) == 1 and archives[0].read_bytes() == content
+    assert archives[0].name == (current.name if legacy_archive else "source_augmented_trials.archived.csv")
+    assert current.read_bytes() == content
 
 
 def test_unsmoothed_npz_omits_hmm_fields(trial_table, tmp_path):

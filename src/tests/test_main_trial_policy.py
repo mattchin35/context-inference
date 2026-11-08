@@ -57,7 +57,7 @@ def test_default_single_runner_saves_aligned_outputs_and_reuses_only_arrays(tmp_
     assert current["fresh_feature"].tolist() == [99] * 6
     saved = pd.read_csv(source.session.processed_data_path / "source_augmented_trials.csv")
     assert saved["fresh_feature"].tolist() == [99] * 6
-    assert len(list(path.parent.parent.glob("*/augmented_trials.csv"))) == 2
+    assert len(list(path.parent.parent.glob("*/trial_policy_export.csv"))) == 2
     np.testing.assert_equal(result.hmm_smoothed_probs, reused.hmm_smoothed_probs)
 
 

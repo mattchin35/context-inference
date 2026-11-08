@@ -183,7 +183,8 @@ def test_residuals_regenerate_and_obsolete_columns_are_archived_then_removed(
     pickle_path.write_bytes(b"old ssm payload must stay byte-identical")
     result, inherited, _ = results_module.save_or_load_exemplar_hmm_results(blocks, trials, tmp_path, "session", specs=specs)
     for name, content in before.items():
-        assert any(path.read_bytes() == content for path in (tmp_path / "exemplar_hmm" / "archives").rglob(name))
+        archived_name = Path(name).with_suffix(".archived.csv").name
+        assert any(path.read_bytes() == content for path in (tmp_path / "exemplar_hmm" / "archives").rglob(archived_name))
     assert pickle_path.read_bytes() == b"old ssm payload must stay byte-identical"
     assert not {"cur_strategy_slope", "hardcoded_strategy", "removed_exemplar_residual_TTS", "removed_exemplar_normalized_residual_TTS", "exemplar_hmm_smoothed_prob_removed"}.intersection(result.block_performance)
     assert "inherited_block_prob_removed" not in inherited
@@ -199,13 +200,29 @@ def test_preserve_exports_is_content_addressed_and_does_not_touch_source_files(r
     before = block_path.read_bytes()
     assert results_module.preserve_current_exports(tmp_path, "session") is None
     results_module.preserve_current_exports(tmp_path, "session")
-    archived = list((tmp_path / "exemplar_hmm" / "archives").rglob(block_path.name))
+    archived_name = "session_block_performance.archived.csv"
+    archived = list((tmp_path / "exemplar_hmm" / "archives").rglob(archived_name))
     assert len(archived) == 1 and archived[0].read_bytes() == before
     assert block_path.read_bytes() == before
     block_path.write_text("block_ix,inferred_strategy\n1,new\n")
     results_module.preserve_current_exports(tmp_path, "session")
-    archived = list((tmp_path / "exemplar_hmm" / "archives").rglob(block_path.name))
+    archived = list((tmp_path / "exemplar_hmm" / "archives").rglob(archived_name))
     assert len(archived) == 2
+
+
+def test_preserve_exports_reuses_legacy_archive_without_renaming_it(results_module, tmp_path):
+    """Path/module fixtures preserve old archive bytes without a duplicate backup."""
+    from hashlib import sha256
+
+    current = tmp_path / "session_augmented_trials.csv"
+    content = b"cur_block,action\n0,1\n"
+    current.write_bytes(content)
+    legacy = tmp_path / "exemplar_hmm" / "archives" / sha256(content).hexdigest() / current.name
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(content)
+    results_module.preserve_current_exports(tmp_path, "session")
+    assert legacy.read_bytes() == content and current.read_bytes() == content
+    assert list(legacy.parent.iterdir()) == [legacy]
 
 
 @pytest.mark.parametrize("empty", [False, True])
