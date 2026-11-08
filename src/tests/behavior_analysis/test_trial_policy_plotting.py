@@ -69,7 +69,12 @@ def test_saved_result_plot_panels_tied_winners_and_excluded_rows(tmp_path, captu
     expected = {(row, model) for row in (0, 1, 3, 4) for model in range(models)}
     assert actual == expected
     caption = " ".join(text.get_text() for text in figure.texts).lower()
-    assert "0.1" in caption and "tie" in caption and "retrospective" in caption
+    assert "0.1" in caption and "tie" in caption
+    if smoothing:
+        assert "retrospective" in caption
+    else:
+        assert "smoothing disabled" in caption
+        assert "hmm resets" not in caption and "hmm states there" not in caption
     assert "excluded" in caption
     assert "source" in caption
     choices = next(collection for collection in figure.axes[0].collections if collection.get_label() == "Mouse choice")
@@ -133,3 +138,23 @@ def test_empty_and_no_comparison_figures_explain_evidence_status(tmp_path, captu
         texts = [text.get_text().lower() for text in capture_figure[-1].texts]
         texts += [text.get_text().lower() for axis in capture_figure[-1].axes for text in axis.texts]
         assert any(status in text or "no comparison" in text for text in texts)
+
+
+def test_thirty_source_caption_does_not_overlap_last_axis(tmp_path, capture_figure):
+    """An ordinary 30-session display retains readable source provenance below axes."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+
+    original, meta = diagnostic_result()
+    results, metadata = [], []
+    for index in range(30):
+        identity = f"CT026_2026-05-{index + 1:02d}_123456"
+        results.append(replace(original, session_id=identity))
+        metadata.append(dict(meta, session_id=identity))
+    plotting.plot_multisession_trial_policy_diagnostic(results, metadata, output_path=tmp_path / "thirty_sources.png")
+    figure = capture_figure[-1]
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    caption = max(figure.texts, key=lambda text: len(text.get_text()))
+    caption_top = caption.get_window_extent(renderer).y1
+    axis_bottom = figure.axes[-1].get_tightbbox(renderer).y0
+    assert caption_top + 6 < axis_bottom
