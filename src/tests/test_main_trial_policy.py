@@ -86,6 +86,9 @@ def test_validation_failure_records_parent_error_without_success_artifact(tmp_pa
         main.run_dynamax_trial_analysis(bad, source.session, feature_params=TaskParams(), plot=False)
     logs = list(source.session.processed_data_path.glob("trial_policy_hmm/runs/*/run.log"))
     assert len(logs) == 1 and "action" in logs[0].read_text()
+    record = json.loads((logs[0].parent / "metadata.json").read_text())
+    assert record["requested_options"]["error_prob"] == .1
+    assert record["requested_options"]["model_ids"] == ["forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch"]
     assert not list(source.session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
 
 
@@ -149,6 +152,8 @@ def test_joint_results_equal_separate_sources_with_mixed_schemas_and_parameters(
         assert path.read_bytes() == content
     assert list(joint.figure_path.glob("*trial-policy*.png"))
     assert list(joint.figure_path.glob("trial_policy_hmm/*/metadata.json"))
+    exports = list(joint.figure_path.glob("trial_policy_hmm/*/export/metadata.json"))
+    assert exports and all("numerical_artifact" not in json.loads(path.read_text()) for path in exports)
 
 
 def test_joint_failure_leaves_fresh_block_export_without_stale_trial_fields(tmp_path):

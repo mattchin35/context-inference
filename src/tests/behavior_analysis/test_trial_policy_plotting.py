@@ -70,6 +70,7 @@ def test_saved_result_plot_panels_tied_winners_and_excluded_rows(tmp_path, captu
     assert actual == expected
     caption = " ".join(text.get_text() for text in figure.texts).lower()
     assert "0.1" in caption and "tie" in caption and "retrospective" in caption
+    assert "excluded" in caption
     assert "source" in caption
     choices = next(collection for collection in figure.axes[0].collections if collection.get_label() == "Mouse choice")
     np.testing.assert_array_equal(choices.get_offsets(), [[0, 1], [1, 0], [3, 1], [4, 0]])

@@ -294,3 +294,18 @@ def test_unknown_flag_warning_with_both_matching_aliases(trial_table):
     history = prepare_trial_policy_history(table, session_id="source")
     messages = results.trial_policy_warnings(history)
     assert len(messages) == 1 and "unknown" in messages[0] and "4" in messages[0]
+
+
+def test_joint_export_records_source_arrays_without_claiming_joint_numerical_file(trial_table, tmp_path):
+    """A joint CSV links its source manifest without inventing one numerical NPZ."""
+    from src.behavior_analysis import trial_policy_results as results
+
+    result, meta = metadata_for(trial_table)
+    path = results.save_trial_policy_results(result, processed_data_path=tmp_path, metadata=meta)
+    meta["sources"] = [{"session_id": "source", "numerical_artifact": str(path)}]
+    attached = results.attach_trial_policy_outputs(trial_table, result, metadata=meta)
+    results.write_trial_policy_export(attached, export_directory=tmp_path / "joint_export",
+                                      numerical_path=None, metadata=meta)
+    record = json.loads((tmp_path / "joint_export" / "metadata.json").read_text())
+    assert "numerical_artifact" not in record
+    assert record["sources"][0]["numerical_artifact"] == str(path)
