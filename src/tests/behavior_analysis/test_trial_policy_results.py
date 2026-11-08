@@ -2,6 +2,7 @@
 
 from dataclasses import fields, replace
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -57,6 +58,7 @@ def test_named_npz_roundtrip_and_completion_marker(trial_table, tmp_path):
     assert path.parent.name and (path.parent / "complete.json").exists()
     restored, saved_meta = results.load_trial_policy_results(path)
     with np.load(path, allow_pickle=True) as stored:
+        assert isinstance(stored["meta"].item(), dict)
         for name in stored.files:
             if name != "meta":
                 assert not stored[name].dtype.hasobject
@@ -97,6 +99,39 @@ def test_checked_attachment_preserves_current_columns_index_and_clears_stale(tri
     assert pd.isna(attached["trial_policy_independent_state"].iloc[0])
     assert attached["trial_policy_independent_tie"].iloc[0] == 1
     assert "trial_policy_p_right_forgetting_q_learning" in attached
+    assert pd.isna(attached["trial_policy_greedy_choice_forgetting_q_learning"].iloc[0])
+
+
+def test_hmm_attachment_preserves_explicit_array_field_names(trial_table):
+    """HMM model columns retain their full owned names and nullable greedy ties."""
+    from src.behavior_analysis import trial_policy_results as results
+
+    result, meta = metadata_for(trial_table)
+    attached = results.attach_trial_policy_outputs(trial_table, result, metadata=meta)
+    assert "trial_policy_hmm_smoothed_probs_forgetting_q_learning" in attached
+    assert "trial_policy_hmm_smoothed_best_model_mask_forgetting_q_learning" in attached
+    np.testing.assert_array_equal(attached["trial_policy_hmm_smoothed_probs_forgetting_q_learning"], result.hmm_smoothed_probs[:, 0])
+
+
+def test_source_digest_reads_the_actual_computational_sources(monkeypatch):
+    """Source identity covers existing behavior modules as well as main orchestration."""
+    from src.behavior_analysis import trial_policy_results as results
+
+    original = Path.read_bytes
+    reads = []
+
+    def track_read(path):
+        """Path input returns its bytes and records the exact existing source path."""
+        reads.append(path.resolve())
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", track_read)
+    assert results._analysis_source_digest()
+    source_directory = Path(results.__file__).parent
+    required = {source_directory / name for name in ("trial_policy_models.py", "trial_policy_analysis.py", "trial_policy_results.py",
+                                                     "trial_features.py", "project_utils.py", "gather_trial_features.py", "exemplar_hmm_modeling.py")}
+    required.add(source_directory.parent / "main.py")
+    assert required <= set(reads)
 
 
 @pytest.mark.parametrize("change", ["reward", "action", "flag", "id", "row_order", "schema"])
