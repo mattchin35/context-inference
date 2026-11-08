@@ -1,6 +1,7 @@
 """Contracts for source-local, causal replay of the approved trial policies."""
 
 from dataclasses import replace
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -307,3 +308,12 @@ def test_impossible_bayesian_evidence_identifies_session_trial_and_model(trial_t
     """No inputs; an impossible supplied reward raises contextual calculation failure."""
     with pytest.raises(ValueError, match="mouse_session.*10.*bayesian_hmm"):
         _replay(trial_table, params=TaskParams(active_reward_probability=0, inactive_reward_probability=0))
+
+
+@pytest.mark.parametrize("nonfinite_score", [np.nan, np.inf])
+def test_unexpected_nonfinite_policy_output_is_a_calculation_error(trial_table, monkeypatch, nonfinite_score):
+    """Nonfinite scalar on a usable row raises with session/trial/model context."""
+    output = np.array([0, nonfinite_score, 0, 0, 0])
+    monkeypatch.setattr(trial_features, "forgetting_qlearning_relative_value", Mock(return_value=output))
+    with pytest.raises(ValueError, match="mouse_session.*12.*forgetting_q_learning.*non-finite"):
+        _replay(trial_table, model_ids=(MODEL_IDS[0],))
