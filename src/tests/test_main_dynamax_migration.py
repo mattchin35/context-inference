@@ -116,7 +116,7 @@ def test_single_workflow_preserves_exports_before_upstream_regeneration(tmp_path
     monkeypatch.setattr(main, "load_or_preprocess_session", stop_before_preprocessing)
     with pytest.raises(RuntimeError, match="synthetic stop"):
         main.run_single_session_workflow(session, main.SingleSessionAnalysisConfig())
-    archived = list((tmp_path / "exemplar_hmm" / "archives").rglob(original.name))
+    archived = list((tmp_path / "exemplar_hmm" / "archives").rglob("synthetic_block_performance.archived.csv"))
     assert len(archived) == 1
     assert archived[0].read_bytes() == original.read_bytes()
 
