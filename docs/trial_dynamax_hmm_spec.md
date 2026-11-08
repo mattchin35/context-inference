@@ -55,6 +55,8 @@ Use explicit session trial-feature parameters (`gather_trial_features.TaskParams
 
 The normal processed experimental table encodes reward delivery as `0` or `1`, with default reward sizes `correct_reward_size=1` and `incorrect_reward_size=0`; reward is not water volume. Preserve this convention. Validate actions as exact finite `0` or `1` after parsing supported representations; do not truncate fractional actions to integers. Validate finite supported rewards and parameter compatibility. Unsupported nonbinary reward input requires an explicit compatible model contract rather than silent binarization.
 
+Input inspection confirms numeric codes, CSV numeric strings, `None`/`no_choice` sentinels, both legacy/current manual-flag column names, and flag-less legacy/simulated tables. Accept exact numeric `0/1` values and equivalent numeric strings/float representations. Reuse existing missing-value conventions (`project_utils.MISSING_STRINGS`, real missing values, and action no-choice labels). Preserve native boolean flags' numeric `0/1` behavior; do not add textual `true/false`, `yes/no`, or `left/right` aliases. Textual side names are invalid actions; unrecognized flag values use the unknown-flag exclusion/logging rule. Interpret aliases within each source before heterogeneous concatenation can introduce missing columns.
+
 The Bayesian implementation uses exact reward-size support and normalizes outcome probabilities with an epsilon. An impossible observation can otherwise collapse beliefs to zero and appear to yield a neutral score. Detect impossible/non-finite belief updates and report a calculation error with session/trial/model context; never reinterpret them as genuine indifference. Default parameters support ordinary binary observations. Missing outcomes follow the explicit skip-update rule below and are distinct from impossible supplied outcomes.
 
 Keep this edge-case handling small: validate inputs once at the trial-analysis boundary and check outcome normalization at the existing Bayesian update. Use an ordinary descriptive exception to stop the affected session's trial analysis when the update is impossible. Report the observation and relevant parameters so the user can correct the input/configuration. Do not add a second Bayesian replay for validation, custom exception hierarchies, fallback models, automatic repair, retries, or a separate recovery framework. Use the existing workflow's error reporting.
@@ -129,6 +131,8 @@ Do not apply a blanket absolute near-zero threshold to signed scores: repeated f
 Missing data or failed model calculations are **not** genuine indifference; handle those separately.
 
 Validate `0 < opposite_action_error_prob < 0.5`. Do not fit model-specific error probabilities in this initial implementation.
+
+Also require both constructed float64 probabilities `opposite_action_error_prob` and `1 - opposite_action_error_prob` to lie strictly inside `(0, 1)`. Reject values such as `1e-20`, whose complement rounds to one, with a clear parameter error; do not silently clip them or generate infinite log likelihoods.
 
 ## 4. Calculate trial-by-model likelihoods
 
@@ -243,7 +247,11 @@ initial_probs[i] = 1 / K
 
 For `K == 1`, use `A = [[1.0]]` and `initial_probs = [1.0]`.
 
-Do not automatically inherit a blockwise stay probability: transitions now occur between **trials**, not blocks. For `K > 1`, `0.90` implies an expected state duration of 10 retained input trial rows, including manual/no-choice and other invalid rows. This is a modeling setting, not a result or ten valid animal choices. For `K == 1`, there is no state switching. Validate finite `trial_stay_prob` in `[0, 1]`.
+Do not automatically inherit a blockwise stay probability: transitions now occur between **trials**, not blocks. For `K > 1`, `0.90` implies an expected state duration of 10 retained input trial rows, including manual/no-choice and other invalid rows. This is a modeling setting, not a result or ten valid animal choices. For `K == 1`, there is no state switching.
+
+For round one, the user approved a numerical support bound: for `K > 1`, finite float64 `trial_stay_prob` must satisfy the inclusive bounds `1e-6 <= trial_stay_prob <= 1-(K-1)*1e-6`. These requested-value bounds are authoritative; apply no tolerance to them. The mathematical transition-entry floor is `1e-6`, but checking the derived matrix allows absolute roundoff `1e-12` (relative tolerance zero), including after JAX dtype conversion. Do not clip or otherwise alter the matrix to force the floor. Reject out-of-range requested settings with an explanatory error. The one-state case remains `A=[[1]]`. This replaces the former unrestricted `[0,1]` contract: installed Dynamax 1.0.2 can incorrectly discard small positive predicted probabilities in its backward pass, including at stay probability one. Keep the default .90, test exact bounds and immediately outside float64 values, and do not modify the block workflow or installed dependency to support excluded settings.
+
+Validate long evidence reversals against a stable test-only log-domain reference for K=2,3,4 at both bounds and default .90. Require finite normalized posteriors; float32 posterior/reference comparisons use `atol=2e-6, rtol=0`. This validation tolerance does not change the separate probability maximum-tie rule.
 
 Keep transition probabilities fixed in this first implementation. Do not add transition optimization unless it is separately requested.
 
@@ -346,6 +354,8 @@ Map generic identifiers to existing `session_ID`/full session ID, `cur_trial`, a
 Use named NPZ arrays with `meta`, a trial-analysis version, exact effective candidate parameters, parameter source, input/code provenance, candidate order, eligibility/neutrality/tie rules, analyzed range, status, and library versions. This inference is deterministic and requires no artificial random tie breaking or random seed. Follow existing cache invalidation and preservation conventions: changed parameters, candidate set, inputs, or code must not silently reuse or overwrite prior results. Numerical results remain in session processed-data subdirectories, separate from figure generation.
 
 Do not introduce a separate metadata framework.
+
+Include original source flag-column presence and alias names in the input digest/cache identity, using a fixed-order list drawn from `give_reward` and `experimenter_reward_given` before alias normalization. Absent flags, a present all-zero column, and equivalent alias renaming must have distinct identities even if normalized values match. Schema changes invalidate cached results; ordinary dataframe column reordering does not. Checked reattachment must compare current source schema as well as history values, rather than replacing provenance on cached arrays.
 
 ### Main-workflow integration
 
