@@ -234,12 +234,13 @@ def trial_policy_warnings(history: "PreparedTrialHistory") -> list[str]:
 
 
 def write_trial_policy_export(trial_df: pd.DataFrame, *, export_directory: str | Path,
-                              numerical_path: str | Path, metadata: dict[str, Any],
+                              numerical_path: str | Path | None, metadata: dict[str, Any],
                               current_csv_path: str | Path | None = None) -> Path:
     """Write current augmented CSV and run records referencing immutable arrays.
 
     trial_df is the current attached `(T,C)` snapshot. Numerical NPZ is never
-    copied or modified; optional current CSV is archived before replacement.
+    copied or modified; None links the joint source manifest without claiming
+    one joint numerical file. Optional current CSV is archived before replacement.
     """
     directory = Path(export_directory)
     directory.mkdir(parents=True, exist_ok=False)
@@ -248,7 +249,11 @@ def write_trial_policy_export(trial_df: pd.DataFrame, *, export_directory: str |
         trial_df.to_csv(current_csv_path, index=False, na_rep="")
     exported = directory / "augmented_trials.csv"
     trial_df.to_csv(exported, index=False, na_rep="")
-    record = dict(metadata, numerical_artifact=str(numerical_path), export_artifact=str(exported))
+    record = dict(metadata, export_artifact=str(exported))
+    if numerical_path is None:
+        record.pop("numerical_artifact", None)
+    else:
+        record["numerical_artifact"] = str(numerical_path)
     _write_record(directory, record)
     return exported
 

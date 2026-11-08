@@ -193,6 +193,7 @@ def _caption(results: Sequence[Any], metadata_records: Sequence[dict[str, Any]],
         f"Candidates: {', '.join(map(str, model_ids))}. Shared opposite-action error probability: "
         f"{', '.join(error_values)}; trial stay probability: {', '.join(stay_values)}. "
         f"All tied maxima are shown; no tied winner is selected.{tie_text} "
+        "Gray spans mark excluded comparisons; HMM states there use surrounding evidence. "
         f"Sources: {', '.join(source_names)}; HMM resets at each source session ({len(results)} session reset(s)). "
         "HMM marginal assignments use the full session and are retrospective, not next-choice predictions."
         f"{status_text}"
