@@ -1597,10 +1597,11 @@ def summarize_block_performance(augmented_trial_df: pd.DataFrame, session_id: st
         augmented_trial_df
     )
     global_behavioral_choice_mask = make_behavioral_choice_mask(augmented_trial_df)
+    # Mask a private copy: pandas can expose float rewards as a read-only view.
     global_reward_values = get_numeric_reward_values(
         augmented_trial_df,
         global_behavioral_choice_mask,
-    )
+    ).copy()
     global_reward_values[~global_behavioral_choice_mask] = np.nan
     blocks = np.unique(augmented_trial_df['cur_block'])
     block_performance = []
