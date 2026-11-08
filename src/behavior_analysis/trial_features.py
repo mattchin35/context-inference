@@ -140,6 +140,8 @@ def hmm_relative_value(
     value_mode="expected_reward",
     tanh_scale=1,
     experimenter_reward_given=None,
+    *,
+    validate_outcome_evidence=False,
 ):
     """
     Minimal HMM relative value feature.
@@ -148,6 +150,15 @@ def hmm_relative_value(
     value_mode:
         - "expected_reward": E[r_left] - E[r_right]
         - "bayesian_log_odds": log(p_left / p_right)
+
+    Parameters are dimensionless probabilities/scales and reward-indicator
+    magnitudes. actions/rewards and optional manual flags are aligned arrays
+    of shape (n_trials,), with actions 0=right, 1=left. Returns an aligned
+    float/object array (n_trials,) of left-positive pre-choice values, with
+    None on skipped rows. No physical water-volume conversion is performed.
+    Keyword-only validate_outcome_evidence enables a ValueError with retained
+    row and observation context for zero/non-finite normalization mass; its
+    default False preserves existing callers' arithmetic and behavior.
     """
     actions = np.asarray(actions)
     rewards = np.asarray(rewards)
@@ -212,6 +223,19 @@ def hmm_relative_value(
         )
 
         p_outcome = p_reward * prior
+        if validate_outcome_evidence:
+            outcome_mass = np.sum(p_outcome)
+            if not np.isfinite(outcome_mass) or outcome_mass <= 0:
+                raise ValueError(
+                    f"Invalid Bayesian outcome normalization at row {i}: "
+                    f"action={action!r}, reward={reward!r}, "
+                    f"outcome_mass={outcome_mass!r}, "
+                    f"state_transition_prob={state_transition_prob!r}, "
+                    f"active_reward_probability={active_reward_probability!r}, "
+                    f"inactive_reward_probability={inactive_reward_probability!r}, "
+                    f"correct_reward_size={correct_reward_size!r}, "
+                    f"incorrect_reward_size={incorrect_reward_size!r}"
+                )
         p_outcome /= np.sum(p_outcome) + eps
 
         # Hazard/transition update
