@@ -187,3 +187,168 @@ test_tts_session_original_units()
 test_tts_session_statuses()
 test_tts_session_invalid_calls()
 cat("All TTS session modeling tests passed.\n")
+
+# Generate 656 block rows in 16 sessions across four mice with a recorded seed.
+# Args: seed integer(1). Returns: data.frame(656,p); TTS/rewards in trial units.
+make_tts_population_fixture <- function(seed = 392L) {
+  had_rng <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  if (had_rng) saved_rng <- get(".Random.seed", envir = .GlobalEnv)
+  on.exit({
+    if (had_rng) assign(".Random.seed", saved_rng, envir = .GlobalEnv)
+    else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+      rm(".Random.seed", envir = .GlobalEnv)
+    }
+  })
+  set.seed(seed)
+  rows <- list()
+  for (mouse_index in seq_len(4)) {
+    for (session_index in seq_len(4)) {
+      reward <- c(0, rep(rep(seq_len(10), each = 2), 2))
+      left <- c(FALSE, rep(c(FALSE, TRUE), 20))
+      deviations <- stats::rnorm(4, sd = c(1, 0.12, 0.8, 0.15))
+      tts <- 12 + mouse_index / 2 + deviations[1] +
+        (0.5 + deviations[2]) * reward +
+        left * (1 + deviations[3] + deviations[4] * reward) +
+        stats::rnorm(length(reward), sd = 0.8)
+      rows[[length(rows) + 1L]] <- data.frame(
+        mouse = paste0("SYN", mouse_index),
+        session_id = paste0("SYN", mouse_index, "_session", session_index),
+        block_ix = seq_along(reward) - 1L,
+        block_type = ifelse(left, "left_uncued", "right_uncued"),
+        trials_to_correct = pmax(round(tts), 0), prev_n_rewarded = reward,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  do.call(rbind, rows)
+}
+
+# Verify exact candidates, common block identities, ML and numeric fit summaries.
+# Args: result list returned by fit_population_tts; returns invisible NULL.
+test_tts_population_contract <- function(result) {
+  stopifnot(all(c("models", "comparison", "blocks", "audit", "random_effects", "meta") %in%
+                  names(result)))
+  model_ids <- paste0("M", seq_len(4))
+  stopifnot(identical(names(result$models), model_ids))
+  stopifnot(nrow(result$blocks) == 640L, nrow(result$audit) == 656L)
+  comparison <- result$comparison
+  stopifnot(identical(comparison$model_id, model_ids))
+  stopifnot(all(c("formula", "nobs", "n_sessions", "n_mice", "n_parameters",
+                  "logLik", "AIC", "BIC", "delta_AIC", "delta_BIC", "converged",
+                  "singular", "status", "message", "likelihood_method") %in% names(comparison)))
+  stopifnot(all(comparison$nobs == 640L), all(comparison$n_sessions == 16L),
+            all(comparison$n_mice == 4L), all(comparison$likelihood_method == "ML"))
+  expected_formulas <- c(
+    "tts ~ nrew * side + (nrew * side | session)",
+    "tts ~ nrew + side + (nrew * side | session)",
+    "tts ~ nrew + side + (nrew + side | session)",
+    "tts ~ nrew + side + (nrew * side | mouse/session)"
+  )
+  for (index in seq_along(model_ids)) {
+    model <- result$models[[index]]
+    stopifnot(inherits(model, "merMod"), !lme4::isREML(model))
+    actual_formula <- paste(deparse(stats::formula(model)), collapse = " ")
+    stopifnot(identical(gsub("[[:space:]]", "", actual_formula),
+                        gsub("[[:space:]]", "", expected_formulas[index])))
+    stopifnot(identical(rownames(stats::model.frame(model)), result$blocks$row_id))
+    stopifnot(isTRUE(all.equal(comparison$AIC[index], stats::AIC(model))))
+    stopifnot(isTRUE(all.equal(comparison$BIC[index], stats::BIC(model))))
+    stopifnot(isTRUE(all.equal(comparison$logLik[index], as.numeric(stats::logLik(model)))))
+    stopifnot(comparison$singular[index] == lme4::isSingular(model))
+    if (comparison$singular[index]) {
+      stopifnot(grepl("singular", paste(comparison$status[index], comparison$message[index]),
+                     ignore.case = TRUE))
+    }
+  }
+  stopifnot(isTRUE(all.equal(comparison$delta_AIC, comparison$AIC - min(comparison$AIC))))
+  stopifnot(isTRUE(all.equal(comparison$delta_BIC, comparison$BIC - min(comparison$BIC))))
+  stopifnot(is.logical(comparison$converged), is.logical(comparison$singular))
+  stopifnot(all(c("model_id", "grp", "var1", "var2", "vcov", "sdcor") %in%
+                  names(result$random_effects)))
+  stopifnot(all(c("generator", "analysis_version", "units") %in% names(result$meta)))
+  invisible(NULL)
+}
+
+# Compare population/session prediction types against lme4 with stable row keys.
+# Args: result list returned by fit_population_tts; returns invisible NULL.
+test_tts_population_predictions <- function(result) {
+  input <- result$blocks[c(1, 7, 41, 182), ]
+  predictions <- predict_population_tts(result, input)
+  stopifnot(nrow(predictions) == nrow(input) * 8L)
+  stopifnot(all(c("row_id", "model_id", "prediction_type", "predicted_tts", "status", "message") %in%
+                  names(predictions)))
+  stopifnot(setequal(predictions$prediction_type, c("population", "conditional")))
+  for (model_id in names(result$models)) {
+    for (prediction_type in c("population", "conditional")) {
+      selected <- predictions[predictions$model_id == model_id &
+                                predictions$prediction_type == prediction_type, ]
+      direct <- stats::predict(result$models[[model_id]], newdata = input,
+                                re.form = if (prediction_type == "population") NA else NULL)
+      stopifnot(identical(selected$row_id, input$row_id), all(selected$status == "ok"))
+      stopifnot(isTRUE(all.equal(selected$predicted_tts, unname(direct), tolerance = 1e-10)))
+    }
+  }
+  unknown <- input[1, , drop = FALSE]
+  unknown$session <- "unknown_session"
+  unknown$row_id <- "unknown_row"
+  predictions <- predict_population_tts(result, unknown)
+  conditional <- predictions[predictions$prediction_type == "conditional", ]
+  population <- predictions[predictions$prediction_type == "population", ]
+  stopifnot(all(conditional$status == "unknown_group"), all(is.na(conditional$predicted_tts)))
+  stopifnot(all(population$status == "ok"), all(is.finite(population$predicted_tts)))
+  invisible(NULL)
+}
+
+# Check failed candidates remain visible, with no synthetic fallback or Inf deltas.
+# Input: no arguments. Return: invisible NULL.
+test_tts_population_fit_failures <- function() {
+  input <- make_tts_modeling_fixture()
+  result <- fit_population_tts(input)
+  stopifnot(length(result$models) == 4L, all(vapply(result$models, is.null, logical(1))))
+  stopifnot(all(result$comparison$status == "fit_error"))
+  stopifnot(all(nzchar(result$comparison$message)), all(is.na(result$comparison$AIC)))
+  stopifnot(all(is.na(result$comparison$delta_AIC)), all(is.na(result$comparison$delta_BIC)))
+  predictions <- predict_population_tts(result, result$blocks[1:2, ])
+  stopifnot(all(predictions$status == "fit_error"), all(is.na(predictions$predicted_tts)))
+  invisible(NULL)
+}
+
+# Verify fixed exemplar errors separately from fitted models, preserving trial units.
+# Input: no arguments. Return: invisible NULL.
+test_tts_exemplar_predictions <- function() {
+  blocks <- prepare_tts_blocks(make_tts_modeling_fixture())$blocks[1:3, ]
+  exemplars <- data.frame(name = c("flat", "slope"), intercept = c(2, 4),
+                          reward_slope = c(0, 1), residual_sd = c(2, 5))
+  result <- predict_tts_exemplars(blocks, exemplars)
+  stopifnot(nrow(result) == 6L)
+  stopifnot(all(c("row_id", "exemplar", "tts", "nrew", "predicted_tts", "residual",
+                  "normalized_residual") %in% names(result)))
+  for (index in seq_len(nrow(exemplars))) {
+    selected <- result[result$exemplar == exemplars$name[index], ]
+    expected <- exemplars$intercept[index] + exemplars$reward_slope[index] * blocks$nrew
+    stopifnot(identical(selected$row_id, blocks$row_id))
+    stopifnot(isTRUE(all.equal(selected$predicted_tts, expected)))
+    stopifnot(isTRUE(all.equal(selected$residual, blocks$tts - expected)))
+    stopifnot(isTRUE(all.equal(selected$normalized_residual,
+                              (blocks$tts - expected) / exemplars$residual_sd[index])))
+  }
+  invalid <- exemplars
+  invalid$residual_sd[1] <- 0
+  expect_tts_modeling_error(predict_tts_exemplars(blocks, invalid), "residual_sd")
+  invalid <- exemplars
+  invalid$name[2] <- invalid$name[1]
+  expect_tts_modeling_error(predict_tts_exemplars(blocks, invalid), "name")
+  invisible(NULL)
+}
+
+if (!exists("fit_population_tts", mode = "function")) {
+  stop("fit_population_tts() has not been implemented.")
+}
+stopifnot(requireNamespace("lme4", quietly = TRUE))
+population_fixture <- make_tts_population_fixture()
+population_result <- fit_population_tts(population_fixture)
+test_tts_population_contract(population_result)
+test_tts_population_predictions(population_result)
+test_tts_population_fit_failures()
+test_tts_exemplar_predictions()
+cat("All TTS population and exemplar tests passed.\n")
