@@ -135,6 +135,11 @@ test_tts_discovery <- function(root) {
     utils::write.csv(make_tts_results_session(mice[index], sessions[index]),
                      file.path(directory, paste0(sessions[index], "_block_performance.csv")), row.names = FALSE)
   }
+  # Actual processed folders also contain HMM-annotated derivatives of this table.
+  primary <- file.path(data_root, directories[1], paste0(sessions[1], "_block_performance.csv"))
+  for (derivative in c("dynamax_exemplar_hmm", "exemplar_likelihood_hmm")) {
+    file.copy(primary, file.path(dirname(primary), paste0(sessions[1], "_", derivative, "_block_performance.csv")))
+  }
   paths <- discover_tts_sessions(data_root)
   stopifnot(is.data.frame(paths), nrow(paths) == 3L)
   stopifnot(all(c("mouse", "session", "input_csv") %in% names(paths)))
