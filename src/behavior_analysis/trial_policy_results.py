@@ -180,8 +180,6 @@ def attach_trial_policy_outputs(trial_df: pd.DataFrame, result: "TrialPolicyResu
             series = pd.array(np.where(np.asarray(values) < 0, pd.NA, values), dtype="Int64")
         elif name.endswith("_tie"):
             series = pd.array(np.where(np.asarray(values) < 0, pd.NA, values), dtype="boolean")
-        elif name == "greedy_choice":
-            continue
         output[column] = series
     for name in ("prediction_valid", "model_indifferent", "greedy_choice", "p_right", "log_likelihoods",
                  "choice_residuals", "independent_probs", "independent_best_model_mask",
@@ -223,8 +221,7 @@ def trial_policy_warnings(history: "PreparedTrialHistory") -> list[str]:
     for label, mask, action in (
         ("missing reward", history.comparison_valid & ~np.isfinite(history.rewards),
          "scored available choice predictions and skipped all candidate history updates"),
-        ("unknown manual-reward flag", np.isnan(history.manual_reward_flags) &
-         np.asarray(history.metadata.get("source_flag_columns", []), dtype=object).size > 0,
+        ("unknown manual-reward flag", np.isnan(history.manual_reward_flags),
          "excluded these rows from scoring and candidate history updates"),
     ):
         indices = np.flatnonzero(mask)
