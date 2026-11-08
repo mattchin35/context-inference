@@ -91,6 +91,8 @@ def load_main_module():
     assert module_spec is not None
     assert module_spec.loader is not None
     module = importlib.util.module_from_spec(module_spec)
+    # Match normal imports: dataclasses resolve forward annotations in this namespace.
+    sys.modules[module_spec.name] = module
     module_spec.loader.exec_module(module)
     # Production imports now use the src package. Keep this legacy fixture's
     # deliberate lightweight dependencies local to the loaded test module.
