@@ -189,13 +189,21 @@ def _caption(results: Sequence[Any], metadata_records: Sequence[dict[str, Any]],
     tie_text = f" Independent ties: {independent_ties}."
     if hmm_count:
         tie_text += f" HMM assignment ties: {hmm_ties}."
+        temporal_text = (
+            f"Trial stay probability: {', '.join(stay_values)}. HMM resets at each source session "
+            f"({len(results)} session reset(s)). HMM states on excluded rows reflect the prior and "
+            "available surrounding evidence. HMM marginal assignments use the full session and "
+            "are retrospective, not next-choice predictions."
+        )
+    else:
+        temporal_text = "HMM smoothing disabled; independent comparisons use causal pre-choice policies."
     caption = (
         f"Candidates: {', '.join(map(str, model_ids))}. Shared opposite-action error probability: "
-        f"{', '.join(error_values)}; trial stay probability: {', '.join(stay_values)}. "
+        f"{', '.join(error_values)}. "
         f"All tied maxima are shown; no tied winner is selected.{tie_text} "
-        "Gray spans mark excluded comparisons; HMM states there use surrounding evidence. "
-        f"Sources: {', '.join(source_names)}; HMM resets at each source session ({len(results)} session reset(s)). "
-        "HMM marginal assignments use the full session and are retrospective, not next-choice predictions."
+        "Gray spans mark excluded comparisons. "
+        f"Sources: {', '.join(source_names)}. Policy histories initialize independently by source. "
+        f"{temporal_text}"
         f"{status_text}"
     )
     return textwrap.fill(caption, width=115)
@@ -250,9 +258,12 @@ def _make_figure(
     if handles:
         figure.legend(handles, labels, loc="upper center", ncol=min(len(labels), 5),
                       frameon=False, bbox_to_anchor=(0.5, 0.995), fontsize=10)
-    figure.text(0.01, 0.005, _caption(results, metadata_records, model_ids),
-                ha="left", va="bottom", fontsize=12, color="black", linespacing=1.15)
-    figure.tight_layout(rect=(0, 0.17, 1, 0.94))
+    caption = figure.text(0.01, 0.005, _caption(results, metadata_records, model_ids),
+                          ha="left", va="bottom", fontsize=12, color="black", linespacing=1.15)
+    # Reserve the rendered caption height for ordinary multisession batches.
+    figure.canvas.draw()
+    caption_top = caption.get_window_extent(figure.canvas.get_renderer()).y1 / figure.bbox.height
+    figure.tight_layout(rect=(0, caption_top + .045, 1, 0.94))
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path, format="png", facecolor="white", transparent=False, dpi=160)
