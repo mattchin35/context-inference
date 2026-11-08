@@ -160,7 +160,7 @@ def test_full_single_workflow_runs_real_dynamax_on_current_features(tmp_path, mo
                  "plot_session_explore_trials", "plot_session_explore_runs", "plot_session_agent_mouse_agreement",
                  "plot_single_session_summary_grid"]:
         monkeypatch.setattr(main.performance_plots, name, _no_output)
-    main.run_single_session_workflow(session, main.SingleSessionAnalysisConfig(choice_window_sizes=()))
+    main.run_single_session_workflow(session, main.SingleSessionAnalysisConfig(choice_window_sizes=(), run_trial_policy_analysis=False))
     saved_trials = pd.read_csv(session.processed_data_path / "synthetic_full_augmented_trials.csv")
     assert saved_trials["fresh_feature"].tolist() == [11, 12, 13]
     assert saved_trials["inherited_block_model"].notna().sum() == 2
