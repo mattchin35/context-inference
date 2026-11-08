@@ -282,3 +282,15 @@ def test_parent_record_can_log_failure_before_signature(tmp_path):
     assert "invalid action" in (tmp_path / "parent" / "run.log").read_text()
     assert not list(tmp_path.rglob("results.npz"))
     assert not list(tmp_path.rglob("complete.json"))
+
+
+def test_unknown_flag_warning_with_both_matching_aliases(trial_table):
+    """A source with both supported flag columns still reports unknown-row exclusions."""
+    from src.behavior_analysis import trial_policy_results as results
+    from src.behavior_analysis.trial_policy_models import prepare_trial_policy_history
+
+    table = trial_table.assign(give_reward=[0, None, 0, 0, 0],
+                               experimenter_reward_given=[0, None, 0, 0, 0])
+    history = prepare_trial_policy_history(table, session_id="source")
+    messages = results.trial_policy_warnings(history)
+    assert len(messages) == 1 and "unknown" in messages[0] and "4" in messages[0]

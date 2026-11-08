@@ -25,7 +25,8 @@ def test_single_session_keeps_block_outputs_and_hmm_inputs(
     """Windows run after block saving/plotting and never alter HMM inputs."""
     main = main_module
     config = main.SingleSessionAnalysisConfig(
-        choice_window_sizes=sizes, rerun_exemplar_hmm=not cached_hmm
+        choice_window_sizes=sizes, rerun_exemplar_hmm=not cached_hmm,
+        run_trial_policy_analysis=False,
     )
     trial = pd.DataFrame({"action": [0] * 23, "Qlearning_rel_value": [-1.0] * 23})
     blocks = pd.DataFrame({"block_ix": [0, 1], "qlearning_mouse_agreement": [0.5, 0.8]})
