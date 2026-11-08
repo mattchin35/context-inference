@@ -183,6 +183,48 @@ def test_joint_disabled_and_missing_metadata_contract(tmp_path):
         main.run_multisession_analysis(combined, joint)
 
 
+def test_joint_saved_parameters_overrides_and_empty_sources(tmp_path):
+    """Saved partial parameters default explicitly; complete overrides win; empty sources persist."""
+    import src.main as main
+    from src.behavior_analysis.trial_policy_results import load_trial_policy_results
+
+    sources = [source_session(tmp_path, "first"), source_session(tmp_path, "empty")]
+    sources[1].augmented_trial_df = sources[1].augmented_trial_df.iloc[:0]
+    sources[1].block_performance = sources[1].block_performance.iloc[:0]
+    parameter_file = sources[0].session.processed_data_path / "trial_feature_params.json"
+    parameter_file.write_text(json.dumps({"FQL_decay": .9}), encoding="ascii")
+    combined = main.concatenate_saved_sessions(sources)
+    joint = main.build_multisession_session("synthetic", tmp_path / "joint")
+    main.run_multisession_analysis(combined, joint, source_sessions=sources, trial_policy_n_jobs=1)
+    first_artifact = sorted(sources[0].session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))[-1]
+    _, first_meta = load_trial_policy_results(first_artifact)
+    assert first_meta["candidate_parameters"]["forgetting_q_learning"]["decay"] == .9
+    assert first_meta["candidate_parameters"]["bayesian_hmm"]["state_transition_prob"] == .2
+    assert "trial_feature_params.json" in first_meta["parameter_source"]
+    empty_artifact = next(sources[1].session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
+    empty_result, empty_meta = load_trial_policy_results(empty_artifact)
+    assert empty_result.status == "empty" and empty_result.p_right.shape == (0, 3)
+    before = set(sources[0].session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
+    main.run_multisession_analysis(combined, joint, source_sessions=sources, trial_policy_n_jobs=1,
+                                   trial_feature_params_by_session={"first": TaskParams(FQL_decay=.6)})
+    after = set(sources[0].session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
+    override_artifact, = after - before
+    _, override_meta = load_trial_policy_results(override_artifact)
+    assert override_meta["candidate_parameters"]["forgetting_q_learning"]["decay"] == .6
+
+
+def test_malformed_saved_parameters_raise_with_source_context(tmp_path):
+    """A damaged source JSON is an explicit workflow failure, without fallback defaults."""
+    import src.main as main
+
+    source = source_session(tmp_path, "bad_parameters")
+    (source.session.processed_data_path / "trial_feature_params.json").write_text("{broken", encoding="ascii")
+    combined = main.concatenate_saved_sessions([source])
+    joint = main.build_multisession_session("synthetic", tmp_path / "joint")
+    with pytest.raises(ValueError, match="bad_parameters.*parameter"):
+        main.run_multisession_analysis(combined, joint, source_sessions=[source], trial_policy_n_jobs=1)
+
+
 @pytest.mark.parametrize("enabled,failing", [(True, False), (False, False), (True, True)])
 def test_full_single_workflow_save_order_default_disabled_and_failed(tmp_path, monkeypatch, enabled, failing):
     """The real trial runner follows block attachment and current exports never retain stale results."""
