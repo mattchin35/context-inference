@@ -1,6 +1,6 @@
 # Trial-policy Dynamax analysis: implementation plan and live handoff
 
-Status: draft for review; implementation has not started.
+Status: WP0-WP6 complete; code and synthetic validation accepted. WP7 awaits a user-designated experimental session.
 
 This plan implements [trial_dynamax_hmm_spec.md](trial_dynamax_hmm_spec.md) using the principles in [SoftwareDesign.md](SoftwareDesign.md). The specification owns scientific decisions; this document describes modules, interfaces, tests, integration, and delivery order.
 
@@ -12,14 +12,14 @@ This is the durable handoff for a DIFFERENT implementing agent/chat. The plannin
 
 | Field | Current value |
 |---|---|
-| Inspected checkout | 2026-11-07; branch `refactor`; HEAD `f27f6868567e8f21304465bb1f91395cb7f345a8`. Observation only: recheck, never reset to it. |
-| Authority | Scientific decisions approved. User requested planning/review only; implementation is NOT authorized yet. |
-| Implementation owner | Unassigned receiving agent/chat. Planned lead: Sol medium; at most one worker. No implementation worker or analysis job started for this feature. |
-| Feature state | This plan is untracked. Spec is staged with unstaged refinements (`AM`). No trial-policy source/tests exist yet; no trial-policy RED/GREEN evidence or experimental artifacts. |
-| Dependencies not recoverable from HEAD alone | Existing block migration changes in `src/main.py` and `exemplar_hmm_modeling.py`; untracked `exemplar_hmm_results.py`, `exemplar_hmm_plotting.py`, and `block_regression.py`. Preserve/transfer the actual working files as well as this plan/spec. |
-| Other work | Dirty/staged specifications, unrelated source edits and untracked files exist. Inspect the full status; do not stage, overwrite, or clean them as part of this feature. |
-| Verification | Documentation/source review only. No baseline, new tests, or analysis run during planning. Section 11 records review findings. |
-| Exact next action | User review of this handoff. After implementation authorization, the receiving lead performs WP0 below, then writes WP1 tests and establishes meaningful RED. |
+| Inspected checkout | 2026-11-07; branch `refactor`; starting HEAD `9ffe30e859b95e5fdeb49b90892abd05154b5ea7`. Observation only: recheck, never reset to it. |
+| Authority | User: "plan has been pushed. begin implementation". WP0-WP6 authorized; no experimental session or batch authorized. |
+| Implementation owner | Lead `/root`; sequential WP1 Sol-high, WP3/WP4 Luna-medium workers complete; independent WP6 Sol-high audit complete. No active worker/job. |
+| Feature state | Four feature modules, Bayesian guard, and tests committed. Main integration is implemented/tested but remains uncommitted alongside the pre-existing main migration; feature-only patch is preserved in ignored `.cache/trial_policy_implementation/trial_policy_main_changes.patch`. |
+| Dependencies not recoverable from HEAD alone | Pre-existing main/block migration in dirty `src/main.py`; untracked `exemplar_hmm_results.py` and `exemplar_hmm_plotting.py`. Preserve actual working files. `block_regression.py` and `exemplar_hmm_modeling.py` are tracked. |
+| Other work | Pre-existing `sync_ephys.py` edit and untracked files retained. Unexpected `docs/SAC_behavior_prep.md` entered commit `de94775`; user explicitly instructed ignoring that document and continuing. Leave its current changes and commit intact. |
+| Verification | Final suites: 268 numerical/plot/feature/block + 89 legacy main/window + 11 new workflow = 368 passed. Fresh main import excludes `ssm`; synthetic single/joint/four-adapter figures saved and visually reviewed. |
+| Exact next action | User designates one experimental session for WP7. No experimental analysis or batch has run. Preserve dirty-main dependencies when transferring this checkout. |
 | Experimental validation | No session designated, no data-run approval or batch approval recorded. Ask for the session when code/synthetic validation is ready. |
 
 ### Package ledger
@@ -28,13 +28,13 @@ States advance only after the receiving lead reviews the actual diff and evidenc
 
 | Package | Planned owner | Current state / next gate | RED command/result + test commit | GREEN/review + source commit or uncommitted paths |
 |---|---|---|---|---|
-| WP0 baseline/contracts | Sol medium lead | Not started; authorization first | Not run | Not run |
-| WP1 causal adapters | Sol high worker | Not started; depends WP0 | Not run | Not run |
-| WP2 likelihood/HMM | Sol high worker | Not started; depends WP1 | Not run | Not run |
-| WP3 persistence/reporting | Luna medium worker | Not started; depends WP2 | Not run | Not run |
-| WP4 saved-result figures | Luna medium worker | Not started; depends WP3 | Not run | Not run |
-| WP5 main/batch integration | Luna medium worker, Sol review | Not started; depends WP4 | Not run | Not run |
-| WP6 synthetic/regression audit | Sol high reviewer/lead | Not started; depends WP5 | Not run | Not run |
+| WP0 baseline/contracts | Lead `/root` | Complete | Existing tests only | 101 + 89 passed; no source edits |
+| WP1 causal adapters | `/root/wp1_adapters`, Sol high | Accepted | `2360445`, correction `a1cb550` | 146 passed; `16b8a42` |
+| WP2 likelihood/HMM | Lead `/root` | Accepted | 26 failed, `5e6447a` | 26 passed; `9700ff7` |
+| WP3 persistence/reporting | `/root/wp3_results`, Luna medium; lead review | Accepted | `fd310d1`, `96c56d2`, `acc8b5f`, `1d1f0b5` | 29 current cases pass; source `82bc108`, `cd5ef8f`, `c66fcae` |
+| WP4 saved-result figures | `/root/wp4_plotting`, Luna medium; lead review | Accepted; actual PNGs reviewed | `fa496e5`; fixture correction `d45e2ec`; audit `8e24b2f` | 10 current cases pass; source `9753c34`, `c66fcae`, `8c41826` |
+| WP5 main/batch integration | Lead `/root`; WP6 independent Sol review | Accepted in working tree | `3575d6b`, `0537290`, `1d1f0b5`; scoped legacy fixtures | 11 new + 89 legacy cases pass; main source intentionally uncommitted |
+| WP6 synthetic/regression audit | `/root/wp6_audit`, Sol high; lead | Complete | Two plotting findings fixed tests-first; import fixture corrected | 368 final tests passed; synthetic artifacts and figure evidence below |
 | WP7 designated-session inspection | Receiving lead + user | Not started; depends WP6 and session designation | Not applicable | Not run; no batch authorized |
 
 ### Receiving/resuming procedure
@@ -218,6 +218,8 @@ Cache discovery inspects only the matching signature directory and selects the n
 
 The parent calls `write_trial_policy_export` after checked attachment: it writes the current snapshot and run record to the chosen new export directory and, when requested, archives/replaces `current_csv_path`. A fresh numerical run can use its own directory for the first export. Numerical completion means arrays are reusable; later export/plot errors remain explicit workflow failures without invalidating correct saved arrays. Refresh only `trial_policy_` columns, clearing stale candidate/HMM fields; preserve `inherited_block_*`, existing features and choice-window outputs. Never rewrite block CSVs or numerical artifacts.
 
+Implementation clarification: `numerical_path=None` is reserved for a joint CSV export. Its manifest links the individual source NPZs; it does not claim a single joint numerical artifact. Single-source exports always reference their actual numerical path.
+
 ### Saved-result plotting and run records
 
 Single-session figures go under `<session.figure_path>/trial_policy_hmm/<timestamp>/`. Multisession PNGs go directly into the existing `cross_session_analysis` folder with mouse/session scope and timestamp in their filenames, matching the established cross-session figure placement. Companion run records live beneath `cross_session_analysis/trial_policy_hmm/<timestamp>/` and link the figure paths.
@@ -379,3 +381,70 @@ For each gate, append: date/time; package/gate and authorization; actual owner/m
 - Made the original per-source flag-column presence/alias list part of `input_digest` and hence cache identity. Added schema-only invalidation tests and a column-order invariance test; cached metadata must not override the current source schema during joint reattachment.
 - External implementation-chat review supplied by the user reports finite results for 121-row evidence reversals at both bounds and default .90, K=2,3,4, with maximum probability error approximately `7.9e-7` versus a stable log-domain reference. This is reported review evidence, not a test suite run or reproduction by this planning chat. The implementing agent must add and run the regressions before WP2 acceptance.
 - Documentation-only revision. Section 0 remains unchanged until the requested final snapshot refresh after approval/push.
+
+### 2026-11-07 - WP0 authorized implementation baseline
+
+- Authority: user confirmed plan pushed and instructed implementation. Starting HEAD `9ffe30e859b95e5fdeb49b90892abd05154b5ea7`, branch `refactor`; index clean. Lead `/root`; one approved worker `/root/wp1_adapters` (gpt-6.1-sol high) owns WP1 test files, then its two production files after RED commit confirmation. No experimental data processing authorized.
+- Existing dirty tracked paths: `src/main.py` (532 insertions, 192 deletions), `src/neural_analysis/sync_ephys.py` (one insertion). Relevant untracked dependencies: `exemplar_hmm_results.py`, `exemplar_hmm_plotting.py`, `expectant_switching_selectivity.py`, and existing trial-feature/main simulation tests; numerous unrelated untracked artifacts remain untouched. Starting main/source diff preserved under ignored `.cache/trial_policy_implementation/`.
+- Baseline command: `UV_CACHE_DIR=.cache/uv MPLCONFIGDIR=.cache/matplotlib MPLBACKEND=Agg uv run --frozen --no-sync pytest -q src/tests/behavior_analysis/test_trial_features.py src/tests/behavior_analysis/test_fixed_exemplar_block_states.py src/tests/behavior_analysis/test_exemplar_hmm_results.py src/tests/behavior_analysis/test_exemplar_hmm_plotting.py` -> exit 0, 101 passed, one existing TFP/JAX deprecation warning, 3.99 s.
+- Baseline command: `UV_CACHE_DIR=.cache/uv MPLCONFIGDIR=.cache/matplotlib MPLBACKEND=Agg uv run --frozen --no-sync pytest -q src/tests/test_main_dynamax_migration.py src/tests/test_main_choice_windows.py src/tests/test_main_multisession.py` -> exit 0, 89 passed, same deprecation warning, 7.27 s. Separate processes avoid existing global-stub contamination.
+- Baseline tool sessions 38419 and 46734 completed. No active analysis process. No source edits or commits yet. Next gate: review WP1 RED tests and make the tests-only commit before implementation.
+
+### 2026-11-07 - WP1 RED and tests-only commit
+
+- Owner `/root/wp1_adapters`, gpt-6.1-sol high; lead reviewed hand calculations, exclusion/history and selection contracts. Worker wrote only the two new owned tests. No production edits before commit.
+- `UV_CACHE_DIR=.cache/uv MPLCONFIGDIR=.cache/matplotlib MPLBACKEND=Agg uv run --frozen --no-sync pytest -q src/tests/behavior_analysis/test_trial_policy_models.py src/tests/behavior_analysis/test_trial_policy_bayesian_validation.py` -> exit 1, 89 failed in 1.55 s. Collection succeeded; failures are missing trial-policy module (76 cases) and missing opt-in Bayesian keyword (13 cases).
+- RED tests-only commit `2360445` contains exactly those two files (364 lines). Lead authorized WP1 GREEN after commit. Root drafted the next phase's numerical tests in its new owned file, unrun and uncommitted pending the WP1 dependency.
+- Next action: worker implements source-local replay and the guarded Bayesian validation; no experimental runs.
+
+### 2026-11-07 - WP1 first GREEN review and WP2 RED preparation
+
+- WP1 owned tests: 89 passed in 0.98 s; three expected warnings from deliberately nonfinite direct legacy validation probes. Existing `test_trial_features.py test_gather_trial_features.py`: 55 passed in 1.00 s. Root reviewed actual source and requested one small regression: unexpected nonfinite first-round computed values on usable rows must raise rather than become unavailable. Worker is adding that test before its fix; WP1 not yet accepted.
+- Root-authored `test_trial_policy_analysis.py` uses hand Bernoulli values, enumerated short HMM paths, a stable log-domain long-sequence reference, excluded-row spacing, ties, K=1-4 and bounded transitions. Exact standard environment command with that path -> exit 1, 26 failed in 0.38 s, all on missing `trial_policy_analysis` import inside collected tests. WP1 history fixtures already prepare successfully. Tests-only numerical commit recorded by lead; no numerical production file yet.
+- Root also drafted WP3 tests in its new owned test file; unrun/uncommitted pending numerical implementation. No experimental outputs.
+
+### 2026-11-07 - WP1 calculation-error regression RED
+
+- Added two cases proving NaN/inf FQL calculations on a usable row must raise with session/original trial/model context. Standard command with `test_trial_policy_models.py -k unexpected_nonfinite` -> exit 1, 2 failed, 76 deselected, 0.93 s, intended DID NOT RAISE.
+- Tests-only correction commit `a1cb550`; worker authorized to fix afterward. WP2 tests-only RED commit is `5e6447a`. No unrelated files staged.
+
+### 2026-11-07 - WP1 accepted; WP2 GREEN
+
+- WP1 final command: standard environment `pytest -q` with owned model/Bayesian tests and existing trial-feature/gather tests -> exit 0, 146 passed, three expected deliberate nonfinite legacy-probe warnings, 1.15 s. Reviewed actual source and accepted; source commit `16b8a42`. First-round unexpected calculation failures now raise, while explicit synthetic-adapter unavailability remains supported.
+- WP2 owner lead `/root`. Tests-only RED `5e6447a` preceded production. Standard environment `pytest -q src/tests/behavior_analysis/test_trial_policy_analysis.py` -> exit 0, 26 passed, one existing TFP/JAX warning, 2.19 s. Real Dynamax matches enumerated/long log-domain references, preserves full row spacing and ties, supports K=1-4, accepts exact bounds and rejects adjacent outside values. Numerical source committed after GREEN.
+- `git diff --check` reports only the pre-existing unrelated `sync_ephys.py:243` blank EOF; trial-owned paths clean. No experimental outputs. Next: WP3 RED tests and owned persistence implementation.
+
+### 2026-11-07 - WP3 initial GREEN and review corrections
+
+- WP3 tests-only RED: standard environment `pytest -q src/tests/behavior_analysis/test_trial_policy_results.py --tb=short` -> 25 failed, missing module, 0.97 s; committed `fd310d1`. Worker `/root/wp3_results`, gpt-6-luna medium, wrote only its assigned new results module. Initial GREEN: 25 passed.
+- Root source review identified real omissions: code digest joined behavior filenames under `src/` and hashed only main; HMM per-model column names lost their prefix; greedy -1 stayed numeric in CSV attachment; NPZ meta was JSON scalar rather than required dictionary. Four failing assertions committed before correction as `96c56d2`: 4 failed, 23 passed, 2.20 s. Worker correcting these plus function-contract/type-hint quality; no numerical science changed.
+- WP4 tests drafted and meaningful RED verified: standard environment `pytest -q src/tests/behavior_analysis/test_trial_policy_plotting.py --tb=short` -> 9 failed on missing plot module, 0.35 s. No plotting production code yet. WP5 tests drafted; RED command running separately. No experimental data processed.
+
+### 2026-11-07 - WP3 accepted and remaining RED gates
+
+- WP3 correction GREEN: 27 passed after `96c56d2`; source accepted/committed `82bc108`. Review also found the unknown-flag warning mask used bitwise AND with alias count, suppressing warnings when both aliases existed. Regression RED: 1 failed/27 deselected, 0.29 s; tests commit `acc8b5f` preceded simple mask correction. Final persistence suite: 28 passed, one existing warning, 2.15 s; fix `cd5ef8f`.
+- WP4 tests-only commit `fa496e5`, nine meaningful missing-module failures; worker `/root/wp4_plotting` (gpt-6-luna medium) owns only plotting source. WP5 tests-only `3575d6b`: standard command `pytest -q src/tests/test_main_trial_policy.py --tb=short` -> nine intended failures (missing runner/config/default trial behavior), 2.57 s. Main source still untouched since starting snapshot.
+- Existing block-only window fixture explicitly disables trial analysis (`acc8b5f`), retaining original assertions. Analogous one-line fixture update to tracked `test_main_dynamax_migration.py` pending stage; prior version preserved in ignored starting snapshot. No experimental analysis or outputs.
+
+### 2026-11-07 - WP4 GREEN and WP5 integration
+
+- WP4 worker `/root/wp4_plotting` (gpt-6-luna medium) wrote only `trial_policy_plotting.py`. Original capture fixture wrapped `Figure.savefig` before pyplot initialized; Matplotlib rejected its local qualname. Genuine fixture correction `d45e2ec` imports pyplot before wrapping; no assertions weakened and no production compatibility shim retained. Nine plotting cases then passed; source accepted as `9753c34`. Root inspected real two-source PNG under `.cache/trial_policy_implementation/wp4_review/`.
+- WP5 lead `/root` implemented shared main changes directly against the preserved dirty starting main, keeping the feature delta separate. Added config/default runner, source-specific parameter resolution and checked joint projection, parent-only cache/I/O, pure numerical thread workers, full-workflow stale-column clearing, and saved-artifact figures. Return structure and collection/agreement early returns remain intact.
+- Additional source-parameter/empty-source tests RED: two failures, nine deselected, 2.51 s; tests-only `0537290`. Complete new main suite GREEN: 11 passed, 7.43 s. After replacing an opaque work tuple with a small data-only source record, 11 passed, 7.60 s. No source commit for main: its pre-existing 532-insertion/192-deletion migration remains intertwined and must not be committed incidentally.
+- Reporting review regression RED: nine failures/40 deselected, 4.69 s, covering actual joint-source artifact links, options retained on early failure, and excluded-row caption meaning. Tests-only `1d1f0b5` preceded fixes. `write_trial_policy_export` now accepts None for a joint export, preserving source NPZ links without mislabeling a JSON manifest as numerical data. Targeted results/plot/main GREEN: 49 passed, 10.60 s; source correction `c66fcae`.
+- Existing main/window suites passed 89 tests, 7.06 s; combined numerical/feature/block suites passed 266, 8.14 s at this gate. Warnings are existing TFP/JAX deprecation and three deliberate nonfinite legacy guard probes, not normal-input warnings.
+
+### 2026-11-07 - WP6 independent audit, final tests and synthetic artifacts
+
+- Independent read-only owner `/root/wp6_audit`, gpt-6.1-sol high, reviewed spec, all new modules, Bayesian guard and feature-only main delta. Independently ran 117 model/numerical/Bayesian cases. Found no material scientific/integration defect; two real plotting issues remained: normal 30-source caption overlap and HMM interpretation printed when smoothing was disabled.
+- Plot regression RED: four failures/six passed, 5.17 s. Test assertion previously requiring retrospective wording even without smoothing was a genuine test error; corrected it to require disabled-smoothing wording. Added real 30-source rendered caption-bbox regression. Tests-only `8e24b2f` preceded conditional caption and measured-height layout fix. GREEN: ten passed, 5.66 s; source `8c41826`.
+- Final combined command: `UV_CACHE_DIR=.cache/uv MPLCONFIGDIR=.cache/matplotlib MPLBACKEND=Agg uv run --frozen --no-sync pytest -q src/tests/behavior_analysis/test_trial_policy_models.py src/tests/behavior_analysis/test_trial_policy_bayesian_validation.py src/tests/behavior_analysis/test_trial_policy_analysis.py src/tests/behavior_analysis/test_trial_policy_results.py src/tests/behavior_analysis/test_trial_policy_plotting.py src/tests/behavior_analysis/test_trial_features.py src/tests/behavior_analysis/test_gather_trial_features.py src/tests/behavior_analysis/test_fixed_exemplar_block_states.py src/tests/behavior_analysis/test_exemplar_hmm_results.py src/tests/behavior_analysis/test_exemplar_hmm_plotting.py --tb=short` -> exit 0, 268 passed, four known/intentional warnings, 10.27 s.
+- Final new-main command: same environment `pytest -q src/tests/test_main_trial_policy.py --tb=short` -> exit 0, 11 passed, one existing deprecation warning, 8.42 s.
+- The final legacy-main run exposed a genuine dynamic import-fixture omission after the new data-only record used forward annotations: 71 failed, six passed, 12 errors because the fixture executed a module without registering it in `sys.modules`. Verified Python's installed importlib source registers modules before execution; corrected that single fixture operation without changing assertions or adding a production workaround. Correction commit `de94775`. Final exact legacy command: same environment `pytest -q src/tests/test_main_dynamax_migration.py src/tests/test_main_choice_windows.py src/tests/test_main_multisession.py --tb=short` -> exit 0, 89 passed, one existing warning, 7.23 s. Final total: 368 passed across these three suites.
+- Fresh standalone command: same uv environment `python -B` importing `src.main` and asserting `ssm` absent from `sys.modules` -> exit 0. Trial-owned `git diff --check` passed. No full unrelated repository test sweep or experimental data processing was claimed.
+- Deterministic synthetic driver: `UV_CACHE_DIR=.cache/uv MPLCONFIGDIR=.cache/matplotlib MPLBACKEND=Agg uv run --frozen --no-sync python .cache/trial_policy_implementation/validate_synthetic.py` -> exit 0. Review directory `.cache/trial_policy_implementation/synthetic_2026-11-07_23-16-31/` contains exact driver copy, `summary.md`, `validation_manifest.json`, source-local versioned NPZs and current CSVs, source/joint run logs and actual main/batch snapshots. No RNG used; metadata records seed None.
+- The synthetic run exercised real block/trial inference, two sessions sharing local IDs, no-choice/missing reward/manual/unknown-flag rows, absent/legacy source schemas, immutable cache reattachment, threaded source inference, and a fourth neutral adapter. Joint marginals exactly matched independently computed source marginals. Missing-data warnings appeared once per condition/source per invocation.
+- Final saved-result-only re-rendering produced `final_figures/SYNTH_A.png`, `SYNTH_B.png`, `synthetic_fourth.png`, `multisession.png`, and `thirty_source_layout.png` in that review directory. Root visually inspected final two-source and 30-source PNGs: legible caption separated from axes; exclusions/ties and reset boundaries visible; no cross-source trace connections. All numerical artifacts remain in source processed subdirectories.
+- Main implementation is a 402-insertion/two-deletion feature delta against `.cache/trial_policy_implementation/starting_main.py`; exact isolated diff is `.cache/trial_policy_implementation/trial_policy_main_changes.patch`. The working `src/main.py` must accompany this branch/handoff because its pre-existing migration and new integration are deliberately uncommitted. Original `sync_ephys.py` change and unrelated untracked files were not modified.
+- Interruption: unexpected staged `docs/SAC_behavior_prep.md` entered `de94775` together with the fixture fix. Lead stopped; user explicitly replied "ignore that document and keep going". Commit and current document edits are left intact; no history rewrite performed. Future commits use explicit path ownership.
+- All test/tool sessions and workers complete; no active process/log tail to resume. WP0-WP6 accepted. Exact next action: user selects the full ID/path of one experimental session for WP7 validation, then inspects its outputs before any batch. No session or batch authorization is inferred from implementation completion.
