@@ -273,7 +273,7 @@ def test_v3_window_roundtrip_and_identity(saved_prediction):
 
 
 @pytest.mark.parametrize("defect", [
-    "missing_window", "missing_scoring", "bounds", "scoring", "mask", "width", "extent", "reward_label",
+    "missing_window", "missing_scoring", "bounds", "scoring", "mask", "width", "extent", "reward_label", "binary_values",
 ])
 @pytest.mark.parametrize("saved_prediction", [("mixed_outcome_decoding", "before")], indirect=True)
 def test_v3_rejects_window_and_reward_contract_corruption(saved_prediction, defect):
@@ -297,6 +297,8 @@ def test_v3_rejects_window_and_reward_contract_corruption(saved_prediction, defe
         config["bin_width_ms"] = 100
     elif defect == "extent":
         config["prediction_window_s"] = [-1, 1]
+    elif defect == "binary_values":
+        arrays["target_values"][0, 2] = 0.5
     else:
         meta["target_metadata"]["current_reward"]["positive_label"] = "left"
     arrays["meta"] = np.asarray(meta, dtype=object)
@@ -369,7 +371,7 @@ def test_original_version_contracts_load_relocate_and_score(saved_prediction, ve
     assert destination.read_bytes() == before
 
 
-@pytest.mark.parametrize("defect", ["half_window", "reward_target", "unknown_pair"])
+@pytest.mark.parametrize("defect", ["half_window", "reward_target", "unknown_pair", "new_schema_two_targets"])
 @pytest.mark.parametrize("saved_prediction", ["mixed_outcome_decoding"], indirect=True)
 def test_legacy_contract_rejects_new_scope_injection(saved_prediction, defect):
     """A v2 label cannot legitimize a half-window, reward model or unknown schema pair."""
@@ -382,6 +384,10 @@ def test_legacy_contract_rejects_new_scope_injection(saved_prediction, defect):
         meta["effective_config"]["training_window"] = "before"
     elif defect == "reward_target":
         meta["effective_config"]["target_names"].append("current_reward")
+    elif defect == "new_schema_two_targets":
+        meta["analysis_version"] = "condition-session-prediction-v3"
+        meta["schema_version"] = 3
+        meta["effective_config"].update(training_window="full", scoring_window_s=[-1., 1.])
     else:
         meta["schema_version"] = 3
     arrays["meta"] = np.asarray(meta, dtype=object)
