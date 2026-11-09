@@ -213,12 +213,14 @@ def test_gui_prepare_forwards_selected_mode_and_bounded_caption(runnable_session
     next(widget for widget in at.selectbox if widget.label == "PFC probe").select("A").run()
     next(widget for widget in at.selectbox if widget.label == "Timeline bin width (ms)").select(20).run()
     next(widget for widget in at.selectbox if widget.label == "Analysis").select("mixed_outcome_decoding").run()
+    next(widget for widget in at.selectbox if widget.label == "Training/scoring window").select("before").run()
     next(widget for widget in at.button if widget.label == "Prepare predictions").click().run()
     assert not at.exception
     products = [load_prediction_result(path) for path in runnable_session.parent.glob("analysis_runs/condition_session_prediction_*/results.npz")]
     mixed = next(product for product in products if product.inputs.analysis_mode == "mixed_outcome_decoding")
     assert mixed.inputs.target_names == ("current_state", "current_action", "current_reward")
     assert mixed.meta["effective_config"]["bin_width_ms"] == 20
+    assert mixed.inputs.training_window == "before"
     assert next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval").value
     next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval").check().run()
     assert any("reset" in item.value.lower() and "loaded" in item.value.lower() for item in at.caption)
@@ -269,7 +271,7 @@ def test_saved_performance_panel_laterality_population_and_cache(runnable_sessio
                    and "Grouping" not in item.value.columns and "Fold" not in item.value.columns)
     assert set(overall["Population"]) >= {"All eligible choices", "Training outcomes", "Correct-rewarded", "Incorrect"}
     assert overall["Accuracy (%)"].dropna().between(0, 100).all()
-    folds = next(item.value for item in at.dataframe if "Split" in item.value.columns)
+    folds = next(item.value for item in at.dataframe if "Split" in item.value.columns and "Grouping" not in item.value.columns)
     assert set(folds["Split"]) == {"Training", "Held-out"}
     assert set(folds["Fold"]) == set(range(5))
     assert any("[-1,+1)" in item.value and "trial" in item.value for item in at.caption)

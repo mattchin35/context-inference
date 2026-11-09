@@ -81,8 +81,10 @@ def test_dry_run_writes_and_fits_nothing(runnable_session, monkeypatch):
 
 
 @pytest.mark.parametrize("mode, target_count", [("correct_rewarded_generalization", 7), ("mixed_outcome_decoding", 3)])
-@pytest.mark.parametrize("window", ["before", "after"])
-def test_prepare_reuse_rerun_and_source_snapshots(runnable_session, monkeypatch, mode, target_count, window):
+@pytest.mark.parametrize("window, expected_training_bins", [("full", 4), ("before", 2), ("after", 2)])
+def test_prepare_reuse_rerun_and_source_snapshots(
+    runnable_session, monkeypatch, mode, target_count, window, expected_training_bins,
+):
     """Each mode/window fits once, reuses its matching identity and preserves reruns."""
     roles = {"PFC": "A", "HPC": "B"}
     first = run_session.prepare_session_predictions(
@@ -96,7 +98,7 @@ def test_prepare_reuse_rerun_and_source_snapshots(runnable_session, monkeypatch,
     assert first.details["max_model_count"] == target_count * 2 * 5
     assert first.details["prediction_bytes_upper_bound"] == 18 * 8 * target_count * 8 * 2
     assert loaded.inputs.training_window == window
-    assert loaded.inputs.training_bin_mask.sum() == 2
+    assert loaded.inputs.training_bin_mask.sum() == expected_training_bins
     assert loaded.meta["fit_count"] <= target_count * 2 * 5
     directory = first.result_path.parent
     for name in ("run_session.py", "run_batch.py", "summary.md", "run.log", "config.json"):
@@ -104,9 +106,15 @@ def test_prepare_reuse_rerun_and_source_snapshots(runnable_session, monkeypatch,
     assert (directory / "source_snapshots/modeling.py").is_file()
     assert "Block-held-out" in (directory / "summary.md").read_text()
     assert mode in (directory / "summary.md").read_text()
+    summary_text = (directory / "summary.md").read_text()
+    assert f"({window})" in summary_text
     assert mode in (directory / "run.log").read_text()
-    if target_count == 2:
+    if target_count == 3:
         assert "relative to average loss" in (directory / "summary.md").read_text()
+        assert "class 1 is rewarded" in summary_text
+        assert "eventual recorded reward" in summary_text
+        assert "post-choice, not necessarily post-delivery" in summary_text
+        assert "not subjective expectation" in summary_text
     original_fit = run_session.fit_region_prediction_models
 
     def forbidden(*args, **kwargs):
@@ -219,9 +227,9 @@ def test_training_window_control_precedence_and_dry_run_contract(runnable_sessio
         runnable_session, probe_roles={"PFC": "A"}, dry_run=True,
     )
     assert controlled.details["training_window"] == "before"
-    assert controlled.details["training_window_bounds_s"] == [-1.0, 0.0]
+    assert controlled.details["training_window_s"] == [-1.0, 0.0]
     assert controlled.details["training_bins"] == 2
-    assert controlled.details["scoring_window_bounds_s"] == [-1.0, 0.0]
+    assert controlled.details["scoring_window_s"] == [-1.0, 0.0]
     assert controlled.details["training_conditions"] == ["correct_rewarded"]
     assert controlled.details["candidate_outcome_counts"]
     assert controlled.details["max_model_count"] == 35
@@ -230,8 +238,8 @@ def test_training_window_control_precedence_and_dry_run_contract(runnable_sessio
         runnable_session, probe_roles={"PFC": "A"}, training_window="after", dry_run=True,
     )
     assert overridden.details["training_window"] == "after"
-    assert overridden.details["training_window_bounds_s"] == [0.0, 1.0]
-    assert overridden.details["scoring_window_bounds_s"] == [0.0, 1.0]
+    assert overridden.details["training_window_s"] == [0.0, 1.0]
+    assert overridden.details["scoring_window_s"] == [0.0, 1.0]
 
 
 def test_session_and_batch_cli_forward_explicit_window(runnable_session, monkeypatch, capsys):
@@ -239,7 +247,11 @@ def test_session_and_batch_cli_forward_explicit_window(runnable_session, monkeyp
     calls = []
 
     def capture(*args, **kwargs):
-        """Capture runner arguments and return a tiny report without file work."""
+        """Capture Path positional input and keyword controls; return an empty dry-run report.
+
+        Inputs are metadata Paths plus JSON-compatible scalar/None controls;
+        output is PredictionRunReport with no result path and no numerical arrays.
+        """
         calls.append(kwargs)
         return run_session.PredictionRunReport("dry-run", None, "identity", 0.0, {})
 

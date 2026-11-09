@@ -161,6 +161,7 @@ def test_reward_half_window_labels_and_full_prediction_geometry(prediction_input
     axis = figure.layout["yaxis" + prediction.yaxis.removeprefix("y")]
     assert axis.title.text == "P(rewarded)"
     assert "Reward decoding" in prediction.hovertemplate
+    assert "P(rewarded)" in prediction.hovertemplate
     assert label in prediction.hovertemplate and label in actual.hovertemplate
     assert any(label in item.text and "Reward decoding" in item.text for item in figure.layout.annotations)
     np.testing.assert_array_equal(np.asarray(prediction.x[:16], dtype=float),
@@ -170,3 +171,4 @@ def test_reward_half_window_labels_and_full_prediction_geometry(prediction_input
     heatmap = next(trace for trace in figure.data if trace.type == "heatmap" and trace.name == "PFC")
     assert "log-odds" in heatmap.colorbar.title.text
     assert label in heatmap.hovertemplate
+    assert "P(rewarded)" in heatmap.hovertemplate
