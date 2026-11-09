@@ -153,6 +153,49 @@ test_tts_discovery <- function(root) {
   paths
 }
 
+# Check collection preserves optional metadata across differing session schemas.
+# Input: none. Returns invisible NULL; all fits use synthetic trial-count data.
+test_tts_heterogeneous_session_collection <- function() {
+  first_input <- make_tts_results_session("CT016", "CT016_optional")
+  first_input$optional_numeric <- seq_len(nrow(first_input)) / 10
+  first_input$stage_note <- "early"
+  second_input <- make_tts_results_session("CT024", "CT024_optional", offset = 1)
+  second_input$optional_latency_seconds <- seq_len(nrow(second_input)) / 100
+  second_input$camera_present <- TRUE
+  second_input$inferred_strategy <- rep(c("0", "1"), length.out = nrow(second_input))
+  second_input <- second_input[, rev(names(second_input)), drop = FALSE]
+  sessions <- list(first = fit_session_tts(first_input, seed = 101),
+                   second = fit_session_tts(second_input, seed = 102))
+  original <- sessions
+  paths <- data.frame(mouse = c("CT016", "CT024"),
+                      session = c("CT016_optional", "CT024_optional"),
+                      input_csv = c("first.csv", "second.csv"),
+                      result_dir = c("first_result", "second_result"))
+  combined <- combine_tts_sessions(sessions, paths)
+  expected_names <- unique(c(names(sessions$first$blocks), names(sessions$second$blocks)))
+  stopifnot(identical(names(combined$blocks), expected_names), identical(sessions, original))
+  first_rows <- combined$blocks$session == "CT016_optional"
+  second_rows <- combined$blocks$session == "CT024_optional"
+  stopifnot(identical(combined$blocks$row_id, c(sessions$first$blocks$row_id, sessions$second$blocks$row_id)))
+  stopifnot(identical(combined$blocks$tts, c(sessions$first$blocks$tts, sessions$second$blocks$tts)))
+  stopifnot(is.numeric(combined$blocks$tts), is.numeric(combined$blocks$nrew))
+  stopifnot(is.numeric(combined$blocks$optional_numeric), is.numeric(combined$blocks$optional_latency_seconds))
+  stopifnot(identical(combined$blocks$optional_numeric[first_rows], sessions$first$blocks$optional_numeric))
+  stopifnot(all(is.na(combined$blocks$optional_numeric[second_rows])))
+  stopifnot(identical(combined$blocks$optional_latency_seconds[second_rows], sessions$second$blocks$optional_latency_seconds))
+  stopifnot(all(is.na(combined$blocks$optional_latency_seconds[first_rows])))
+  stopifnot(is.character(combined$blocks$stage_note), all(combined$blocks$stage_note[first_rows] == "early"))
+  stopifnot(all(is.na(combined$blocks$stage_note[second_rows])))
+  stopifnot(is.logical(combined$blocks$camera_present), all(combined$blocks$camera_present[second_rows]))
+  stopifnot(all(is.na(combined$blocks$camera_present[first_rows])))
+  stopifnot(is.factor(combined$blocks$inferred_strategy))
+  stopifnot(identical(levels(combined$blocks$inferred_strategy), levels(sessions$second$blocks$inferred_strategy)))
+  stopifnot(all(is.na(combined$blocks$inferred_strategy[first_rows])))
+  stopifnot(identical(as.character(combined$blocks$inferred_strategy[second_rows]),
+                      as.character(sessions$second$blocks$inferred_strategy)))
+  invisible(NULL)
+}
+
 # Check reproducible serial/parallel batch tables and saved population outputs.
 # Args: root character(1) owned scratch tree. Returns invisible NULL.
 test_tts_batch_runner <- function(root) {
@@ -227,6 +270,7 @@ tryCatch({
   test_tts_cache_metadata(test_root)
   test_tts_session_runner(test_root)
   test_tts_discovery(test_root)
+  test_tts_heterogeneous_session_collection()
   test_tts_batch_runner(test_root)
   test_tts_failed_run_log(test_root)
   cat("All TTS result and runner tests passed.\n")
