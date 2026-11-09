@@ -180,7 +180,7 @@ def test_missing_context_columns_attach_shaped_unavailable_matches_only(event_se
     Existing central matches remain usable. The new selector must not be called
     when saved fields are absent; unavailability is established before matching.
     """
-    trials = _episode(("probe", "left", 1)).drop(columns=list(columns))
+    trials = _episode(("omission_probe", "left", 1)).drop(columns=list(columns))
     _write_trials(event_session, trials)
     path = _prepare_product(event_session, "unit")
     before = path.read_bytes()
