@@ -1,12 +1,14 @@
 # Condition Generalization and Mixed-Outcome Decoding: Implementation Handoff
 
-Status: both analysis modes and saved-model performance/laterality summaries
-implemented, 2026-11-03. WP6-WP8, WP10 and WP9 documentation/synthetic/browser
-gates are complete (237 integration tests).
-Original CT026 generalization validation is recorded; user acceptance and a
-new CT026 mixed-outcome preparation remain outstanding. No experimental run
-or batch was included in the extension implementation instruction.
-Keep this existing filename.
+Status: revision-4 implementation reference updated 2026-11-09; new work is
+planned, not implemented. The Full-window seven-target generalization and
+two-target mixed baseline, including performance/laterality, is complete
+(last recorded integration gate: 237 tests). WP11-WP15 specify Before/After,
+actual reward and split-by-outcome scoring. Original experimental acceptance
+gates remain recorded; this planning request runs no analyses. Keep this filename.
+Start with Section 0.1, the contracts in Sections 1-8, then WP11-WP15 in
+Section 15. Section 0.4 preserves chronological evidence; Sections 13-14 are
+short completed-baseline summaries, not new work instructions.
 
 Read the [scientific spec](condition_prediction_generalization_spec_v1.md),
 [SoftwareDesign.md](SoftwareDesign.md), and repository `AGENTS.md` before
@@ -26,16 +28,16 @@ checkpointing to this analysis.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-03 / `refactor`; scoring source `86b7131`, UI `c315ef4`, mode implementation `5b72147`, original CT026 computation `2c39850`. Commits are local, not pushed. Recheck on resumption. |
-| Phase / authorization | User requested training/test performance and confirmed trial means over [-1,+1) plus both left/right choice/context splits. Implementation and synthetic/browser gates complete; no new experimental preparation, batch, transfer or cluster operation. |
-| Scientific settings | Two fixed modes retained. New display scores average probabilities/values per trial over [-1,+1); binary accuracy/balanced accuracy, numerical R2/RMSE; per-fold training and unique pooled held-out trials; both lateralities with counts. |
-| Source/tests | WP6-WP8 and WP10 implemented. Full Section 9 integration gate: 237 passed in 17.73 s, including Node frontend checks. Changed Python Ruff and whitespace checks clean. |
-| Documentation | Spec document revision 3 and existing usage guides describe both modes, v1/v2 archives, navigation, and saved-model performance/laterality. Fit and archive versions are unchanged by scoring. |
-| Existing user changes | Staged: added `docs/session_timeline_pca_spec_v1.md`. Unstaged tracked: `src/main.py`, `src/neural_analysis/sync_ephys.py`. Preserve these and unrelated untracked files. |
-| Team / writer | Current chat lead is the sole writer; no worker launched. Runtime model/effort identity is not exposed to the agent. |
-| Running analysis | No experimental analysis/worker launched. Temporary synthetic browser preview used port 8518; stopped after inspection. Original port-8517 preview was left untouched. |
-| Latest verification | 237 passed in 17.73 s. Synthetic saved-only browser displayed outcome scores, training/test folds, choice/context laterality and differences, and continuous R2/RMSE. Previous mode/navigation and original CT026 evidence remain unchanged. |
-| Next action | User review and, when requested, the designated 500-ms CT026 mixed preparation/inspection portion of WP9. Preserve original results and completed evidence; no implementation work remains. |
+| Date / branch / inspected HEAD | 2026-11-09 / `refactor` / `04ca54d`. Earlier computational commits remain in the evidence log; recheck checkout state on resumption. |
+| Phase / authorization | User authorized spec/plan corrections for the scaffolder default-target gap and explicit Sol orchestration with at most one active worker. Scientific choices are confirmed; WP11-WP15 code work awaits implementation instruction. No experimental processing, batch, transfer or cluster operation in this review. |
+| Scientific settings | Three matched choice-aligned windows: Full [-1,+1), Before [-1,0), After [0,+1); prediction stays [-2,+2). Generalization retains seven targets; new mixed products add current_reward as target three. Both splits/outcomes and both lateralities are summarized. |
+| Source/tests | Baseline implementation complete; last recorded gate 237 passed in 17.73 s. New tests/source not started; no pytest gate rerun during planning. |
+| Documentation | Spec revision 4 is confirmed. This plan now specifies localized changes, v1/v2/v3 compatibility, test-first WP11-WP15 and the next handoff gate. Documentation edits are uncommitted. |
+| Existing user changes | Unstaged tracked: `src/main.py`, `src/neural_analysis/sync_ephys.py`; revision-4 spec edits are already present. Preserve these and unrelated untracked files. No staged file was reported at inspection. |
+| Team / writer | Current documentation chat is the sole writer; no worker launched. Implementation assignments: Sol orchestrator; at most one active worker, with bounded Luna integration/usage scope in Section 12. Runtime model/effort identity is not exposed to the agent. |
+| Running analysis | No process/worker launched by this planning revision. Prior preview liveness was not checked; do not infer it from the old log. |
+| Latest verification | Review identified the additional single_session_setup default-target consumer; WP11 and integration gates now include its regression. Document checks and evidence below cover the correction and explicit assignments. Historical baseline remains 237 tests/browser checks; no new code gate was run. |
+| Next action | Receiving implementation chat reads the entry points above. On implementation instruction, write WP11 tests, verify RED and commit tests before source. Preserve completed work and old products. |
 
 ### 0.2 Package ledger
 
@@ -58,6 +60,11 @@ experimental visual acceptance belongs to the user.
 | WP8 runner/inspection extension | Lead | GREEN | `4c6ee75` runner; `1a54eb0` UI/chart; `9732b6d` counts; `01b0cc1` actual chart position | Runner `1a466c9`; UI `5b72147`; 216 integration tests and real browser checks | Complete. |
 | WP9 extension docs/validation | Lead + user | Docs/synthetic/browser complete; experimental acceptance pending | Required code RED gates complete | Updated usage guides; 216 passed; screenshots below | Separately requested CT026 mixed preparation and user inspection. |
 | WP10 performance/laterality | Lead | GREEN | `c381dda` scoring collection error; `beb4770` three UI failures; `05d0011` continuous caption failure | `86b7131` scoring; `c315ef4` UI; 237 integrated tests, Ruff and synthetic browser checks | Complete; no fits/archive migration required. |
+| WP11 windows/reward inputs | Sol orchestrator, direct writer | Planned | Not started | Not started | Fixed-window controls, shared target registration, preserved parser/scaffolder defaults, aligned preparation; Section 15. |
+| WP12 versioned persistence | Sol orchestrator, direct writer | Planned | Not started | Not started | v3 publication and read-only v1/v2 compatibility. |
+| WP13 split/outcome scoring | Sol orchestrator, direct writer | Planned | Not started | Not started | Matched-window scores, exact split/outcome/side masks and reward counts. |
+| WP14 runner/view integration | Sol orchestrator; optional single Luna worker | Planned | Not started | Not started | One window per preparation, saved selection, labels and anchored navigation; Sol reviews/accepts. |
+| WP15 docs/integration/acceptance | Sol orchestrator + user; optional same Luna worker for usage docs | Planned | Not started | Not started | Sol owns synthetic/browser checks; user inspects explicitly authorized experimental validation. |
 
 ### 0.3 Resume and interruption procedure
 
@@ -493,14 +500,85 @@ Next exact action, owner, and any missing authority:
   ASCII, local links, fenced blocks and scoring contracts. Unrelated user work
   remains staged/unstaged as before. No new experimental processing or push.
 
+### 2026-11-09 - WP0 / revision-4 modular expansion plan
+
+- Authorization: user requested updating this implementation reference after
+  confirming the revision-4 spec; no implementation or experimental run in
+  this turn. Re-read SoftwareDesign.md, current preparation/fitting/persistence/
+  scoring/UI code and shared target construction. Baseline is `refactor` at
+  `04ca54d`; preserve existing spec edits and main/sync user changes.
+- Design: reuse fixed session PCA and numerical fit/prediction functions.
+  Add three fixed supervised-window masks, one actual-reward target and
+  split/outcome/side records in the existing modules. No new package,
+  dependencies, window-specific estimators, storage engine or scheduler.
+- Practical source findings addressed: shared target identifiers currently
+  double as the old omitted-target defaults, so adding reward needs an
+  explicit preserved default set. Saved validation currently resolves mixed
+  targets only through today's helper; v3 must coexist with legacy T=2 Full
+  products via a small version-local contract. Scoring already accepts a saved
+  mask but returns held-out-only outcome/side rows; expand those records and
+  reuse per-fold reconstructed means rather than adding another scorer.
+- Updated active contracts, v1/v2/v3 matrix, four-field controls, record/API
+  scope, ownership and WP11-WP15 RED-first gates. Retained original evidence
+  exactly; completed baseline references are marked historical. Synced the
+  spec's implementation-plan pointer without changing its confirmed decisions.
+- Verification: offline/frozen/no-sync `uv run ... python -` document checks
+  passed for ASCII, ten local links, section numbering/fences/whitespace,
+  controls JSON, source/test paths, version contracts, all five new packages
+  and unchanged original evidence. Changed-document `git diff --check` passed.
+  No pytest, source/test edit, worker, staging, commit, push or analysis run.
+- Next: user reviews this plan; on implementation instruction write WP11
+  tests, run its focused RED command, commit tests, then implement. Continue
+  through the approved scope without repeated per-package approval.
+
+### 2026-11-09 - WP0 / handoff-readiness audit
+
+- Reviewed spec and active plan against current preparation/model, shared target
+  registry, result validation, scoring and viewer code. No scientific choice
+  remains unresolved; the expansion stays within the existing module boundaries.
+- Clarified training-score availability per examined model, independent of a
+  trial's own held-out-model failure; added the corresponding WP13 case.
+  Preserved ordinary-accuracy percentage-point gap presentation, per-side
+  balanced accuracy and valid training-versus-pooled fold selection.
+- Included fitter/contribution tests in WP11's actual first gate. Consolidated
+  superseded package/agent instructions into short baseline summaries; all
+  prior chronological evidence is byte-for-byte retained. Plan was reduced
+  from 1841 to 1560 lines before this audit entry; added an explicit read order.
+- Documentation assertions passed for ASCII, ten links, all section/fence/
+  whitespace checks, source/test paths, fixed controls, bin-count grids,
+  v1/v2/v3 compatibility and revised scoring gates. No pytest or real data run.
+  Changed-document whitespace checks passed; no source/test edits, worker,
+  staging, commit or push. Next gate is WP11 RED on implementation instruction.
+
+### 2026-11-09 - WP0 / scaffolder-default correction and assignment clarification
+
+- User authorized documentation corrections only; implementation remains a
+  later step. Review found that `single_session_setup._task_payload()` also
+  uses `TARGET_IDENTIFIERS`, so changing only the parser default would silently
+  add reward to newly generated old-decoder configs.
+- Added the spec invariant, WP11 source/test scope and regression gates:
+  parser and scaffolder both use preserved `DEFAULT_TARGET_IDENTIFIERS`.
+  Existing explicit selections and existing config bytes remain unchanged.
+- Clarified Sol as orchestrator/direct scientific writer for WP11-WP13 and
+  acceptance owner for all packages. At most one active worker; the optional
+  Luna worker handles bounded WP14 integration or WP15 usage docs sequentially.
+- Verification: documentation checks cover ASCII, local links, fences,
+  scaffolder source/test paths, both test commands and assignment consistency;
+  changed-document whitespace checks passed. No source/test edits, pytest,
+  worker, experimental run, staging or commit. No further blocker found.
+- Next: stop after documentation review; WP11 RED awaits implementation instruction.
+
 ## 1. Outcome and boundaries
 
 Retain individual choice-window predictions beneath the existing session
 events, using saved session-wide regional PCs. Expose two fixed analysis modes:
-seven-target correct-rewarded generalization and two-target mixed-outcome
-state/action decoding. Fit once per target/region/held-out block group,
+seven-target correct-rewarded generalization and three-target mixed-outcome
+state/action/actual-reward decoding. Each has Full, Before and After variants.
+Fit once per selected window/target/region/held-out block group,
 predict across valid choice conditions, and overlay actual trial values.
-PC activity/contribution heatmaps remain optional.
+PC activity/contribution heatmaps remain optional. Reuse the existing
+numerical fitter/predictor with a selected bin mask and target columns;
+no new estimator, analysis package, window-specific subclass or PCA method.
 
 Use functions, narrow array contracts, and data-only records. Separate input
 loading, fitting, persistence, plotting, and UI. Reuse existing libraries and
@@ -511,9 +589,9 @@ The existing decoder's elastic-net models, pooled `full` window, and saved
 schemas retain their meanings. Extend the existing modules in
 `src/neural_analysis/task_decoding/session_prediction/`. One necessary exception
 in the completed original work was the backward-compatible missing-block and
-empty-target support in existing `targets.py` (Section 4). The extension does
-not require more shared target-loader changes. Preserve default behavior and
-existing result readability. That
+empty-target support in existing `targets.py` (Section 4). This extension adds
+one shared current-reward definition/encoding, while preserving old default
+target sets and validation rules. Preserve existing result readability. That
 file is in the old decoder's source fingerprint: old in-progress runs still
 need their original scientific checkout for strict resume; do not claim that
 changing it leaves old execution identities unchanged.
@@ -525,16 +603,19 @@ changing it leaves old execution identities unchanged.
 | Generalization mode | ID `correct_rewarded_generalization`; label **Correct-rewarded generalization**; canonical training mask `correct_rewarded`. Default for old controls/calls/results. |
 | Generalization targets, canonical order | `current_state`, `current_action`, `qlearning_relative_value`, `forgetting_q_relative_value`, `hmm_signed_belief`, `hmm_decay_signed_belief`, `relative_doubt`. Exact source columns/orientations are in the spec. |
 | Mixed mode | ID `mixed_outcome_decoding`; label **Mixed-outcome decoding**; training membership is canonical `correct_rewarded OR omission OR incorrect`. `omission` means correct omission. |
-| Mixed targets, canonical order | `current_state`, `current_action` only; both remain separate logistic classifiers with class 1 = left. |
+| Mixed targets, new products | `current_state`, `current_action`, `current_reward`; class 1 is left, left, rewarded respectively. Legacy v2 mixed products retain their original two targets. |
+| Supervised window | `full`: [-1,+1), default; `before`: [-1,0); `after`: [0,+1), all choice-aligned. Each is a separate fit and matched scoring interval. |
+| Actual reward | Trial-i reward flag, 0=unrewarded/1=rewarded, manual/no-choice exclusions unchanged. No previous-trial shift, correctness substitution, model expectation or third analysis mode. |
 | All-missing continuous target | Retain that target as unavailable and continue the others; missing columns or malformed present values are input errors. |
 | Regions / features | Separate PFC and HPC models; all saved session PCs, unwhitened, with no further PC or target scaling. No combined model. |
 | Bins | Default 500 ms; 100 ms selectable. Retain existing 50/20 ms support. Each resolution uses its matching session-PCA archive. |
-| Training / prediction | Pool `[-1, +1)` bins from the selected mode's eligible training trials; predict each `[-2, +2)` choice window; retain intertrial gaps. |
+| Training / prediction | Pool the selected Full/Before/After bins; predict each complete [-2,+2) choice window and retain gaps. Time zero belongs to After. No cross-window scoring matrix. |
 | Sampling / weighting | All eligible training trials, each total weight one. No additional train fraction, subsampling, class/outcome balancing, or condition-count multiplication. |
 | Models | Continuous ridge `alpha=1`; binary L2 logistic `C=1`; unpenalized intercepts. No tuning. |
-| Folds | One deterministic five-fold behavioral-block map, shared across targets and regions, before condition/target filtering. |
+| Folds | One deterministic five-fold behavioral-block map, shared across windows, targets and regions, before condition/target filtering. |
+| Summaries | Both training and held-out, by outcome and both choice/state lateralities; exact training masks, per-fold training, unique pooled held-out observations. |
 | Missing/insufficient blocks | Missing-block choices keep behavior/actual values but no held-out prediction. Fewer than five blocks stops preparation explicitly. |
-| Display | **Analysis** selector, mode-filtered saved runs/targets, explicit training labels, actual overlay, optional raw/weighted PC rows. Stay inside **Session timeline and PCA**. |
+| Display | Existing **Analysis** plus **Training/scoring window**; mode/window-filtered runs and actual saved targets. Explicit target/window/population labels. Existing timeline and PC views remain. |
 | Condition hover | Save/display all canonical condition memberships, preserving overlaps. |
 | Validation | CT026 2026-08-04, initially at 500 ms, after implementation/synthetic gates. |
 
@@ -544,8 +625,9 @@ from different session times; training can include later blocks. Each choice
 uses exactly its held-out model, not an ensemble containing models trained
 on that choice. The full-table block map is identical across modes when the
 input table is unchanged. Generalization has at most `7 * 2 * 5 = 70` fits;
-mixed decoding has `2 * 2 * 5 = 20`. Each run contains one mode. Adding mixed
-decoding does not recompute the existing seven readouts.
+expanded mixed decoding has `3 * 2 * 5 = 30`, per selected window. Each run
+contains one mode/window; Prepare does not automatically fit all three windows
+or the other mode. All variants reuse the matching saved PCA and trial folds.
 
 Interpretation to retain in captions/summary:
 
@@ -559,6 +641,9 @@ Interpretation to retain in captions/summary:
 - Mixed state decoding targets recorded task state; mixed action decoding
   targets choice. Incorrect trials allow their labels to differ. This need
   not produce different outputs on every dataset or identify causal coding.
+- Before reward decoding predicts eventual recorded reward, not subjective
+  expectation. After is post-choice, not necessarily post-delivery. Reward
+  overlays are trial labels, not delivery-event timing.
 - With a full orthonormal basis, isotropic L2 on all unwhitened PCs is L2 on
   the same standardized unit activity in rotated coordinates, not dimensional
   reduction. PC signs are arbitrary; signed weight-times-score contributions
@@ -568,19 +653,16 @@ Interpretation to retain in captions/summary:
 
 Existing package files and tests reside under `task_decoding/session_prediction/`
 in the source and `src/tests/neural_analysis/` trees respectively. The table
-records original ownership; Section 13 assigns the extension to these same
-files rather than creating a parallel decoder package.
+records the pending revision-4 ownership. Completed baseline references remain
+in Sections 13-14; Section 15 gives the new test-first gates.
 
 | Owner / package | Source responsibility | New tests |
 | --- | --- | --- |
-| Sol / WP1 | `config.py`, `preparation.py`, package `__init__.py`, and narrow existing `task_decoding/targets.py` option: settings, aligned targets, regional maps, folds. | `test_config.py`, `test_preparation.py`, existing `task_decoding/test_targets.py` regressions |
-| Sol / WP2 | `modeling.py`: data-only result records, weighted fits, predictions, contribution summaries. | `test_modeling.py`, `test_contributions.py` |
-| Sol / WP3a | `results.py`: NPZ/config validation, identity, save/load/discovery. | `test_results.py` |
-| Luna / WP3b | `run_session.py`, `run_batch.py`: preparation/reuse composition, logs/summary, CLI, thin session-list wrapper. | `test_scripts.py` |
-| Sol / WP4a | `plotting.py` and localized changes to `population/timeline_plotting.py`: prediction rows, safe contribution arrays, PC ordering/geometry. | `test_plotting.py`, bounded existing timeline regressions |
-| Luna / WP4b | `webapp/session_prediction_view.py`, localized `timeline_view.py` and `session_inputs.py` integration: saved discovery/availability, explicit Prepare, controls/cache. | `src/tests/neural_analysis/test_session_prediction_webapp.py`, existing timeline routing regressions |
-| Luna / WP5a | Relevant `SESSION_TIMELINE.md`, neural-analysis README, and task-decoding README sections. | Documentation checks |
-| Sol / WP5b | Authorized single-session validation and handoff evidence; user inspects output. | Existing numerical reconstruction checks |
+| Sol orchestrator, direct writer / WP11 | Existing prediction `config.py`, `preparation.py`; localized shared `task_decoding/config.py` and `targets.py` registration/encoding; `single_session_setup.py` default-target selection. | `test_config.py`, `test_preparation.py`, shared target/config regressions, `test_single_session_setup.py`, bounded fitter/contribution regressions |
+| Sol orchestrator, direct writer / WP12 | `results.py`: versioned metadata, exact mask validation, identity, discovery/load/save. | `test_results.py` |
+| Sol orchestrator, direct writer / WP13 | `scoring.py`: one mean per trial on the saved mask; split/outcome/side records and class counts. | `test_scoring.py` |
+| Sol orchestrator; optional single Luna worker / WP14 | Existing runners, `plotting.py`, `webapp/session_prediction_view.py` and narrow timeline/availability integration if required; Sol reviews/accepts. | `test_scripts.py`, `test_plotting.py`, `test_session_prediction_webapp.py` and directly affected timeline/chart tests |
+| Sol orchestrator; optional same Luna worker for usage docs / WP15 | Existing usage guides; Sol owns integration/browser inspection and live handoff; user inspects any authorized real result. | Existing integration command and numerical reconstruction checks |
 
 Implemented core interfaces are `prepare_prediction_inputs(...)`,
 `fit_region_prediction_models(...)`, and public `predict_region_windows(...)`,
@@ -588,7 +670,7 @@ plus save/load/discovery and runner functions. The fitter already calls the
 prediction helper, which returns predictions `(W,B,T)` and reasons `(W,T)`
 from scores, folds and fitted parameters without fitting. Preserve that
 public helper and its existing signature; no new prediction API is needed.
-Section 13 gives backward-compatible extensions. Record inputs, shapes,
+Section 15 gives backward-compatible extensions. Record inputs, shapes,
 units, and returns in docstrings. Numerical functions accept prepared arrays,
 not session objects or UI state.
 
@@ -606,7 +688,8 @@ Its final allowed fields/defaults for the extension are:
 {
   "base_config_path": "task_decoding_config.json",
   "bin_width_ms": 500,
-  "analysis_mode": "correct_rewarded_generalization"
+  "analysis_mode": "correct_rewarded_generalization",
+  "training_window": "full"
 }
 ```
 
@@ -618,12 +701,14 @@ be one of the four supported values. Retain internal
 constants `RIDGE_ALPHA=1.0` and `LOGISTIC_C=1.0`; reject penalty keys, including
 `ridge_alpha` and `logistic_C`, as unknown input fields. There are no JSON,
 CLI, GUI, or runner penalty overrides. Still record the constants in effective
-run configuration/metadata for provenance. Each mode's targets, all-PC policy,
-five folds, and window bounds are fixed. Resolve locators relative to the control
+run configuration/metadata for provenance. `training_window` accepts only
+`full`, `before`, `after`; missing controls retain Full. No arbitrary bounds
+or separate scoring-window knob. All-PC policy and five folds remain fixed.
+Resolve locators relative to the control
 file, contained in the metadata session. No metadata schema change is needed.
 
 Precedence: fixed scientific contract -> default/control-file settings ->
-explicit runner/CLI/GUI mode/bin/probe selection. Overrides apply only on
+explicit runner/CLI/GUI mode/window/bin/probe selection. Overrides apply only on
 Prepare and are saved as effective configuration. A saved result's settings drive
 its display; current widgets must not relabel it as another resolution/basis.
 The metadata-only CLI uses version-3 regional role defaults. With version-2
@@ -644,6 +729,23 @@ output paths before replacement. A malformed unused setting can therefore
 block preparation. Report the base-config prerequisite clearly; do not
 silently repair it or broaden this work into a config-loader refactor. Saved
 display does not require that config or any of these preparation prerequisites.
+
+Register `current_reward` once in the existing shared target definitions:
+categorical, source `reward`, derivation `source`, positive label `rewarded`,
+class labels {0: unrewarded, 1: rewarded}. Reuse binary validation/encoding
+alongside `current_action_is_correct`; do not duplicate chronological loading.
+The shared parser currently uses `TARGET_IDENTIFIERS` as its omitted-target
+default. Preserve that old tuple as `DEFAULT_TARGET_IDENTIFIERS`, append reward
+to the recognized identifiers, and retain the old default in `_parse_target_names()`.
+`single_session_setup._task_payload()` also writes `list(TARGET_IDENTIFIERS)`
+into new task-decoding configs. Switch its import/payload to
+`DEFAULT_TARGET_IDENTIFIERS` too, and test the generated config's exact original
+target order. Preserve existing files through the setup command's current
+exclusive-write behavior; do not add a migration or new setup option.
+Old default decoding runs must not silently acquire a reward target.
+Existing explicit target selections and class meanings remain unchanged.
+Adding shared scientific source changes can change strict execution fingerprints;
+legacy saved display still uses its recorded products, not current source hashes.
 
 Original compatibility change, already implemented: `validate_augmented_trials()`
 and `build_target_table()` have keyword-only `allow_missing_blocks=False`,
@@ -682,13 +784,29 @@ alone. `correct_rewarded` must equal its column in the saved membership matrix.
 Add a separate bool `(N,)` `training_condition_mask`: that column for
 generalization, or the union of the three primary outcomes for mixed decoding.
 Keep `correct_rewarded` factual in both modes. No row is duplicated because
-it is also switch/stay. Mixed mode constructs only its two target columns;
+it is also switch/stay. New mixed preparation constructs only its three target columns;
 it must not acquire continuous-target-column requirements from the original
 seven-target preparation (the full base-config prerequisite above remains).
 
+Keep the window mapping in prediction `config.py` as three fixed numeric
+pairs. Extend `training_bin_mask(edges, *, training_window="full")` to select
+complete bins inside that pair, checking exact boundaries with absolute
+tolerance and no interpolation. Append `training_window="full"` to the
+data-only `PredictionInputs` record, preserving existing construction calls.
+Add the same keyword default to `prepare_prediction_inputs()`; extend controls
+loading with an optional `training_window=None` override. Models receive the
+resulting bool `(B,)` mask, not a mode/window control flag. The existing fitter,
+`predict_region_windows()` and `build_pc_contributions()` need no new numerical API.
+Append the same Full default to `SessionPredictionConfig`. Update any existing
+binary docstrings that assume class 1 always means left; the 0/1 numerical
+interface remains, while interpretation comes from target metadata.
+New preparation uses seven or three targets; legacy loading supplies its
+actual saved two-target tuple explicitly under Section 6's version contract.
+
 ## 5. Fitting and contribution contracts
 
-Use N shared timeline choices, T=7 generalization targets or T=2 mixed targets,
+Use N shared timeline choices, T=7 generalization or T=3 new mixed targets
+(legacy mixed T=2 only on the saved read path),
 F=5 folds, B prediction bins, and K_r all saved PCs in region r.
 Regional scores are float64 `(W_r,B,K_r)`;
 `choice_positions` is int64 `(W_r,)` into N. Targets/validity have shape `(N,T)`,
@@ -696,12 +814,16 @@ baseline/correct-rewarded/training-condition/fold IDs `(N,)`, and edges
 `(B+1,)` seconds. Fold `-1` means no held-out assignment. Scores retain source
 units and are never mutated.
 
-Select bins fully inside `[-1,+1)` and verify those boundaries exist. Counts
-are training/prediction: 500 ms `4/8`, 100 ms `20/40`, 50 ms `40/80`, 20 ms
-`100/200`. For a target/region/fold, intersect regional coverage, baseline,
+Select bins fully inside Full [-1,+1), Before [-1,0), or After [0,+1), with
+zero in After only. Full/Before/After/prediction bin counts are 500 ms
+`4/2/2/8`, 100 ms `20/10/10/40`, 50 ms `40/20/20/80`, 20 ms `100/50/50/200`.
+For a target/region/fold, intersect regional coverage, baseline,
 selected training-condition membership, valid target, and nonnegative fold
 different from the held-out fold. Reuse `pooled.decoding.stack_training_window()`:
 trial-major rows, repeated trial-i target, weights `1 / training_bin_count`.
+At 500 ms these are 1/4 for Full, 1/2 for either half: every trial still has
+weight one. Complete [-2,+2) neural eligibility, labels and folds are shared,
+so merely changing the supervised window does not alter trial membership.
 Do not change these weights to compensate for unequal class/outcome counts.
 An absent outcome in a training fold is not itself a fit failure or permission
 to import held-out rows. Retain the existing both-binary-classes requirement.
@@ -751,7 +873,8 @@ binary probabilities. Unexpected nonfinite predictions invalidate that
 model's destination windows, with a recorded reason rather than a fallback.
 
 Predict all B bins of each assigned held-out window even when its actual
-value is missing or constant. Binary output is class-1 (left) probability;
+value is missing or constant. Binary output is class-1 probability (left for
+state/action, rewarded for reward);
 continuous output is `b + sum_j beta_j*z_j`. Logistic contributions add to
 logit, then `scipy.special.expit` gives probability. Do not clip ridge outputs.
 
@@ -764,9 +887,8 @@ the original affine prediction; the ranking describes variation only.
 
 ## 6. Saved arrays, identity, and publication
 
-New writes use analysis version `condition-session-prediction-v2`; NPZ schema 2.
-Support loading/discovering the exact original pair
-`condition-session-prediction-v1` / schema 1 as described below. Use named
+New writes use analysis version `condition-session-prediction-v3`; NPZ schema 3.
+Continue reading the exact v1/schema-1 and v2/schema-2 pairs as below. Use named
 arrays and dictionary-valued `meta`, following trusted-project timeline IO.
 Do not pickle estimator instances. Choices retain the source structured table.
 
@@ -779,7 +901,7 @@ Do not pickle estimator instances. Choices retain the source structured table.
 | `training_condition_mask` | bool `(N,)` | Selected mode's canonical membership before baseline/target/region/fold filtering; schema 2. |
 | `condition_names`, `condition_masks` | Unicode `(C,)`, bool `(N,C)` | All six canonical conditions in existing order; overlapping membership. |
 | `block_values_json`, `fold_ids` | Unicode/int64 `(N,)` | Canonical block identity; fold `-1` for missing. |
-| `bin_edges_s`, `training_bin_mask` | float64 `(B+1,)`, bool `(B,)` | Exact grid and supervised subset. |
+| `bin_edges_s`, `training_bin_mask` | float64 `(B+1,)`, bool `(B,)` | Exact prediction grid and selected fit/scoring subset. No separate scoring mask is needed. |
 | `meta` | Dictionary | Versions, configuration, provenance, units/axes, status, timing. |
 
 For each source-available region, prefix the following with `pfc_` or `hpc_`:
@@ -805,32 +927,67 @@ masks, finite/NaN conventions, probabilities, fold exclusion, and counts.
 Check `C=6`, canonical condition order, choice-row alignment, and equality of
 the standalone correct-rewarded mask with its membership column. Record
 all-missing target reasons in `meta.target_availability` as well as model rows.
-Validate T against the selected fixed mode, not against an arbitrary supplied
-target list. Reconstruct `training_condition_mask` from canonical memberships,
+Validate T against the exact version/mode contract below, not against an
+arbitrary target list or only today's `MIXED_TARGET_NAMES`. Reconstruct
+`training_condition_mask` from canonical memberships,
 then validate every regional `(target,fold,choice)` training mask against it.
+Also compare the saved bin mask to `training_bin_mask(bin_edges_s,
+training_window=...)`; bin edges, recorded bin width, selected bounds and
+prediction extent must agree. Do not trust a valid-shaped but wrong window mask.
 
-Schema-2 `meta.effective_config` must include `analysis_mode`, its exact
+Schema-3 `meta.effective_config` must include `analysis_mode`, its exact
 `target_names`, and `training_condition_names`: `["correct_rewarded"]` or
 `["correct_rewarded", "omission", "incorrect"]` in this order. Include these
 scientific choices in the identity, alongside the existing source/library
 fingerprints. Presentation strings are derived from the mode, not editable
 scientific settings. Counts/array-size estimates must use actual T.
+Require `training_window` (`full`/`before`/`after`), numeric `training_window_s`
+and equal `scoring_window_s`, plus unchanged `prediction_window_s=[-2,2]`.
+Bounds are derived constants, not independently configurable. Document the
+selected window in provenance; retain existing array names/axis meanings and
+the dated output directory pattern.
+New categorical units describe P(class 1), with its actual per-target label
+in `target_metadata`; do not keep the old global "class 1 = left" statement
+for reward. Preserve legacy metadata under its original two-class meanings.
 
-Legacy compatibility is narrow and read-only:
+The complete compatibility table is deliberately small:
+
+| Version / schema | Mode | Exact targets | Supervised window |
+| --- | --- | --- | --- |
+| v1 / 1 | Generalization only | Original seven | Full |
+| v2 / 2 | Generalization | Original seven | Full |
+| v2 / 2 | Mixed | State/action only, T=2 | Full |
+| v3 / 3 | Generalization | Original seven | Full, Before, After |
+| v3 / 3 | Mixed | State/action/reward, T=3 | Full, Before, After |
+
+Legacy compatibility remains read-only:
 
 - Recognize v1/schema-1 as correct-rewarded generalization, require its exact
   seven targets, and derive the missing training-condition mask from its saved
-  `correct_rewarded`. Validate against the canonical membership column.
-- Normalize the missing mode/condition names in memory for common display and
-  validation. Keep the original identity and archive bytes; do not rehash
-  against current source, rewrite old products, or require raw files.
-- Require every new field for v2/schema-2. Reject unknown version/schema pairs,
-  unknown modes, wrong target sets, contradictory condition names, and masks
-  inconsistent with the mode. Never infer mixed training from a run filename.
-- Update discovery, loader, validator, and reuse together. A v1 run remains
-  selectable in generalization, but cannot satisfy a mixed request. New v2
-  identities may differ from historical v1 even for unchanged generalization
-  numerics; this does not justify automatically rerunning original results.
+  `correct_rewarded`. Normalize its missing mode/condition names as currently
+  implemented and validate against the canonical membership column.
+- For v2 retain its explicit mode/condition metadata and exact old target set.
+  For v1/v2 normalize `training_window="full"` and matched scoring bounds in
+  memory only. Verify original numeric training/prediction bounds and mask
+  match Full; reject contradictory legacy window declarations rather than
+  silently rewriting them. Missing v1 selected membership is derived as
+  before; v2's stored selected membership remains required.
+- Retain original identities/versions/bytes. Do not compare old code hashes to
+  current source, rewrite products, or require raw sources. Old mixed T=2
+  remains displayable/scorable; it contains no reward model to synthesize.
+- Require every new field and exact T for v3. Reject unknown version/schema
+  pairs, mode/target/window/bounds contradictions and wrong masks. New products
+  never accept a two-target mixed tuple merely because legacy products do.
+- Keep version resolution local to `results.py`, with one small helper for
+  expected saved target tuples and normalization, shared by discovery/load/
+  metadata validation. Preserve `validate_prediction_result(inputs, regions)`:
+  structural checks can recognize the two finite mixed tuples (legacy T=2
+  only at Full); publication/metadata checks enforce the exact schema. Do not
+  put a saved-schema flag into the fitter or broaden to arbitrary subsets.
+  Both saver and loader run array and metadata validation.
+- Change discovery, loading, validation and reuse together. A different
+  mode/window/target schema cannot satisfy the new identity. Explicit Prepare
+  can produce v3; ordinary saved display never migrates or reruns old products.
 
 `meta.source_pca` records session-relative archive path, configuration ID,
 size and SHA-256. Record target source identities, class-1 labels, units,
@@ -869,17 +1026,25 @@ on a later explicit preparation; compatible source PCA is still reused.
 Extend the existing prediction control group with **Analysis**, ahead of
 **Prepare predictions**, **Recompute predictions**, mode-filtered saved
 result/target selection, and existing PC mode/order/count controls. Prepare
-computes only the selected mode's targets for the selected source configuration.
+computes only the selected mode/window's targets for the selected source configuration.
 A deliberate Prepare
 can reuse/prepare missing PCA through the existing runner; widget changes
 alone never fit. Preserve existing PCA preparation and optional speed controls.
 
 Use labels **Correct-rewarded generalization** and **Mixed-outcome decoding**.
 Within those modes, use **State generalization** / **Action generalization**
-and **State decoding** / **Action decoding**, respectively. Regional track
+and **State decoding** / **Action decoding** / **Reward decoding**, respectively. Regional track
 titles append `(correct-rewarded training)` or `(mixed-outcome training)`.
 Captions name all three mixed outcomes and retain the offline/PCA disclosure.
 Summaries, hover and model details must identify mode and training pool.
+Add **Training/scoring window** with **Full [-1,+1) s**, **Before [-1,0) s**
+and **After [0,+1) s**, default Full. Filter saved runs by mode/window pair;
+reflect actual saved target names, not the current three-target default.
+Include the saved window in run labels, captions, track titles and model details.
+Use target metadata for positive labels: reward uses `P(rewarded)`, not
+`P(left)`; actual reward overlays are constant trial labels, not timed delivery.
+For a legacy mixed run, show its two targets with a legacy-scope caption and
+explicit Prepare action to add reward; do not claim reward is prepared.
 Model details show per-fold total, outcome and binary-class training counts,
 derived from saved masks/targets rather than another persisted tensor. Counts
 expose sampling imbalance; they do not trigger automatic balancing.
@@ -888,26 +1053,29 @@ Saved-run labels include mode, actual bin width and date/run identity; use
 Keep these display helpers outside scientific configuration to avoid making a
 text-label change invalidate fits. Do not introduce an estimator/view registry.
 
-Use mode-scoped run/target widget keys or reset incompatible values before
+Use mode/window-scoped run/target widget keys or reset incompatible values before
 widget creation. A selected mode with no saved run shows an unprepared
 message; it must not display the other mode with a new label or auto-fit it.
-For an initial saved-only open without a previous mode selection, choose a
-mode with a saved product if the default has none. This initializes the
-selector; it must not override a later explicit choice of an unprepared mode.
+For an initial saved-only open without previous selections, choose an
+available mode/window pair if the default pair has no saved product. This
+initializes selectors; it never overrides a later explicit unprepared choice.
 Recompute availability is based on that mode's runs. Loading a saved run
 drives labels from the saved mode, never from a stale preparation widget.
 
-**Unprepared/hidden display contract:** replace the ambiguous controls return
-of `PredictionDisplay | None` with one small data-only UI state in
-`session_prediction_view.py`. It carries the selected mode/preparation status,
+**Unprepared/hidden display contract:** retain the existing small data-only
+`PredictionViewState` in `session_prediction_view.py`. It carries selected mode/preparation status,
 an optional validated saved-result anchor, and an optional `PredictionDisplay`.
-Update its sole production caller, `render_session_timeline_view()`, and tests.
+Append selected `training_window="full"` to the existing `PredictionViewState`
+record and `PredictionRunOption`, preserving older construction calls.
+Update its sole production caller, `render_session_timeline_view()`, only as
+needed for the added window. Keep all variable controls/captions inside the
+existing fixed Streamlit container so new widgets never move/remount the chart.
 Keep only the anchor path in session state; use the existing cached loader
 rather than storing another large PCA/model copy there.
 
 - Prepared and shown: anchor and prediction display refer to the selected run.
 - Prepared but hidden: keep its saved timeline/PCA anchor, display no predictions.
-- Selected mode unprepared: retain the last valid saved anchor for this session,
+- Selected mode/window unprepared: retain the last valid saved anchor for this session,
   even if from the other mode. Show an explicit unprepared message and the
   background's actual source/bin settings; suppress prediction tracks, actual
   target overlays and weighted contributions. Ordinary raw PC activity can
@@ -921,7 +1089,7 @@ This is a local UI record and one retained path, not a new state-management
 framework. Keep the chart mounted and the saved behavior/PCA visible during
 the unprepared switch; a caption followed by early return is insufficient.
 
-**Navigation contract:** split the current configuration-scoped `state_key`.
+**Navigation contract:** preserve the implemented split of state namespaces.
 Use session/time-origin scope for duration/start/Jump values and the explicit
 navigation revision. Keep source-PC ranges, scaling/color controls, window
 summaries and vertical-axis revisions scoped to the actual saved PCA basis;
@@ -930,7 +1098,7 @@ Update the footer's selected-trial lookup to use the navigation scope.
 
 In `population/timeline_plotting.py`, separate horizontal identity from basis
 identity. Layout/time-axis `uirevision` uses session/time origin plus explicit
-navigation revision, never PCA configuration ID, prediction run, mode or bin
+navigation revision, never PCA configuration ID, prediction run, mode, window or bin
 width. Keep the chart component key stable for the session; its existing JS
 already transfers the actual browser time range to new matched axes when
 that revision is unchanged. Preserve the requested range across a 500-ms
@@ -947,8 +1115,8 @@ control-selected visible interval. For example, browser pan at 1000-1060 s
 with controls at 0-60 s cannot survive a switch to 20-ms data loading 0-120 s.
 The bounded-loading caption must explain this reset behavior and identify the
 loaded interval. This applies to run/mode switches and enabling bounded loading.
-Add a small destination-bounds check to the existing range-transfer logic in
-`webapp/timeline_chart.js`; explicitly apply the chosen range to matched time
+Retain the existing destination-bounds check in `webapp/timeline_chart.js`;
+it explicitly applies the chosen range to matched time
 axes so unchanged `uirevision` cannot retain an out-of-bounds range. Preserve
 session-scoped navigation keys and the stable chart component. No pan callback,
 automatic interval fetching, or additional loading framework is needed.
@@ -981,7 +1149,7 @@ optional regional PC heatmaps, existing navigator. Show one target at a time.
 Actual trial-i values repeat within its window. Use post-step bin segments
 and explicit breaks: no line stretches across intertrial gaps. Missing target,
 missing prediction, and a genuine zero remain distinct. Binary axes show
-left probability `[0,1]`; continuous axes show native units. Hover retains
+class-1 probability `[0,1]` with its actual target label; continuous axes show native units. Hover retains
 trial/time/condition/fold and PC/weight/contribution details.
 
 For weighted rows, initialize NaN and first mask `fold_id >= 0`, valid fit,
@@ -1022,7 +1190,7 @@ List all true saved condition memberships in hover; do not collapse them to
 one mutually exclusive condition or reopen the raw behavioral table.
 
 Reuse the existing chart component/navigation with the horizontal/basis split
-above. Mode/run/configuration changes preserve horizontal range subject to
+above. Mode/window/run/configuration changes preserve horizontal range subject to
 the bounded-loading exception; appropriate vertical ranges reset.
 Jump/start/duration explicitly update horizontal range.
 Keep all-session navigation reachable with viewport-limited contribution
@@ -1031,11 +1199,55 @@ still loads full regional score arrays into memory before filtering; this is
 not partial or bounded NPZ memory loading. Measure source-load RSS before
 considering another storage mechanism. Inspect control crowding before adding a view.
 
+**Performance records:** extend existing `scoring.py` and the same expander.
+Set `SCORING_VERSION="trial-mean-performance-v2"`. Preserve public
+`trial_metrics()` inputs/metric return conventions and the four report keys
+`folds`, `held_out`, `laterality`, `gaps`; expand records, not storage systems.
+
+- Compute the held-out trial mean once per region/target from the saved bin
+  mask. Reconstruct each fold's training mean once using its exact saved
+  mask/coefficients and that same interval. Sigmoid precedes binary averaging;
+  every trial supplies one probability/value, not one independent score per bin.
+  Training availability is based on the examined fold's fit and finite
+  reconstructed values, not on a trial's own held-out model/reason. Failure of
+  one held-out model must not remove its trials from other valid training fits.
+- `folds` contains each fold's training and held-out rows by population.
+  `held_out` retains pooled rows with each eligible trial counted once. Exact
+  training intersections produce empty omission/incorrect rows in generalization;
+  other-fold untrained choices never become training observations.
+- `laterality`/`gaps` carry `split` (training/held_out), `fold` (0..4 or None
+  for pooled held-out), population, choice/state grouping and factual counts.
+  Keep per-fold side detail and pooled held-out side views. Never pool training
+  sets across folds. Missing side labels exclude only the affected grouping.
+- Binary performance records add integer `class_0_trials`/`class_1_trials`
+  from their scored labels. Keep these outside the public metric helper's
+  old return contract. Class counts sum to `n_trials`; side labels and reward
+  class labels remain independent. Unavailable fits have no scored trials
+  and explicit status/reasons; model details retain eligible training counts.
+- Gap calculation enumerates actual metrics (accuracy/balanced accuracy or
+  R2/RMSE), never all numeric fields: counts are not quantities to subtract as
+  performance. Keep left/right trial counts factual. Single-class groups have
+  accuracy but undefined balanced accuracy, and empty groups never become zero
+  success. Existing negative/undefined R2 and native RMSE rules remain.
+- Extend the existing formatter with generic split/fold/class-count handling,
+  using target metadata for Right/Left versus Unrewarded/Rewarded. Retain percent
+  versus percentage-point units. Preserve the existing binary gap display:
+  ordinary-accuracy difference in pp, with balanced accuracy available in the
+  per-side table; do not add a new balanced-accuracy gap column. Keep existing
+  metric fields in report records rather than changing their public meaning.
+  Use split/outcome/fold controls in the same panel. Held-out fold choices allow
+  pooled or 0..4; training allows 0..4 only, resetting pooled to fold 0 when
+  switching to training. Retain pooled held-out and per-fold training/test detail.
+- Cache selected-target summaries by result/source path/stats, saved window
+  and scoring version. Do not fit, write or reread raw tables during display,
+  and do not repeat neural matrix products for every outcome/side selection.
+
 ## 8. Runner and batch behavior
 
 Proposed runner boundary:
 `prepare_session_predictions(metadata_path, *, config_path=None,
-probe_roles=None, bin_width_ms=None, analysis_mode=None, rerun=False, dry_run=False)`.
+probe_roles=None, bin_width_ms=None, analysis_mode=None, training_window=None,
+rerun=False, dry_run=False)`.
 GUI selections are explicit overrides; metadata-only CLI uses Section 4 defaults.
 Both call this same composition root. Ordinary commands remain:
 
@@ -1057,8 +1269,25 @@ uv run python -m src.neural_analysis.task_decoding.session_prediction.run_sessio
   --session-metadata "$METADATA" --analysis-mode mixed_outcome_decoding
 ```
 
+Add optional `--training-window {full,before,after}` to session and batch
+runners; forward `training_window=None` to preserve each session's controls/
+Full default. Metadata-only calls stay simple. A one-off half-window request:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.session_prediction.run_session \
+  --session-metadata "$METADATA" --analysis-mode mixed_outcome_decoding \
+  --training-window before
+```
+
+This new option describes the planned interface, not a command available
+before implementation. Prepare resolves only that window's mask, fits the
+existing model functions and records exact fit/scoring bounds. Keep existing
+PCA prerequisite handling and source/target validation; add no automatic
+three-window loop. Logs/summaries use saved window and class meaning rather
+than literal [-1,+1) or "left" for every target.
+
 Dry-run reads small controls/tables and source metadata, reports grids,
-mode/targets/canonical training-condition names, candidate outcome counts,
+mode/window/bounds/targets/canonical training-condition names, candidate outcome counts,
 regions, model counts/expected array bytes, and any missing PCA prerequisite;
 no source PCA fitting, spikes, writes, or submission. Never call the old
 neural decoder to prepare these targets. GUI computation is explicit with
@@ -1074,77 +1303,21 @@ mixed-outcome runner or automatically prepare both modes.
 
 ## 9. Test-first work packages and acceptance
 
-WP1-WP5 below record the original delivery and remain regression requirements.
-Do not restart them. New extension tests and delivery order are in Section 13.
+WP1-WP10 are completed baseline work; keep their evidence in Section 0.
+Pending tests/file ownership are in Section 15. Do not restart old packages.
 
-For code packages: write meaningful tests -> establish RED -> commit tests ->
-implement -> focused GREEN -> review -> update Section 0. Sol commits only
-owned paths and preserves unrelated staged files. Internal gates within an
-approved scope do not require repeated user permission.
+For each approved code package: write meaningful tests -> establish RED ->
+commit tests -> implement -> focused GREEN -> review -> update Section 0.
+Use explicit paths/path-limited commits and preserve unrelated staged work.
+The first RED command is in WP11; its numerical checks are part of that gate.
 
-- **WP1 (Sol):** exact seven-target orientation; mismatched/reordered source
-  rows and absolute UTC tolerance; config precedence/defaults; full-table
-  block exclusion shared across targets/regions; missing/insufficient blocks;
-  missing-block keyword preserves existing strict target validation and
-  normalizes string sentinels for grouping; empty-target keyword preserves
-  strict defaults, permits all-missing continuous columns, and still rejects
-  malformed present values; canonical overlapping masks/row alignment;
-  rejection of penalty configuration keys; explicit base-config prerequisite
-  failures; per-region coverage and all grids.
-- **WP2 (Sol):** training masks/row weights and no held-out labels in fits;
-  compare ridge coefficients/intercept to an independent weighted normal-
-  equation oracle (ridge shrinks, so do not demand exact unpenalized recovery);
-  oriented logistic probabilities; constant continuous training labels remain
-  valid; all-missing HMM target keeps its unavailable coordinate while the
-  other six run; empty/single-class/nonconverged fits; missing destination labels;
-  identical state/action fits; unchanged PCA; contribution reconstruction,
-  scale-aware ranking/ties, missing-fold guard and global color limits.
-- **WP3a (Sol):** all schema/identity invariants and save/load round trip;
-  missing/corrupt referenced PCA; nonfinite outputs and probability bounds;
-  matching reuse versus scientific changes; relocation; partial publication;
-  persisted overlapping condition masks and target availability; no
-  invalidation from display-only changes/unrelated metadata edits.
-- **WP3b (Luna, Sol review):** synthetic end-to-end prepare/reuse/rerun;
-  dry-run writes/fits nothing; absent PCA prepared only on explicit action;
-  metadata/probe/bin precedence; no duplicate estimator logic; thin batch
-  delegation; source snapshots and logs. Add required stubs only after RED
-  tests are committed, not before.
-- **WP4a (Sol):** real bin edges/gaps, zeros versus unavailable, actual overlays,
-  unequal regional coverage, fold-specific weighted rows and original PC IDs;
-  rendered nonmonotonic `[7,2,11]` order has equal row spacing and correct
-  tick/hover identities, including a browser check where needed. Use distinct
-  coefficients and assert values too: `z7=2, z2=3, z11=5` and
-  `beta7=-7, beta2=2, beta11=11` must give displayed contributions
-  `[-14,6,55]`, not weights selected by display-row indices;
-  saved-target units, fixed order/limits, no fitting during plotting; existing
-  plot callers retain default behavior.
-- **WP4b (Luna, Sol review):** actual Streamlit saved path with removed raw
-  inputs and relocated archive, including availability/app dispatch, not just
-  mocked loader tests; explicit Prepare;
-  saved target/event/PC changes cause no fitting/writes; persistent pan/Jump;
-  full overlapping condition labels without raw sources, unavailable-target
-  explanation, and no fit attempted for the empty target;
-  missing optional tracks; defaults without prediction controls remain usable.
-- **WP5a (Luna, Sol review):** update usage/copy-back requirements and scientific
-  interpretation without deleting existing instructions.
-- **WP5b (Sol + user):** after synthetic gates and authorization, prepare CT026
-  2026-08-04 at 500 ms; verify original-row alignment, fold training counts,
-  no block overlap, and selected saved predictions against reconstruction.
-  Inspect both regions and binary/continuous targets, contribution ordering,
-  gaps, and control crowding; user accepts visual/scientific results.
-
-Historical first RED command for WP1 (these paths now exist):
-
-```bash
-uv run pytest -q src/tests/neural_analysis/task_decoding/session_prediction/test_config.py \
-  src/tests/neural_analysis/task_decoding/session_prediction/test_preparation.py
-```
-
-At integration, run the new package and directly affected existing interfaces:
+At integration, run the prediction package and directly affected interfaces:
 
 ```bash
 uv run pytest -q src/tests/neural_analysis/task_decoding/session_prediction \
+  src/tests/neural_analysis/task_decoding/test_config.py \
   src/tests/neural_analysis/task_decoding/test_targets.py \
+  src/tests/neural_analysis/test_single_session_setup.py \
   src/tests/neural_analysis/test_session_prediction_webapp.py \
   src/tests/neural_analysis/test_session_timeline.py \
   src/tests/neural_analysis/test_session_timeline_io.py \
@@ -1154,17 +1327,23 @@ uv run pytest -q src/tests/neural_analysis/task_decoding/session_prediction \
   src/tests/neural_analysis/test_timeline_chart.py
 ```
 
-Use `uv run` for Python commands and check changed Python with Ruff if available,
-plus changed-path whitespace checks. Broaden tests only for additional changed
-interfaces/failures; do not run the entire neural suite at every package gate.
-A new browser inspection verifies frontend pan/zoom that Python tests cannot
-establish. Record exact outcomes and warnings, never anticipated pass counts.
+Use `uv run`; the known workstation setup uses ignored project caches
+(`UV_CACHE_DIR=.pytest_cache/uv`, `MPLCONFIGDIR=.pytest_cache/matplotlib`)
+and an available `NODE_BINARY` for frontend checks, as recorded in Section 0.4.
+Confirm runtime paths on resumption. Report skipped Node checks explicitly;
+they do not establish frontend acceptance. Check changed Python with Ruff
+and changed-path whitespace. Broaden tests only for new affected interfaces
+or failures; no routine full neural suite.
+
+A synthetic saved-only browser inspection verifies actual pan, chart position
+and mode/window/target transitions that Python tests alone cannot establish.
+Record exact outcomes/warnings rather than anticipated pass counts.
 
 ## 10. Performance and one-session validation
 
 Prediction arrays for 1,000 windows per region and seven targets use about
 0.85 MiB at 500 ms, 4.27 MiB at 100 ms, 21.36 MiB at 20 ms (float64, two
-regions). The two-target mixed product uses about 0.24, 1.22 and 6.10 MiB at
+regions). The new three-target mixed product uses about 0.37, 1.83 and 9.16 MiB at
 those resolutions. These are array-size estimates, not peak-memory/runtime measurements. The main
 costs can be full PCA loading/preparation, a stacked training matrix, repeated
 SVD fits, and browser payloads. Viewport filtering reduces browser/contribution
@@ -1176,10 +1355,14 @@ Report fit count, preparation/load/fit/save/render times, peak process RSS,
 NPZ and chart payload bytes, warnings, and exact run/log paths. At 100 ms the
 existing option must pass synthetic/UI tests; initial experimental validation
 is 500 ms, not an automatic second-resolution or multi-session run.
-For mixed decoding, measure the additional 20 classifier fits and source
+For expanded mixed decoding, measure the 30 classifier fits per selected window and source
 loading separately; the original 5.622-second seven-target preparation is
 evidence for that run, not a promised mixed-mode runtime. Do not load both
-large PCA copies or fit the other mode merely to offer a mode selector.
+large PCA copies or fit other modes/windows merely to offer selectors. The
+full prediction tensor B is unchanged for Before/After, so smaller training
+windows reduce stacked fit rows, not saved prediction coverage. Reconstruct
+one training mean vector per target/region/fold and reuse it across outcome/
+side filters; do not repeat matrix products for each row of a summary table.
 
 Designated root:
 `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260804_latent_inference`.
@@ -1191,285 +1374,237 @@ implied. User inspection precedes processing further sessions.
 
 ## 11. Implementation authorization
 
-The user authorized extension implementation after reviewing the revised
-spec/plan and approving the bounded-loading exception. WP6-WP8 and WP9's
-documentation/synthetic/browser portions are complete. The instruction did
-not include a new experimental preparation; none was run. A later instruction
-can include the designated CT026 mixed preparation, without another approval
-loop for that same scope. No new session, batch, cluster submission, resource
-change, or transfer is implicit. Record actual authority and experimental-run
-state in Section 0; historical WP5b authority is not a new run request.
+The earlier implementation authority covered the completed Full-window
+baseline. The current request expands the revision-4 implementation plan;
+it does not begin code or experimental processing. On implementation
+instruction, proceed through WP11-WP15 without repeated package-level approval.
+Record whether that instruction includes designated CT026 validation; when
+included, do not ask for the same permission again. No broader sessions,
+batch, cluster submission/resource change or transfer is implicit. Record
+actual authority in Section 0; historical experimental authority does not
+authorize a new run by itself.
 
-## 12. Sol/Luna execution and handoff rules
+## 12. Sol orchestrator and single-worker handoff rules
 
-- **Sol lead (`gpt-6.1-sol`, high):** implements WP1/WP2/WP3a/WP4a, reviews
-  Luna's integration, owns scientific correctness, commits, and live records;
-  runs authorized WP5b validation. No second Sol/reviewer agent is needed.
-- **One optional Luna (`gpt-6-luna`, medium):** WP3b/WP4b/WP5a after Sol freezes
-  their contracts. Reuse it sequentially; Sol may do tiny tasks directly when
-  delegation would cost more than the work. No worker-created agents.
-- **Maximum two active agents including lead**, ordinarily one for scientific
-  work. The role labels do not change the current chat's model. Record actual
-  model/effort/agent ID; report unavailability instead of silently substituting.
+- One Sol orchestrator (`gpt-6.1-sol`, high) owns package sequencing, contracts,
+  review/acceptance, commits and the live handoff. Sol directly writes WP11-WP13
+  scientific/config/version/scoring changes and owns WP15 integration/browser
+  verification and any explicitly authorized experimental validation.
+- At most one active worker at a time, in addition to Sol. One optional Luna
+  worker (`gpt-6-luna`, medium) handles a bounded WP14 runner/UI assignment or
+  WP15 usage docs after contracts freeze; reuse it sequentially. Sol may do
+  these small tasks directly. Maximum two active agents including orchestrator;
+  no worker-created agents, overlapping worker tasks or extra review agent.
+- Record actual model/effort/agent identity; role labels do not change the
+  current chat's model. No agent is launched for this documentation audit.
 
-Dispatch Luna with package/RED-or-GREEN phase, exact writable files from
-Section 3, frozen signatures/acceptance conditions, focused command, HEAD,
-and user changes to preserve. Luna returns changed files, actual checks,
-findings, and next action; it does not expand scientific/file scope.
+Order: `WP11 -> WP12 -> WP13 -> WP14 -> WP15`. Freeze input/version/scoring
+contracts before integration delegation. Give any worker its exact files,
+RED/GREEN phase, acceptance tests/command, HEAD and user changes to preserve.
+The worker writes tests; lead verifies RED and commits them before GREEN.
+Lead reviews science/source/results and commits only owned paths. Worker
+reports do not authorize new experiments or substitute for user acceptance.
 
-Luna writes tests first, then Sol verifies RED and commits them before a GREEN
-assignment. Sol reviews source/results before acceptance. Record Sol's own
-scientific work as self-review backed by synthetic/oracle checks, not an
-independent reviewer. Scientific issues found in a Luna task return to Sol.
+Keep one writer per file, idle the worker before review/commit, and record
+findings/next action at each gate or interruption. Use path-limited commits;
+never amend/reset/revert user work. Existing tests, commits and this handoff
+are sufficient coordination; no new worktree or locking system is needed.
 
-Only the lead stages/commits. Keep the worker idle before reviewing/committing
-its changes. Use explicit paths and path-limited commits when unrelated files
-are already staged. Never amend/reset/revert user work or discard partial
-feature edits. No two agents edit the same files concurrently; end/narrow a
-worker assignment before Sol writes there.
+## 13. Completed mixed-outcome baseline reference
 
-Order: `WP1 -> WP2 -> WP3a -> WP3b/review -> WP4a -> WP4b/review -> WP5a/review
--> WP5b/user inspection`. Update Section 0 after each gate and interruption.
-Tests/commits plus this document are sufficient coordination; no per-file
-locking system, speculative workers, or parallel worktrees are needed.
+WP6-WP8 implemented the two-mode Full-window baseline; WP9 completed usage,
+synthetic and browser gates, with experimental acceptance separately pending.
+That baseline writes v2: generalization T=7, mixed T=2, five block folds,
+existing saved-PCA reuse, anchored portable display and session navigation.
 
-The extension follows `WP6 -> WP7 -> WP8 -> WP9`. One Sol lead handles the
-scientific/config/persistence work and review. If delegation is useful, reuse
-one optional Luna sequentially for the bounded runner/UI/docs integration
-after interfaces are frozen. No worker is needed for this documentation
-revision; no independent scientific-review agent or new worktree is required.
+Commit/test/browser evidence is retained verbatim in Sections 0.2 and 0.4.
+Current source is the implementation reference; Sections 1-12 and 15 define
+the revision-4 changes. These completed packages are not new work instructions.
 
-## 13. Mixed-outcome extension: implementation reference
+## 14. Completed WP10 scoring reference
 
-This section retains the test-first implementation reference for completed
-WP6-WP8 and WP9's outstanding experimental gate. Sections 2 and 4-8 define
-the implemented contracts. The extension generalized preparation, fits,
-metadata/validation, runner estimates, and UI together; original behavior and
-validation evidence are preserved.
+WP10 added pure saved-model trial-mean scoring over Full [-1,+1), binary
+accuracy/balanced accuracy, numerical R2/RMSE, per-fold training/test rows and
+pooled held-out outcome/choice/state laterality. Existing report keys are
+`folds`, `held_out`, `laterality`, `gaps`; public `trial_metrics()` stays.
 
-### WP6 - fixed modes, configuration, and aligned membership (Sol)
+The recorded 237-test/browser gate and commits remain in Section 0.
+WP13 below extends this scorer to saved windows and both splits by outcome.
+Use current source and the new contracts rather than repeating the old
+Full-only/held-out-only implementation instructions.
 
-Write/confirm RED/commit tests first in existing `test_config.py` and
-`test_preparation.py`:
+## 15. Revision 4: window/reward expansion and handoff gates
 
-- Omitted mode preserves the existing seven-target contract; accept exactly
-  two mode identifiers. Test controls/explicit-override precedence and reject
-  invalid modes, arbitrary target/condition controls, and penalty knobs.
-- Mixed mode returns only state/action `(N,2)` values/validity in canonical
-  order, including when continuous-source columns are absent. Preserve the
-  existing full-base-config prerequisite and strict shared target-loader defaults.
-- Derive membership from all three saved canonical masks; include correct
-  omissions and incorrect trials, without substituting `all` or duplicating
-  overlapping switch/stay rows. Preserve independent baseline exclusions.
-- Compare both modes' folds, chronological choice identities, bin grids, and
-  regional maps; they must agree for the same full table/source PCA. Verify
-  input tables/scores are unchanged and missing-block handling is retained.
+This is the pending implementation sequence. The design follows
+SoftwareDesign.md's function-first composition and KISS/YAGNI guidance:
+configuration selects fixed targets/bounds; preparation builds arrays/masks;
+the existing fitter consumes them; persistence owns version compatibility;
+scoring and UI consume saved products. No new package, dependency, estimator
+factory, per-window model class, generic result-migration engine or scheduler.
+Only input/preparation/persistence/scoring/integration seams change. In
+particular, do not rewrite the already generic fitter or prediction helper.
 
-Then extend existing `config.py`/`preparation.py`:
+### WP11 - fixed windows and actual-reward preparation (Sol orchestrator, direct writer)
 
-- Keep `TARGET_NAMES` as the original seven-target tuple for existing imports.
-  Add the fixed two-target tuple and a small validated
-  `target_names_for_mode(analysis_mode: str) -> tuple[str, ...]` helper. Use
-  constants/simple functions, not configurable target/condition registries.
-- Add `analysis_mode` to `SessionPredictionConfig`; extend
-  `load_prediction_config(..., analysis_mode=None)` with the Section 4 default
-  and override rules. Keep old calls valid.
-- Extend `prepare_prediction_inputs(trial_df, timeline, base_config, *,
-  analysis_mode="correct_rewarded_generalization")`. Add mode and bool `(N,)`
-  `training_condition_mask` to the prepared data contract, preserving the
-  separate factual `correct_rewarded` field. Update its two production
-  constructors in preparation/results and any directly dependent fixtures.
-- Centralize derivation of mode-specific membership so preparation and saved
-  validation share one simple rule. Do not derive correctness from reward alone.
+Write tests first, establish RED and commit tests before source changes:
 
-Focused RED/GREEN command: `uv run pytest -q
-src/tests/neural_analysis/task_decoding/session_prediction/test_config.py
-src/tests/neural_analysis/task_decoding/session_prediction/test_preparation.py`.
-No new shared target-loader refactor is needed.
+- Prediction `test_config.py`: absent controls/old JSON retain Full; accept
+  exactly three window IDs; config versus explicit-override precedence;
+  reject unknown windows, arbitrary numeric bounds and penalty overrides.
+- Shared `task_decoding/test_config.py` and `test_targets.py`: current reward
+  registration, exact 0/1 class orientation and same-row alignment; reward
+  disagrees with correctness on a correct omission; reward differs from the
+  previous trial. Validate missing/malformed values, manual/no-choice baseline
+  exclusions, and unchanged omitted/default/explicit old target selections.
+- `test_single_session_setup.py`: newly scaffolded task-decoding configs retain
+  the exact original default target order without reward. Retain the existing
+  regression for byte-for-byte preservation of files on repeated setup.
+- `test_preparation.py`: all three masks on 500/100/50/20-ms saved grids;
+  time-zero partition; 4/2/2 bins at 500 ms; seven generalization and three mixed
+  targets; unchanged PCA scores, complete-window trial eligibility and folds
+  across windows. Missing reward never becomes zero or suppresses an otherwise
+  valid other target; canonical membership remains independently authoritative.
+- Bounded `test_modeling.py`/`test_contributions.py` additions: unchanged Full
+  behavior, 1/4 versus 1/2 weights at 500 ms, trial total one, no held-out rows
+  in fits, full B-bin predictions for all windows, and reconstruction/ranking
+  from the actual selected training rows. Use independent weighted affine/
+  logistic objective checks already present; do not weaken their tolerances.
+- Seed a synthetic example with separate state/action/reward signals and both
+  reward classes in training folds. Test reward recovery and a separate
+  constant/missing-reward case where only that target is unavailable. Update
+  fixtures for the genuinely changed T=3 contract; preserve legacy T=2 fixtures
+  separately rather than changing expectations merely to pass tests.
 
-### WP7 - scientific fits, versioned products, and legacy loading (Sol)
+Implement the small shared target registration, preserved parser/scaffolder
+defaults and Section 4's fixed window controls/mask selection. Keep the existing
+fitter/predictor signatures and computations. An empty/single-class reward fit uses the existing local failure
+path; a preparation-level target-availability reason can explain absent labels.
+No new fit fallback or binary-target scaling is needed.
 
-First add and commit meaningful failing tests in `test_modeling.py`,
-`test_contributions.py`, and `test_results.py`:
+First focused gate after writing these tests:
 
-- An independent expected training mask intersects the selected membership,
-  regional coverage, baseline, target validity and other folds. Include all
-  three outcomes and exclusions. Check row weights remain `1/training_bins`;
-  fewer observations in a stratum never trigger balancing or leakage.
-- Use a seeded synthetic population with separately recoverable state/action
-  signals and incorrect trials where labels disagree. Mixed fits must recover
-  the respective targets and satisfy the weighted logistic objective. Retain
-  the original identical-label/equal-output test for generalization; do not
-  assert that every mixed dataset must yield unequal outputs.
-- Test single-class/empty training failures, a training fold missing one
-  outcome, missing actuals/blocks, and independent regional coverage. Check
-  two-target prediction/weight axes and mode-specific contribution reconstruction,
-  strength/order/limits without changing score units or source PCA.
-- Round-trip new seven-target and two-target products. Reject mode/target-set,
-  canonical condition-name, selected-mask, fit-mask, or schema contradictions.
-  Prove cross-mode identities/reuse differ and relocated display needs no raw data.
-- Load/discover a genuine v1-shaped seven-target synthetic archive fixture
-  without new fields; verify normalization, original predictions/identity and
-  unchanged bytes. A relabeled v2 archive alone is not this compatibility test.
-  A v2 archive missing mode or selected membership must fail.
+```bash
+uv run pytest -q src/tests/neural_analysis/task_decoding/session_prediction/test_config.py \
+  src/tests/neural_analysis/task_decoding/session_prediction/test_preparation.py \
+  src/tests/neural_analysis/task_decoding/session_prediction/test_modeling.py \
+  src/tests/neural_analysis/task_decoding/session_prediction/test_contributions.py \
+  src/tests/neural_analysis/task_decoding/test_config.py \
+  src/tests/neural_analysis/task_decoding/test_targets.py \
+  src/tests/neural_analysis/test_single_session_setup.py
+```
 
-Then implement in `modeling.py`/`results.py`:
+### WP12 - strict v3 products and legacy saved display (Sol orchestrator, direct writer)
 
-- Preserve `fit_region_prediction_models()`'s existing positional parameters,
-  including its named `correct_rewarded` parameter. Add optional keyword-only
-  `training_condition_mask=None`; omission retains CR training. An explicit
-  bool `(N,)` mask selects membership; all other eligibility/weights and array
-  checks remain. The runner passes the prepared mask explicitly for both modes.
-- Keep estimators/solvers/penalties unchanged. Resolve model dimension from T,
-  not a second numerical implementation. Retain `RegionPredictions` axis meanings.
-  Continue calling the existing public `predict_region_windows()` and preserve
-  its signature and pure prediction/reason-array contract.
-- Write v2/schema-2 and read both exact supported version/schema pairs. Make
-  discovery and validation mode-aware without relaxing canonical target sets.
-  Generalize T=7 checks to the fixed mode's T, never arbitrary supplied targets.
-- Include the explicit mode, ordered targets and canonical training names in
-  effective metadata/identity; save selected membership. Validate effective
-  configuration against prepared inputs before publication. Presentation labels
-  do not become scientific inputs. Preserve legacy identity and files.
+Add/commit RED tests in `test_results.py` before implementing Section 6:
 
-Run the existing prediction package tests plus affected target regressions.
-Keep save publication atomic, source PCA pinned by bytes, and model fitting
-absent from loaders. Commit GREEN and review before runner/UI delegation.
+- Round-trip each mode/window with unchanged prediction axes/units, exact
+  mask/bounds and all new reward metadata. New mixed products have exactly
+  three targets; new generalization products exactly seven.
+- Equal source data but different windows give different identities; target
+  scope and scoring bounds cannot be silently substituted. Reject a mask
+  selecting the wrong half despite correct length, mismatched bounds/bin width,
+  unknown versions or v3 fields/targets missing from metadata/NPZ.
+- Load faithful synthetic v1 generalization, v2 generalization, and v2 mixed
+  archives that contain no new window field. Verify Full normalization in
+  memory, actual target tuples, original identities/bytes and source-PCA pinning.
+  A v3 product relabeled as v2 is not adequate legacy coverage.
+- Reject legacy half-window declarations and reward-target injection, and v3
+  mixed archives containing only state/action. Discovery, loading and explicit
+  preparation reuse must agree about the version/mode/window contract.
+- Relocate products without raw files and score/display legacy two-target
+  mixed results under Full. No rewards are synthesized and no migration writes.
 
-### WP8 - runner, saved inspection, and clear names (lead; optional Luna)
+Implement one version-resolution path in existing `results.py`; keep shared
+array names and numerical data records. Append only the window field/default
+where needed. Preserve the public structural validator and enforce exact
+versioned target/window rules at metadata/publication boundaries. Freeze the
+v3 contract before runner/UI work; review original-public-interface callers.
 
-First add/commit RED tests in `test_scripts.py`, `test_plotting.py`,
-`test_session_prediction_webapp.py`, and directly affected timeline tests:
+### WP13 - matched-window split/outcome/laterality scores (Sol orchestrator, direct writer)
 
-- Synthetic mixed prepare/reuse/rerun uses two targets, at most 20 fits across
-  both regions, matching saved PCA, correct byte estimates, and mode-specific
-  log/summary provenance. Preparing mixed never fits the seven generalization
-  targets. Dry-run never fits/writes; the absent-PCA explicit-action rule remains.
-- CLI/config/GUI overrides and batch forwarding select the same mode.
-  Metadata-only calls with old/absent mode controls still select generalization.
-  Test 500 and 100 ms.
-- With both modes and legacy/new generalization archives, mode selection filters
-  run/target options correctly. A mode lacking saved results remains unprepared;
-  widgets never relabel/fallback to another mode or automatically fit/write.
-- Verify visible State/Action generalization versus State/Action decoding
-  labels, explicit training populations, saved-run labels and hover/summary
-  content. Inspect actual Plotly titles/traces rather than helper strings alone.
-- Saved-only relocated mixed display passes real availability/app dispatch with
-  raw sources removed, including initial mode selection when only mixed products
-  exist. Then switch from the prepared mode to an unprepared mode and back,
-  with raw configuration/behavior/spike loaders set to fail on use. Assert that
-  saved choices/events/PCA remain displayed, the unprepared message appears,
-  all prediction/actual/contribution overlays are absent, and switching back
-  restores the correct saved readouts without fitting/writes. Cover hiding
-  prepared predictions through the same anchored display path.
-- Switch between a 500-ms generalization run and a 100-ms mixed run with
-  distinct configuration IDs and PC counts, in the same session/time origin.
-  Assert preserved start/duration/Jump state and horizontal `uirevision`,
-  valid basis-specific PC controls, and changed vertical-axis identity. Use
-  `test_timeline_chart.py`'s JS harness and a browser check to verify the actual
-  panned range survives different data/row configurations; checking server
-  widget values alone is insufficient. Explicit Jump must still move the range.
-- Cover a switch from an unbounded 500-ms run to a bounded 20-ms run with
-  browser pan at 1000-1060 s, controls at 0-60 s, and destination loaded bounds
-  0-120 s. In the chart JS harness, verify all matched time axes reset to
-  0-60 s rather than retaining or arbitrarily clamping the old range. Also
-  verify an in-bounds browser range is preserved, enabling bounded loading
-  follows the same rule, and the rendered caption explains the exception.
-  Include the out-of-bounds switch in the browser inspection; no experimental
-  20-ms preparation is required for these synthetic checks.
-- Verify all PC contributions use the selected run's coefficients. Captions and
-  summaries disclose both sample-size and relative-regularization differences.
+First add/commit failing tests in `test_scoring.py`:
 
-Then update existing runners and UI/plot helpers, not a new package/page:
+- Probability means precede thresholds in Full/Before/After. Deliberately
+  different outer/opposite-half bins do not affect a selected window's score.
+  Continuous means/RMSE retain units and negative/undefined R2 handling.
+- Independently reconstruct each fold's training means from saved coefficients
+  and exact masks. Score every outcome intersection for training and held-out;
+  generalization training omissions/incorrect have zero scored rows and no
+  metric. Never label untrained other-fold rows as training.
+- Per-fold held-out and pooled totals agree, without duplicate trials in each
+  region/population. Overlapping training folds remain separate. Cover
+  unavailable fits, missing targets/folds/side labels and regional coverage.
+  Include a case where one fold cannot fit but other folds fit: trials whose
+  own held-out model failed remain in other models' exact training-score masks.
+- Choice and state/context side masks differ on incorrect trials. Verify each
+  split/outcome/fold's side metrics/counts, pooled held-out laterality and
+  left-minus-right units against direct small-array oracles.
+- Reward class counts sum to scored trials; correct-rewarded and omission
+  groups have one class and ordinary accuracy but no balanced accuracy.
+  Wrong counts must not become side-performance differences. Preserve the
+  public `trial_metrics()` return contract and source/archive bytes.
 
-- Add optional `analysis_mode=None` to session/batch runners and bounded CLI
-  choices. Forward it through preparation; replace fixed 7/TARGET_NAMES counts
-  and summary text with the prepared mode/targets. Do not auto-run both modes.
-- Derive display labels in a small helper in `session_prediction/plotting.py`
-  shared by prediction controls and `population/timeline_plotting.py`. Keep
-  fitting/configuration independent of Plotly/UI labels. Update regional titles,
-  prediction and contribution hover, captions, and model details consistently.
-- Extend `PredictionRunOption` with mode information for small-metadata filtering
-  while keeping old construction callers compatible through a default where
-  needed. Use its display label in the existing saved-run widget. Preserve the
-  raw-free loader cache and source-PCA identity checks.
-- Implement the small anchored UI return state and session-scoped horizontal
-  navigation described in Section 7. Retain basis-specific PC/y controls and
-  the stable chart component, with the localized destination-bounds guard in
-  `webapp/timeline_chart.js`. Update the directly affected chart/navigation
-  tests without changing prediction numerics or adding a new state framework.
-- Preserve existing optional plot interfaces and the full saved-first timeline
-  path. Update availability only if needed for v2 discovery; do not reintroduce
-  raw-input validation before loading a selected saved product.
+Implement Section 7's record expansion in the existing scorer. Reconstruct a
+training mean vector once per fold, then use direct Boolean masks for outcome/
+side reporting. Retain four report lists, small cached summaries and no raw
+reads/refits. Use explicit metric-name selection for differences. Update the
+old callers/tests for the added split/fold selectors rather than creating a
+second scoring pipeline.
 
-Lead reviews numerical/profile plumbing and focused checks before accepting
-any Luna changes. Recheck browser navigation/labels on synthetic saved products.
+### WP14 - runner and existing timeline inspection (Sol orchestrator; optional single Luna worker)
 
-### WP9 - usage, integrated checks, and designated-session acceptance
+Commit RED tests before each runner/UI source change:
 
-Update existing `SESSION_TIMELINE.md`, neural-analysis README and task-decoding
-README without deleting their current instructions. Explain the two scientific
-questions, names, default mode, optional controls/CLI override, mode-specific
-Prepare/inspection, and continued v1 display/copy-back requirements.
+- `test_scripts.py`: config/session/batch/CLI window precedence and forwarding;
+  metadata-only Full defaults; selected-window dry-run masks/bounds/counts;
+  synthetic prepare/reuse/immutable rerun for both modes and half windows.
+  All choices reuse matching PCA; neither other windows nor other modes fit.
+- `test_plotting.py` and directly affected timeline tests: Before/After keep
+  full [-2,+2) curves and gaps, exact saved-window captions, actual reward 0/1
+  overlays, `P(rewarded)` and positive-class hover, and log-odds contributions.
+  Existing Full and legacy two-target displays stay usable.
+- Actual Streamlit `test_session_prediction_webapp.py`: filter mode/window
+  pairs, initialize from an available saved pair, reflect saved target sets,
+  and explain missing reward in legacy products. Selecting Before/After does
+  not crop/relabel a Full model or fit from a widget change.
+- With raw sources removed, switch from a prepared pair to an unprepared
+  window and back; keep the saved behavior/PCA anchor, suppress all prediction-
+  derived overlays, retain the browser chart position/time range and preserve
+  the approved bounded-loading exception. No new pan callback or JS subsystem.
+- Performance controls show both splits/outcomes and both side groupings,
+  with per-fold training detail, pooled held-out views and correct class/count/
+  percentage labels. Cache keys include the saved window and scoring version;
+  changing filters/viewport/PC count never fits or recomputes neural products.
+  Test binary reward and continuous targets, including empty/undefined groups.
 
-Run the Section 9 integrated command with existing runtime setup, changed-path
-Ruff/whitespace checks, and a browser inspection. Record exact counts/warnings,
-commits and screenshots in Section 0; do not reuse the original 173-pass claim
-as evidence for the extension. No repository-wide suite or experimental batch.
+Update existing runner kwargs/CLI, metadata, summary and snapshot plumbing.
+Add the window selector inside the fixed controls container and extend the
+existing view-state/discovery records. Keep version handling in persistence,
+numeric mask selection in preparation, and target-dependent probability labels
+in display helpers. The two analysis names and existing navigation/component
+stay. Lead reviews all scientific/version/window plumbing before accepting any
+Luna integration.
 
-When the user instruction includes new CT026 2026-08-04 preparation, add only
-the 500-ms mixed product after synthetic gates. Reuse the existing matching PCA,
-preserve the original seven-target run, and verify fold counts, exclusions,
-class orientation and saved prediction/logit reconstruction in both regions.
-Record source/run identities, load/fit/save time, peak RSS and exact output/log
-paths. Inspect both modes' titles and traces; original generalization remains
-available and byte-unchanged. Scientific differences are observations, not a
-requirement that curves differ. User visual/scientific acceptance precedes any
-broader rollout. No cluster/resource change or new session is implicit.
+### WP15 - usage, bounded integration and acceptance (Sol orchestrator + user; optional Luna usage docs)
 
-## 14. WP10 - saved-model performance and laterality
+Update existing usage guides without deleting commands or copy-back guidance.
+Explain selected-window preparation and inspection, Full defaults and legacy
+targets, reward interpretation, matched scoring, empty training strata and
+single-class outcome scores. Keep calls metadata-only when controls are saved.
 
-The user requested training/test accuracy and left/right comparisons, then
-confirmed trial-mean predictions over `[-1,+1)` and both actual choice and
-recorded task-state/context splits. This package is implemented and validated
-as recorded in Section 0; the following retains its test-first reference.
-No experimental preparation is included.
+Run the Section 9 integration command plus shared config tests, changed-file
+Ruff/whitespace checks and one synthetic saved-only browser inspection. Cover
+both regions, all windows, reward/continuous targets, mode/window switching,
+laterality, chart position and actual pan. Record real commands/counts/warnings
+and RED/GREEN commits in Section 0; the historical 237 tests are baseline evidence.
+No full neural suite, new dependency or routine fine-resolution real rerun.
 
-- Add pure `session_prediction/scoring.py` functions for trial-level metrics
-  and selected-target regional summaries. Reuse the existing undefined-R2
-  convention and installed NumPy/scikit-learn metrics; add no dependency.
-- Reconstruct training trial probabilities/values from each model's saved
-  coefficients and exact training mask. Average probabilities after sigmoid.
-  Read test values from each trial's own held-out predictions. Score only the
-  saved training interval and retain baseline, target and fit availability.
-- Return small records: per-fold training/matching-test metrics, pooled
-  held-out metrics by population, left/right choice and context metrics/counts,
-  and left-minus-right differences. Never pool overlapping training sets.
-- Add a performance expander to the existing timeline controls. Show binary
-  accuracy/balanced accuracy or continuous R2/RMSE with counts. Provide a
-  held-out population selector for laterality. Keep the fixed controls
-  container/chart position and saved-only routing. Cache by selected product
-  identity/file stats, target and scoring version, without hashing PCA arrays.
-- Keep source archives and fitting identity unchanged. Read training scores
-  in bounded slices (one bin's windows/PCs at a time), without a new full
-  trial/bin/PC prediction or contribution tensor. Score the selected target
-  only; do not add a scheduler or performance framework.
-
-Tests first, confirm RED, commit tests, then implement:
-
-1. Known binary accuracy/balanced accuracy and continuous R2/RMSE oracles;
-   missing classes, empty groups, singleton/constant targets and negative R2.
-2. Average probabilities rather than logits/class votes; exact interval;
-   one trial per test observation and correct per-fold training reconstruction.
-3. Exclude invalid baseline/actuals, missing blocks, unavailable fits and absent
-   regional windows without modifying saved inputs or prediction availability.
-4. Distinct choice/context splits on incorrect trials; exact left/right counts,
-   metric differences, outcome populations, and independent regional coverage.
-5. Saved-only real UI for both modes and continuous targets: readable metrics,
-   population selection, caching, no fits/raw reads/writes, stable chart position
-   and navigation. Confirm existing v1/v2 loading remains valid.
-
-Focused gates: new scoring tests, existing prediction tests and affected webapp
-tests; then the existing Section 9 integrated command, changed-file Ruff,
-whitespace checks and a synthetic browser inspection. Update Section 0 with
-RED/GREEN commits, exact counts and remaining experimental authority.
+If the implementation instruction includes designated CT026 2026-08-04
+validation, use only the authorized 500-ms variants. Preserve the existing
+Full generalization result; prepare the new Before/After generalization and
+requested mixed reward variants without automatically rerunning that baseline.
+Verify saved masks/weights/folds, class orientation and affine/logit prediction
+reconstruction, then user inspection. Record runtime/RSS/output identities and
+paths. No new sessions, batch, cluster job, transfer or resource adjustment is
+implied. If experimental validation is not authorized, finish synthetic/code
+gates and record that remaining acceptance gate explicitly.
