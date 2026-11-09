@@ -1,6 +1,7 @@
 """Family-aware displays preserve saved values, trial identities and local geometry."""
 
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -416,6 +417,31 @@ def test_short_sequence_png_reserves_space_for_full_episode_start_labels(key):
             bounds = text.get_window_extent(renderer)
             assert bounds.x0 >= -1 and bounds.x1 <= figure.bbox.width + 1, text.get_text()
             assert bounds.y0 >= -1 and bounds.y1 <= figure.bbox.height + 1, text.get_text()
+
+
+@pytest.mark.parametrize("key", [
+    ("probe", "left", 1), ("lucky_omission_switch", "left", None),
+    ("omission_probe", "right", 1),
+])
+def test_short_pc_sequence_caption_clears_local_time_axis_with_full_provenance(key):
+    """Input: three/four-segment key; return None after checking PC caption clearance.
+
+    Synthetic (1,S,40) source-SD values use realistic session/probe identifiers;
+    the longer PCA-reference and selector-version caption must fit below axes.
+    """
+    packet = _plot_packet(key, kind="pc", width=0.1)
+    packet["meta"]["session_id"] = "CT026_2026-08-28_134630"
+    packet["meta"]["parameters"]["probe_id"] = "ProbeA"
+    packet["meta"]["pca_reference"]["probe_id"] = "ProbeA"
+    regional = packet["timeline_result"].regions["PFC"]
+    packet["timeline_result"].regions["PFC"] = replace(regional, probe_id="ProbeA")
+    view = _build(packet, plotting.prepare_display_source(packet, zscore=True), key)
+    figure = plotting.matplotlib_figure(view)
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    caption = figure.texts[-1].get_window_extent(renderer)
+    time_label = figure.axes[0].xaxis.label.get_window_extent(renderer)
+    assert caption.y1 < time_label.y0
 
 
 @pytest.mark.parametrize("settings", [
