@@ -273,6 +273,15 @@ def test_covered_ideal_prefix_remains_visible_when_later_indecisive_segment_is_u
     np.testing.assert_array_equal(ideal["values"], source["values"][None, :5])
 
 
+def test_indecisive_caption_identifies_x_as_only_the_initial_incorrect_run():
+    """No inputs; return None; x3 counts initial errors, with one later error separate."""
+    key = ("indecisive_transition", "left", 3)
+    packet = _plot_packet(key)
+    view = _build(packet, plotting.prepare_display_source(packet), key)
+    assert "x3 initial incorrect trials" in view["panels"][0]["title"]
+    assert "x3 initial incorrect trials" in view["caption"]
+
+
 @pytest.mark.parametrize("kind,zscore", [("unit", False), ("unit", True), ("pc", False), ("pc", True)])
 def test_all_families_and_renderers_share_one_immutable_selected_source_pool(kind, zscore, monkeypatch):
     """Input: source/scaling/patch fixtures. Return None; family changes reuse (W,B) values.
