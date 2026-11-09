@@ -483,3 +483,49 @@ def test_fine_bin_pc_controls_prepare_only_after_explicit_request(event_session,
     assert packet["meta"]["source_kind"] == "pc"
     assert len(packet["bin_edges_s"]) - 1 == round(4 / width)
     _assert_plotly_output(at)
+
+
+def test_additional_selector_version_invalidates_display_load_cache_only(event_session, monkeypatch):
+    """Input: synthetic session/patch fixtures. Return None; version changes reload one source.
+
+    Repeated saved loads at one selector version read once. Changing only the
+    unitless selector-version string reloads derived matches, preserving source
+    configuration, archive bytes and (W,B) Hz values without source computation.
+    """
+    from src.neural_analysis.event_sequences import selection
+    from src.neural_analysis.webapp import event_sequence_views
+
+    path = _prepare_unit_product(event_session)
+    product = event_io.discover_event_sequences(event_session.session_root)[0]
+    before = path.read_bytes()
+    identity = product["meta"]["configuration_id"]
+    _remove_current_sources(event_session)
+    monkeypatch.setattr(pd, "read_csv", _forbidden_display_operation)
+    monkeypatch.setattr(event_io, "load_probe_spike_arrays", _forbidden_display_operation)
+    monkeypatch.setattr(event_io, "save_event_sequences", _forbidden_display_operation)
+    monkeypatch.setattr(run_session, "prepare_event_sequences", _forbidden_display_operation)
+    monkeypatch.setattr(timeline, "bin_choice_counts", _forbidden_display_operation)
+    monkeypatch.setattr(timeline, "fit_timeline_activity", _forbidden_display_operation)
+    monkeypatch.setattr(event_activity, "extract_unit_activity", _forbidden_display_operation)
+    reader = Mock(wraps=event_io.load_event_sequences)
+    monkeypatch.setattr(event_io, "load_event_sequences", reader)
+    event_sequence_views._load_saved_product_cached.clear()
+    try:
+        first = event_sequence_views._load_saved_product(product)
+        same_version = event_sequence_views._load_saved_product(product)
+        assert first is same_version
+        assert reader.call_count == 1
+        next_version = selection.ADDITIONAL_SELECTOR_VERSION + "-test-revision"
+        monkeypatch.setattr(selection, "ADDITIONAL_SELECTOR_VERSION", next_version)
+        revised = event_sequence_views._load_saved_product(product)
+        assert reader.call_count == 2
+        assert revised is not first
+        assert revised["additional_selector_version"] == next_version
+        assert revised["meta"]["configuration_id"] == identity
+        assert revised["meta"] == first["meta"]
+        np.testing.assert_array_equal(revised["unit_rates_hz"], first["unit_rates_hz"])
+        assert event_sequence_views._load_saved_product(product) is revised
+        assert reader.call_count == 2
+        assert path.read_bytes() == before
+    finally:
+        event_sequence_views._load_saved_product_cached.clear()
