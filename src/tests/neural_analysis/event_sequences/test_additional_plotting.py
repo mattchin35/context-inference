@@ -393,6 +393,31 @@ def test_seven_segment_png_text_fits_canvas_with_readable_opaque_light_style(key
         assert np.all(pixels[..., 3] == 1)
 
 
+@pytest.mark.parametrize("key", [
+    ("probe", "left", 1),
+    ("lucky_omission_switch", "right", None),
+    ("omission_probe", "left", 1),
+])
+def test_short_sequence_png_reserves_space_for_full_episode_start_labels(key):
+    """Input: three/four-segment key; return None after checking physical text bounds.
+
+    Four-digit original trial IDs lengthen row labels. All labels, including
+    the vertical episode-axis title, must stay inside the opaque PNG canvas.
+    """
+    trials = _episode(key)
+    trials["cur_trial"] += 1000
+    packet = _plot_packet(key, trials=trials)
+    view = _build(packet, plotting.prepare_display_source(packet), key)
+    figure = plotting.matplotlib_figure(view)
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    for text in figure.findobj(matplotlib.text.Text):
+        if text.get_visible() and text.get_text().strip():
+            bounds = text.get_window_extent(renderer)
+            assert bounds.x0 >= -1 and bounds.x1 <= figure.bbox.width + 1, text.get_text()
+            assert bounds.y0 >= -1 and bounds.y1 <= figure.bbox.height + 1, text.get_text()
+
+
 @pytest.mark.parametrize("settings", [
     {"family": "unknown"}, {"initial_side": "both"},
     {"family": "lucky_omission_switch", "repeats": 1},
