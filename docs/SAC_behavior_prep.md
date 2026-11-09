@@ -1,6 +1,10 @@
 # SAC TTS analysis and figure specification - working draft
 
-Status: planning, not approved for implementation. No new fits have been run.
+Status: implementation plan approved by the user; sequential worker jobs started.
+Implementation and designated CT024 single-session validation are complete.
+The user approved the validation outputs; full experimental cohort execution
+and all 25 figure panels are complete for the 216 selected sessions.
+Progress and artifact locations are recorded in `docs/SAC_behavior_execution_log.md`.
 The original exploratory notes are preserved at the end of this document.
 Items marked OPEN require a decision; recommendations are not settled requirements.
 
@@ -35,7 +39,9 @@ suggestion. The existing R example identifies its block table as:
 `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT024/CT024_20260609_latent_inference/processed/CT024_2026-06-09_143852_block_performance.csv`.
 Verify availability at implementation time. The existing data-root convention is
 `/home/matt/Documents/EXPERIMENTS/contextProjectData`.
-OPEN: all available processed sessions versus a date/training-stage restriction.
+Confirmed cohort coverage: all available processed latent-inference sessions for
+the nine specified mice, without a date/training-stage restriction. Read-only
+discovery currently finds 216 sessions spanning 2026-04-16 through 2026-06-11.
 
 One input row represents one task block. Retain its original session-local block
 index and ordering; uniquely identify it with mouse, session, and block index.
@@ -273,7 +279,7 @@ distinct from interaction-fit SD and the actual errors under fixed exemplars.
 Where those errors are shown, report their mean as well as spread: SD alone
 does not capture a constant prediction offset. No automatic HMM parameter update.
 
-## 7. Implementation plan (approval required before code)
+## 7. Approved implementation plan
 
 Design basis: `docs/SoftwareDesign.md`. Translate its language-independent
 guidance into ordinary R functions, data frames, numeric vectors/matrices and
@@ -375,19 +381,117 @@ Keep the new analysis files directly under `src/Rcode/`, using the existing
 - The plotting script loads a saved run and renders the requested figures. It
   can be rerun with new display choices without recomputing the analysis.
 
-### Implementation sequence
+### Orchestrator and sequential worker jobs
 
-1. Confirm remaining scientific/run choices in section 9 and verify package/data
-   availability. Do not install packages or modify dependencies during planning.
-2. Write the tests listed in section 8, confirm RED for missing new behavior and
-   commit only those test changes before implementing it, as required by AGENTS.md.
-   Preserve unrelated worktree changes.
-3. Implement preparation and the session-fitting extension; get their tests GREEN
-   and check existing R residual-model tests still pass with their old defaults.
-4. Implement population fitting and result I/O; validate with small synthetic
-   multi-mouse tables. Add the figure functions and visually inspect exports.
-5. Run the designated CT024 session and present its fit/figures for approval.
-   After approval, run the agreed cohort and generate the presentation set.
+The orchestrator owns the approved scientific scope, job assignments, integration
+review, test commits, user updates and experimental-run approvals. Implementation
+is delegated as the jobs below, in order. The user approved this plan and
+authorized implementation after reviewing this delegation sequence.
+
+**Concurrency rule: at most one implementation worker is active at any time.**
+Do not dispatch the next job until the current worker has finished and the
+orchestrator has accepted its results. Workers must not spawn other workers or
+delegate subtasks. Revisions go back to the same worker before proceeding. The
+orchestrator may inspect work and run checks, but must not edit a worker's assigned
+files while that worker is active. An interrupted job must stop before a
+replacement worker starts.
+
+This limit concerns implementation agents. The R analysis pipeline's
+session-level compute parallelism remains as specified below; those processes
+are not additional implementation agents.
+
+**Orchestrator preparation (before W1).**
+
+- Obtain plan approval and resolve the scientific/run choices needed for the
+  first job. Confirm package/data availability and record the worktree baseline.
+  Do not install packages or modify dependencies during planning.
+- Give each worker its exact file scope, input/output contracts, applicable
+  instructions, required tests and the accepted results of earlier jobs.
+- Keep the contracts as the documented data-frame and named-list fields needed
+  by the next job; do not introduce a separate interface framework.
+
+**Required test-first cycle within every worker job.**
+
+1. The worker reads its target files and callers, writes tests for that job and
+   runs them to demonstrate RED because the required behavior is missing.
+   Dependency/setup failures alone do not establish RED.
+2. The worker hands back the test diff and failure evidence and stops editing.
+   The orchestrator reviews and commits only the relevant tests before allowing
+   implementation, preserving unrelated worktree changes.
+3. The orchestrator resumes that worker to implement the job, reach GREEN and
+   refactor while tests remain passing. Tests are changed only for a genuine
+   test error or an explicitly changed requirement.
+4. The worker returns changed files, result contracts, commands/results,
+   limitations and any unresolved decisions. The orchestrator reviews the diff,
+   runs the relevant checks and accepts the handoff or requests revisions.
+   No next worker starts during a test gate or unfinished revision.
+
+**W1: Block preparation and eligibility.**
+
+- Files: `tts_data.R` and `tests/test_tts_data.R`.
+- Deliver the aligned analysis rows, original block/session keys, preserved
+  first-block marker and exclusion/status table.
+- Tests: known-row filtering, first-block policy, missing sentinels, duplicate
+  keys, side labels, zero TTS and unchanged previous-block reward alignment.
+- Acceptance: hand-checkable fixtures establish the row contract that W2-W4 use.
+
+**W2: Session elastic-net fits.**
+
+- Files: `block_residual_modeling.R`, session-fitting functions in
+  `tts_modeling.R`, `tests/test_block_residual_modeling.R` and the session tests
+  in `tests/test_tts_modeling.R`.
+- Deliver the two confirmed fits, one-predictor adapter, shared seeded folds,
+  penalty extraction, coefficients, predictions, residual metrics and fit status.
+- Tests: one-predictor objective parity, original-unit reconstruction, side
+  differences, residual statistics, sparse/constant/missing-side cases and
+  reproducibility. Existing default output rows/columns must remain compatible.
+- Acceptance: session contracts and seeded synthetic examples pass, including
+  existing R residual-model regression tests.
+
+**W3: Population models and exemplar computations.**
+
+- Files: population prediction/fitting and exemplar functions in
+  `tts_modeling.R`, plus their tests in `tests/test_tts_modeling.R`.
+- Deliver M1-M4 ML fits, comparison/diagnostic tables, labeled population and
+  conditional predictions, and fixed-exemplar predictions/errors.
+- Tests: exact formulas, common observation IDs, mouse/session grouping, ML
+  metadata, exposed fit warnings, prediction labels and exemplar error signs.
+- Acceptance: a seeded synthetic multi-mouse example exercises the complete
+  comparison path. Review changes against W2's accepted session behavior.
+
+**W4: Results and computation entry scripts.**
+
+- Files: `tts_results.R`, `run_tts_session.R`, `run_tts_batch.R` and
+  `tests/test_tts_results.R` (including entry-script integration checks).
+- Deliver RDS/CSV round trips, provenance/cache metadata, the explicit session
+  path table, dry run, rerun control, session parallelism and run logging.
+- Tests: unchanged row/model metadata after loading, cache invalidation,
+  preservation of prior/source files, single-session synthetic integration and
+  reproducible collection of a small synthetic batch.
+- Acceptance: synthetic runs save inspectable results consumed by W5; no full
+  experimental cohort is launched by this job.
+
+**W5: Inspection and presentation figures.**
+
+- Files: `tts_plotting.R`, `plot_tts_results.R` and
+  `tests/test_tts_plotting.R`.
+- Deliver F1-F9 using the accepted saved results, including the light theme,
+  captions, exemplar overlays, static 3D view and pairwise projections.
+- Tests: figure source values/labels and generation from saved synthetic
+  artifacts without refitting. Visually inspect the actual exports.
+- Acceptance: the orchestrator reviews readable figures and their numeric
+  sources, and reruns affected integration checks. No additional plotting UI.
+
+**Orchestrator integration and experimental validation (after W5).**
+
+- Run the relevant complete R checks and inspect the synthetic report. Assign
+  fixes sequentially under the same one-worker limit.
+- Run `CT024_20260609_latent_inference` and present its fit/figures for the user's
+  approval. The single-session run does not validate mouse-level grouping;
+  synthetic multi-mouse checks cover that computation before cohort execution.
+- After output approval and confirmation of session selection, run the agreed
+  cohort and review the presentation figures. Record scientific findings and
+  limitations without silently changing the selected models or exemplar values.
 
 ### Performance and limitations
 
@@ -459,16 +563,17 @@ A single session validates session fitting/plotting, not mouse-versus-session
 grouping; test that part on synthetic multi-mouse data before the cohort fit.
 Use the existing R test scripts and run the relevant regression checks.
 
-## 9. Decisions still needed
+## 9. Approved defaults and remaining decisions
 
-- Confirm all processed sessions versus a date/training-stage restriction.
-- Confirmed: side-free summary and side-interaction fits. Approve proposed
-  five-block threshold and seeded folds, alpha 0.5 / lambda.min primary
-  (lambda.1se sensitivity), and RDS/CSV outputs.
-- Confirm exclusion of session-initial blocks and omission/reporting of missing TTS.
+- Confirmed: all processed latent-inference sessions for the nine specified mice.
+- Approved: side-free summary and side-interaction fits, five-block threshold,
+  seeded folds, alpha 0.5 / lambda.min primary (lambda.1se sensitivity), and
+  RDS/CSV outputs.
+- Approved: exclude session-initial blocks and omit/report missing TTS.
 - Decide whether Bayes-factor output is needed in addition to AIC/BIC.
 - No automatic exemplar selection is proposed; inspect the distributions first.
-- Approve the implementation plan before writing code.
+- Implementation plan, cohort coverage and validation outputs approved; full
+  experimental cohort execution and initial figure inspection are complete.
 
 ## Original exploratory notes (preserved)
 
