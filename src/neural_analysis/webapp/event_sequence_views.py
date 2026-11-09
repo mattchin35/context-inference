@@ -24,6 +24,10 @@ CENTRAL_VIEW = "central"
 TRANSITION_VIEW = "transition"
 EVENT_SEQUENCE_CACHE_MAX_ENTRIES = 2
 NEW_BIN_WIDTHS_S = (0.5, 0.1, 0.05, 0.02)
+SEQUENCE_FAMILIES = (
+    "ideal_transition", "probe", "omission_probe",
+    "lucky_omission_switch", "indecisive_transition",
+)
 
 
 def render_event_sequence_view(
@@ -32,7 +36,7 @@ def render_event_sequence_view(
     *,
     kind: str = CENTRAL_VIEW,
 ) -> None:
-    """Render one saved-first central-trial or transition heatmap view.
+    """Render one saved-first central-trial or multi-trial sequence heatmap.
 
     Parameters
     ----------
@@ -42,8 +46,8 @@ def render_event_sequence_view(
         One metadata-resolved session; paths are session-relative identities.
     kind : str, keyword-only
         ``central`` displays six central-trial conditions; ``transition``
-        displays one direction/repeat motif. Motif rows are chronological and
-        neural activity retains its saved units (Hz, PC scores, or SD units).
+        displays one selected sequence family/orientation/repeat condition.
+        Neural activity retains its saved units (Hz, PC scores, or SD units).
 
     Returns
     -------
@@ -55,7 +59,7 @@ def render_event_sequence_view(
     if kind not in (CENTRAL_VIEW, TRANSITION_VIEW):
         raise ValueError("kind must be 'central' or 'transition'.")
 
-    title = "Event sequences: central trials" if kind == CENTRAL_VIEW else "Event sequences: ideal transitions"
+    title = "Event sequences: central trials" if kind == CENTRAL_VIEW else "Event sequences: multi-trial sequences"
     st_module.subheader(title)
     scope = hashlib.sha256(str(session.metadata_path).encode("utf-8")).hexdigest()[:12]
     products = event_io.discover_event_sequences(session.session_root)
@@ -138,13 +142,18 @@ def render_event_sequence_view(
             side=selectors["side"],
         )
     else:
-        transition_reason = packet["meta"].get("transition_unavailable_reason", "")
-        if transition_reason:
-            st_module.info(transition_reason)
-        view = event_plotting.build_transition_view(
+        unavailable_reason = (
+            packet["meta"].get("transition_unavailable_reason", "")
+            if selectors["family"] == "ideal_transition"
+            else packet.get("additional_unavailable_reason", "")
+        )
+        if unavailable_reason:
+            st_module.info(unavailable_reason)
+        view = event_plotting.build_sequence_view(
             packet,
             display_source,
-            direction=selectors["direction"],
+            family=selectors["family"],
+            initial_side=selectors["initial_side"],
             repeats=selectors["repeats"],
         )
     st_module.plotly_chart(
@@ -474,7 +483,13 @@ def _product_label(product: dict) -> str:
 
 
 def _render_display_selectors(st_module: object, scope: str, kind: str) -> dict:
-    """Input: Streamlit/session scope/view kind; return live selectors with outcome/side or transition direction/repeats."""
+    """Input: Streamlit module, session-specific key scope, and view kind; return display-only widget values.
+
+    Central views return outcome and side. Sequence views return a family slug,
+    either an initial choice side or old-to-new context direction, and x (None
+    for lucky omission-switch). x uses the family-specific integer range.
+    These controls never alter the saved source or its units.
+    """
     if kind == CENTRAL_VIEW:
         display_columns = st_module.columns(2)
         return {
@@ -487,18 +502,58 @@ def _render_display_selectors(st_module: object, scope: str, kind: str) -> dict:
                 "Central side", options=("left", "right"), key=f"event_side_{scope}"
             ),
         }
+    family = st_module.selectbox(
+        "Sequence family",
+        options=SEQUENCE_FAMILIES,
+        index=0,
+        format_func=_sequence_family_label,
+        key=f"event_sequence_family_{scope}",
+    )
     display_columns = st_module.columns(2)
-    return {
-        "direction": display_columns[0].selectbox(
+    if family in ("probe", "omission_probe"):
+        initial_side = display_columns[0].selectbox(
+            "Initial side",
+            options=("left", "right"),
+            format_func=_initial_side_label,
+            key=f"event_sequence_initial_side_{scope}",
+        )
+        direction = "left_to_right" if initial_side == "left" else "right_to_left"
+    else:
+        direction = display_columns[0].selectbox(
             "Transition direction",
             options=("left_to_right", "right_to_left"),
             key=f"event_direction_{scope}",
-        ),
-        "repeats": display_columns[1].slider(
-            "Incorrect repeats", min_value=1, max_value=4, value=1, step=1,
-            key=f"event_repeats_{scope}",
-        ),
-    }
+        )
+        initial_side = "left" if direction == "left_to_right" else "right"
+    repeats = None
+    if family != "lucky_omission_switch":
+        maximum = 3 if family == "indecisive_transition" else 4
+        repeat_key = f"event_repeats_{scope}"
+        previous_repeats = int(st_module.session_state.get(repeat_key, 1))
+        valid_repeats = min(max(previous_repeats, 1), maximum)
+        if valid_repeats != previous_repeats:
+            st_module.session_state[repeat_key] = valid_repeats
+        repeats = display_columns[1].slider(
+            "Incorrect repeats", min_value=1, max_value=maximum,
+            value=valid_repeats, step=1, key=repeat_key,
+        )
+    return {"family": family, "initial_side": initial_side, "direction": direction, "repeats": repeats}
+
+
+def _sequence_family_label(family: str) -> str:
+    """Input: supported sequence-family slug; return concise user-facing label."""
+    return {
+        "ideal_transition": "Ideal transition",
+        "probe": "Probe",
+        "omission_probe": "Omission probe",
+        "lucky_omission_switch": "Lucky omission-switch",
+        "indecisive_transition": "Indecisive transition",
+    }[family]
+
+
+def _initial_side_label(initial_side: str) -> str:
+    """Input: initial side 'left' or 'right'; return the corresponding probe path label."""
+    return "L -> R -> L" if initial_side == "left" else "R -> L -> R"
 
 
 def _selected_pc_rank(st_module: object, scope: str, packet: dict) -> int:

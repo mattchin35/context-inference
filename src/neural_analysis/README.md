@@ -104,8 +104,23 @@ disables the affected view and explains which source is unavailable.
 
 ### Event-sequence heatmaps
 
-Choose **Event sequences: central trials** or **Event sequences: ideal
-transitions** in the metadata-driven app. Choose **Single unit** under
+Choose **Event sequences: central trials** or **Event sequences: multi-trial
+sequences** in the metadata-driven app. The sequence-family selector defaults
+to **Ideal transition** and also offers **Probe**, **Omission probe**,
+**Lucky omission-switch**, and **Indecisive transition**. Probe orientations are
+shown as initial-side choice paths; context-changing families use the existing
+left-to-right or right-to-left direction control. Incorrect-repeat x is 1-4
+for ideal/probe/omission-probe families, 1-3 for indecisive transitions, and
+not shown for lucky omission-switch. Switching families reuses the selected
+saved source and keeps source, bin width, PC rank, and z-scoring controls.
+Families requiring context fields report when `cur_block` or `state_int` is
+missing; empty matches and coverage exclusions remain visible in the view.
+Additional families are derived from the selected saved event-sequence archive
+when it is loaded, so existing archives need no additional preparation.
+Counts may overlap: an indecisive transition also contributes its shorter
+ideal-transition prefix and a qualifying x=1 probe tail.
+
+Choose **Single unit** under
 **Neural source** to use the dedicated **Probe**, **Unit**, and **Bin width**
 selectors. The searchable unit list contains every eligible manual-good unit
 on that probe, including units not yet prepared. Selecting a unit loads its
@@ -129,8 +144,9 @@ default, with an optional probe override. Recompute creates a fresh run without
 replacing prior results. These settings stay in the app and saved provenance;
 they add no fields to `neural_session.json`.
 
-Outcome, side, transition direction, repeat count, PC rank, and z-scoring are
-display controls. They reuse the selected saved source and fixed PCA basis.
+Outcome, side, sequence family, orientation, repeat count, PC rank, and
+z-scoring are display controls. They reuse the selected saved source and fixed
+PCA basis.
 Z-scoring is disabled for constant activity; raw silence remains a valid heatmap.
 Click **Export PNG** to save an additive light-mode image in the selected run's
 `figures/` directory. The callable Python batch entry point is

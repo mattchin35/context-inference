@@ -69,7 +69,7 @@ PLOT_VIEW_PHASE_SYNCHRONY = "Session timeline: LFP power and synchrony"
 
 PLOT_VIEW_EVENT_SEQUENCE_CENTRAL = "Event sequences: central trials"
 
-PLOT_VIEW_EVENT_SEQUENCE_TRANSITION = "Event sequences: ideal transitions"
+PLOT_VIEW_EVENT_SEQUENCE_TRANSITION = "Event sequences: multi-trial sequences"
 
 PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_UNIT_RASTER,
