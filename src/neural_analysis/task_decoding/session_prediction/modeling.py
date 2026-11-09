@@ -65,7 +65,7 @@ def fit_region_prediction_models(
     choice_positions (W,) indexes N shared choices. target_values/target_valid
     are float/bool (N,T) in native units or 0/1 labels. baseline_valid and
     correct_rewarded are bool (N,); fold_ids is integer (N,), -1 or 0..4.
-    training_bin_mask is bool (B,) for [-1,+1), and families is T categorical/
+    training_bin_mask is bool (B,) selecting the supervised interval; families is T categorical/
     numerical strings. Return RegionPredictions; all input arrays stay unchanged.
     Optional bool training_condition_mask (N,) selects mode-specific membership;
     None preserves the existing correct_rewarded training rule. All other

@@ -20,7 +20,15 @@ TARGET_NAMES = (
     "forgetting_q_relative_value", "hmm_signed_belief",
     "hmm_decay_signed_belief", "relative_doubt",
 )
-MIXED_TARGET_NAMES = TARGET_NAMES[:2]
+MIXED_TARGET_NAMES = (*TARGET_NAMES[:2], "current_reward")
+TRAINING_WINDOWS = {"full": (-1.0, 1.0), "before": (-1.0, 0.0), "after": (0.0, 1.0)}
+
+
+def training_window_bounds(training_window: str) -> tuple[float, float]:
+    """Return fixed choice-relative (start, stop) seconds for a canonical window ID."""
+    if not isinstance(training_window, str) or training_window not in TRAINING_WINDOWS:
+        raise ValueError(f"training_window must be one of {tuple(TRAINING_WINDOWS)}")
+    return TRAINING_WINDOWS[training_window]
 
 
 def target_names_for_mode(analysis_mode: str) -> tuple[str, ...]:
@@ -50,6 +58,7 @@ class SessionPredictionConfig:
     base_config_path: Path
     bin_width_ms: int
     analysis_mode: str = GENERALIZATION_MODE
+    training_window: str = "full"
 
 
 def load_prediction_config(
@@ -58,6 +67,7 @@ def load_prediction_config(
     config_path: Path | str | None = None,
     bin_width_ms: int | None = None,
     analysis_mode: str | None = None,
+    training_window: str | None = None,
 ) -> SessionPredictionConfig:
     """Load optional JSON controls and return resolved paths and milliseconds.
 
@@ -67,6 +77,7 @@ def load_prediction_config(
     An explicit supported integer bin_width_ms overrides the file's value.
     analysis_mode is a canonical mode string; None uses controls or the
     correct-rewarded default. Explicit mode selection overrides the file.
+    training_window selects full/before/after; None uses controls or Full.
     This function reads only controls; base decoder validation occurs at prepare.
     """
     metadata = Path(metadata_path).resolve(strict=True)
@@ -82,7 +93,7 @@ def load_prediction_config(
             payload = json.loads(controls.read_text(encoding="utf-8"))
         except json.JSONDecodeError as error:
             raise ValueError("Prediction controls must decode as JSON") from error
-    if not isinstance(payload, dict) or set(payload) - {"base_config_path", "bin_width_ms", "analysis_mode"}:
+    if not isinstance(payload, dict) or set(payload) - {"base_config_path", "bin_width_ms", "analysis_mode", "training_window"}:
         raise ValueError("Prediction controls have unknown fields or are not an object")
     width = payload.get("bin_width_ms", 500)
     if type(width) is not int or width not in SUPPORTED_BIN_WIDTH_MS:
@@ -96,10 +107,15 @@ def load_prediction_config(
     if analysis_mode is not None:
         target_names_for_mode(analysis_mode)
         mode = analysis_mode
+    window = payload.get("training_window", "full")
+    training_window_bounds(window)
+    if training_window is not None:
+        training_window_bounds(training_window)
+        window = training_window
     locator = payload.get("base_config_path", "task_decoding_config.json")
     if not isinstance(locator, str) or not locator.strip():
         raise ValueError("base_config_path must be a nonempty path")
     base_path = (controls.parent / locator).resolve()
     if not base_path.is_relative_to(root):
         raise ValueError("base_config_path must remain inside the metadata session")
-    return SessionPredictionConfig(metadata, base_path, width, mode)
+    return SessionPredictionConfig(metadata, base_path, width, mode, window)

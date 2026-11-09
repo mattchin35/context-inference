@@ -16,7 +16,7 @@ from src.neural_analysis.task_decoding.config import (
 )
 from src.neural_analysis.task_decoding.targets import build_target_table
 
-from .config import GENERALIZATION_MODE, target_names_for_mode, training_conditions_for_mode
+from .config import GENERALIZATION_MODE, target_names_for_mode, training_conditions_for_mode, training_window_bounds
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,7 @@ class PredictionInputs:
     target_availability: dict[str, str]
     analysis_mode: str
     training_condition_mask: np.ndarray
+    training_window: str = "full"
 
 
 def training_membership(
@@ -64,19 +65,20 @@ def training_membership(
     return np.any(condition_masks[:, [condition_names.index(name) for name in names]], axis=1)
 
 
-def training_bin_mask(bin_edges_s: np.ndarray) -> np.ndarray:
-    """Return bool (B,) selecting complete [-1,+1) bins from (B+1,) second edges.
+def training_bin_mask(bin_edges_s: np.ndarray, *, training_window: str = "full") -> np.ndarray:
+    """Return bool (B,) selecting full/before/after bins from (B+1,) second edges.
 
     Edges must be finite, increasing and contain both training boundaries.
     No bin is interpolated, averaged or reassigned to another choice.
     """
+    start, stop = training_window_bounds(training_window)
     edges = np.asarray(bin_edges_s, dtype=float)
     if (edges.ndim != 1 or len(edges) < 2 or not np.isfinite(edges).all()
             or np.any(np.diff(edges) <= 0)):
         raise ValueError("Bin edges must be finite and strictly increasing")
-    if not all(np.any(np.isclose(edges, bound, rtol=0, atol=1e-12)) for bound in (-1, 1)):
-        raise ValueError("Bin edges must include exact -1 and +1 training boundaries")
-    return (edges[:-1] >= -1 - 1e-12) & (edges[1:] <= 1 + 1e-12)
+    if not all(np.any(np.isclose(edges, bound, rtol=0, atol=1e-12)) for bound in (start, stop)):
+        raise ValueError("Bin edges must include exact training window boundaries")
+    return (edges[:-1] >= start - 1e-12) & (edges[1:] <= stop + 1e-12)
 
 
 def prepare_prediction_inputs(
@@ -85,6 +87,7 @@ def prepare_prediction_inputs(
     base_config: TaskDecodingConfig,
     *,
     analysis_mode: str = GENERALIZATION_MODE,
+    training_window: str = "full",
 ) -> PredictionInputs:
     """Return targets/folds mapped from original trials to saved timeline choices.
 
@@ -93,7 +96,8 @@ def prepare_prediction_inputs(
     order and units. base_config supplies existing target definitions; its
     target subset/alignment are locally replaced. Input objects are not changed.
     Reject mismatched choice identities using absolute UTC tolerance 1 us.
-    analysis_mode selects fixed seven- or two-target axes and the canonical
+    training_window selects matched full/before/after fitting/scoring bins.
+    analysis_mode selects fixed seven- or three-target axes and the canonical
     training-condition union; default retains correct-rewarded generalization.
     """
     target_names = target_names_for_mode(analysis_mode)
@@ -140,7 +144,8 @@ def prepare_prediction_inputs(
         targets.loc[:, [name + "_valid" for name in target_names]].to_numpy(dtype=bool)[positions],
         targets.baseline_valid.to_numpy(dtype=bool)[positions], conditions[:, 1].copy(),
         all_folds[positions], np.asarray(assignment.block_values_json, dtype=str)[positions],
-        CONDITION_IDENTIFIERS, conditions, training_bin_mask(edges), edges,
+        CONDITION_IDENTIFIERS, conditions, training_bin_mask(edges, training_window=training_window), edges,
         targets.attrs["target_metadata"], availability, analysis_mode,
         training_membership(analysis_mode, CONDITION_IDENTIFIERS, conditions),
+        training_window,
     )

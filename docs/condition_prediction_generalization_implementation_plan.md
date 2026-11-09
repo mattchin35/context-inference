@@ -29,15 +29,15 @@ checkpointing to this analysis.
 | Field | Current value |
 | --- | --- |
 | Date / branch / inspected HEAD | 2026-11-09 / `refactor` / `04ca54d`. Earlier computational commits remain in the evidence log; recheck checkout state on resumption. |
-| Phase / authorization | User authorized spec/plan corrections for the scaffolder default-target gap and explicit Sol orchestration with at most one active worker. Scientific choices are confirmed; WP11-WP15 code work awaits implementation instruction. No experimental processing, batch, transfer or cluster operation in this review. |
+| Phase / authorization | User authorized WP11-WP15 implementation on 2026-11-09. WP11 GREEN; WP12 RED next. No new experimental preparation authorized. |
 | Scientific settings | Three matched choice-aligned windows: Full [-1,+1), Before [-1,0), After [0,+1); prediction stays [-2,+2). Generalization retains seven targets; new mixed products add current_reward as target three. Both splits/outcomes and both lateralities are summarized. |
-| Source/tests | Baseline implementation complete; last recorded gate 237 passed in 17.73 s. New tests/source not started; no pytest gate rerun during planning. |
+| Source/tests | WP11 fixed windows/reward inputs implemented; 220 focused tests passed in 2.24 s; changed-file Ruff clean. WP12-WP15 pending. |
 | Documentation | Spec revision 4 is confirmed. This plan now specifies localized changes, v1/v2/v3 compatibility, test-first WP11-WP15 and the next handoff gate. Documentation edits are uncommitted. |
 | Existing user changes | Unstaged tracked: `src/main.py`, `src/neural_analysis/sync_ephys.py`; revision-4 spec edits are already present. Preserve these and unrelated untracked files. No staged file was reported at inspection. |
 | Team / writer | Current documentation chat is the sole writer; no worker launched. Implementation assignments: Sol orchestrator; at most one active worker, with bounded Luna integration/usage scope in Section 12. Runtime model/effort identity is not exposed to the agent. |
 | Running analysis | No process/worker launched by this planning revision. Prior preview liveness was not checked; do not infer it from the old log. |
 | Latest verification | Review identified the additional single_session_setup default-target consumer; WP11 and integration gates now include its regression. Document checks and evidence below cover the correction and explicit assignments. Historical baseline remains 237 tests/browser checks; no new code gate was run. |
-| Next action | Receiving implementation chat reads the entry points above. On implementation instruction, write WP11 tests, verify RED and commit tests before source. Preserve completed work and old products. |
+| Next action | Write WP12 versioned persistence tests, verify RED and commit tests before source. |
 
 ### 0.2 Package ledger
 
@@ -60,7 +60,7 @@ experimental visual acceptance belongs to the user.
 | WP8 runner/inspection extension | Lead | GREEN | `4c6ee75` runner; `1a54eb0` UI/chart; `9732b6d` counts; `01b0cc1` actual chart position | Runner `1a466c9`; UI `5b72147`; 216 integration tests and real browser checks | Complete. |
 | WP9 extension docs/validation | Lead + user | Docs/synthetic/browser complete; experimental acceptance pending | Required code RED gates complete | Updated usage guides; 216 passed; screenshots below | Separately requested CT026 mixed preparation and user inspection. |
 | WP10 performance/laterality | Lead | GREEN | `c381dda` scoring collection error; `beb4770` three UI failures; `05d0011` continuous caption failure | `86b7131` scoring; `c315ef4` UI; 237 integrated tests, Ruff and synthetic browser checks | Complete; no fits/archive migration required. |
-| WP11 windows/reward inputs | Sol orchestrator, direct writer | Planned | Not started | Not started | Fixed-window controls, shared target registration, preserved parser/scaffolder defaults, aligned preparation; Section 15. |
+| WP11 windows/reward inputs | Sol orchestrator, direct writer | GREEN | `f578d7b`; 26 failed/186 passed/6 setup errors; additional reward-local cases 2 failed. Metadata expectation correction `c03e763`. | 220 focused tests passed; changed-file Ruff clean; source commit follows this entry. | WP12 RED. |
 | WP12 versioned persistence | Sol orchestrator, direct writer | Planned | Not started | Not started | v3 publication and read-only v1/v2 compatibility. |
 | WP13 split/outcome scoring | Sol orchestrator, direct writer | Planned | Not started | Not started | Matched-window scores, exact split/outcome/side masks and reward counts. |
 | WP14 runner/view integration | Sol orchestrator; optional single Luna worker | Planned | Not started | Not started | One window per preparation, saved selection, labels and anchored navigation; Sol reviews/accepts. |
@@ -567,6 +567,26 @@ Next exact action, owner, and any missing authority:
   changed-document whitespace checks passed. No source/test edits, pytest,
   worker, experimental run, staging or commit. No further blocker found.
 - Next: stop after documentation review; WP11 RED awaits implementation instruction.
+
+### 2026-11-09 - WP11 / RED and GREEN
+
+- User instructed implementation; sole lead writer, no worker. No experimental
+  processing authorized or performed. Baseline HEAD f02deb1; preserve main/sync
+  user edits. Model/effort identity is not exposed to the current agent.
+- RED command: offline/frozen/no-sync uv with project UV/MPL caches, pytest -q
+  prediction test_config/test_preparation/test_modeling/test_contributions,
+  shared task_decoding test_config/test_targets and test_single_session_setup.
+  Result: 26 failed, 186 passed, 6 setup errors (new T=3 fixture against old T=2).
+  Additional unfit-reward test: 2 failed. Tests committed f578d7b before source.
+  Existing registry metadata expectation also needed the newly registered
+  target; observed failure then committed expectation update c03e763.
+- GREEN: same focused command, 220 passed in 2.24 s. All changed Python passed
+  Ruff. Weighted affine/logistic oracles cover Full/Before/After, total trial
+  weight one, full prediction coverage and selected-bin contribution scales.
+  Seeded independent state/action/reward recovery and local reward failures pass.
+- Source: fixed bin masks/controls and data record window; same-row exact
+  binary reward registration; preserved parser and scaffolder default tuple.
+  No fitter computation/API changes or new dependency. Next: WP12 RED.
 
 ## 1. Outcome and boundaries
 

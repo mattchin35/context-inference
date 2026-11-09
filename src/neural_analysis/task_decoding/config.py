@@ -21,7 +21,7 @@ CONDITION_IDENTIFIERS = (
     "switch",
     "stay",
 )
-TARGET_IDENTIFIERS = (
+DEFAULT_TARGET_IDENTIFIERS = (
     "current_state",
     "current_action",
     "current_action_is_correct",
@@ -41,6 +41,7 @@ TARGET_IDENTIFIERS = (
     "hmm_decay_signed_belief",
     "relative_doubt",
 )
+TARGET_IDENTIFIERS = (*DEFAULT_TARGET_IDENTIFIERS, "current_reward")
 
 WINDOW_START_SECONDS = -2.0
 WINDOW_END_SECONDS = 2.0
@@ -264,7 +265,11 @@ TARGET_DEFINITIONS = (
         "relative_doubt_index",
         "source",
     ),
+    TargetDefinition(
+        "current_reward", "categorical", "Current reward", "reward", "source", "rewarded"
+    ),
 )
+
 TARGET_DEFINITION_BY_IDENTIFIER = MappingProxyType(
     {definition.identifier: definition for definition in TARGET_DEFINITIONS}
 )
@@ -556,7 +561,7 @@ def _parse_target_names(value: object) -> tuple[str, ...]:
         If identifiers are aliases, duplicated, unknown, or malformed.
     """
     if value is None:
-        return TARGET_IDENTIFIERS
+        return DEFAULT_TARGET_IDENTIFIERS
     if not isinstance(value, list) or not value:
         raise ValueError("target_names must be a nonempty JSON list.")
     if any(not isinstance(name, str) for name in value):

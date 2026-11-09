@@ -19,7 +19,7 @@ from src.neural_analysis import session_metadata, session_metadata_cli
 from src.neural_analysis.interregional.configuration import load_interregional_config
 from src.neural_analysis.task_decoding.config import (
     CONDITION_IDENTIFIERS,
-    TARGET_IDENTIFIERS,
+    DEFAULT_TARGET_IDENTIFIERS,
     load_task_decoding_config,
 )
 from src.neural_analysis.task_decoding.pooled.config import load_pooled_decoding_config
@@ -173,7 +173,7 @@ def _task_payload(pfc_probe_id: str, hpc_probe_id: str) -> dict[str, object]:
         "bin_width_ms": 100,
         "pfc_pc_count": 10,
         "hpc_pc_count": 10,
-        "target_names": list(TARGET_IDENTIFIERS),
+        "target_names": list(DEFAULT_TARGET_IDENTIFIERS),
         "condition_names": list(CONDITION_IDENTIFIERS),
         "regularization_mode": "fixed",
         "outer_fold_count": 5,

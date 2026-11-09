@@ -22,6 +22,7 @@ _CATEGORICAL_CLASS_LABELS = {
     "current_state": {"0": "right", "1": "left"},
     "current_action": {"0": "right", "1": "left"},
     "current_action_is_correct": {"0": "incorrect", "1": "correct"},
+    "current_reward": {"0": "unrewarded", "1": "rewarded"},
     "previous_action": {"0": "right", "1": "left"},
     "previous_action_was_rewarded": {"0": "unrewarded", "1": "rewarded"},
     "next_action": {"0": "right", "1": "left"},
@@ -296,7 +297,7 @@ def validate_augmented_trials(
             if (present & ~numeric.isin([0.0, 1.0, 2.0])).any():
                 raise ValueError("state_int must contain 0, 1, or known dark state 2.")
             continue
-        if target_name == "current_action_is_correct":
+        if target_name in {"current_action_is_correct", "current_reward"}:
             _validate_binary_column(source, definition.source_column)
             continue
         if target_name == "previous_action_was_rewarded":
@@ -459,7 +460,7 @@ def build_target_table(
         elif target_name == "current_action":
             valid = action_is_choice
             values.loc[valid] = action_values.loc[valid]
-        elif target_name == "current_action_is_correct":
+        elif target_name in {"current_action_is_correct", "current_reward"}:
             source = _numeric_source_column(
                 working_df,
                 numeric_cache,
