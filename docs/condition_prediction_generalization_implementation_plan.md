@@ -1,14 +1,13 @@
 # Condition Generalization and Mixed-Outcome Decoding: Implementation Handoff
 
-Status: revision-4 implementation reference updated 2026-11-09; new work is
-planned, not implemented. The Full-window seven-target generalization and
-two-target mixed baseline, including performance/laterality, is complete
-(last recorded integration gate: 237 tests). WP11-WP15 specify Before/After,
-actual reward and split-by-outcome scoring. Original experimental acceptance
-gates remain recorded; this planning request runs no analyses. Keep this filename.
-Start with Section 0.1, the contracts in Sections 1-8, then WP11-WP15 in
-Section 15. Section 0.4 preserves chronological evidence; Sections 13-14 are
-short completed-baseline summaries, not new work instructions.
+Status: revision-4 implementation complete through synthetic/browser validation,
+2026-11-09. Full/Before/After fits, actual reward as the third mixed target,
+and split/outcome/laterality performance are implemented. Integration gate:
+408 tests passed, including Node chart checks. Original and new experimental
+acceptance gates remain recorded; no new experimental preparation was run.
+Keep this filename. Start with Section 0.1; Sections 1-8 and 15 retain the
+implemented contracts and test-first package reference. Section 0.4 preserves
+chronological evidence; Sections 13-14 summarize the completed baseline.
 
 Read the [scientific spec](condition_prediction_generalization_spec_v1.md),
 [SoftwareDesign.md](SoftwareDesign.md), and repository `AGENTS.md` before
@@ -28,16 +27,16 @@ checkpointing to this analysis.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-09 / `refactor` / `04ca54d`. Earlier computational commits remain in the evidence log; recheck checkout state on resumption. |
-| Phase / authorization | WP11-WP13 GREEN under user implementation authority; WP14 runner/view next. No experimental preparation authorized. |
+| Date / branch / inspected HEAD | 2026-11-09 / `refactor` / computational HEAD `12c06f9`, before final documentation commit. Recheck checkout state on resumption. |
+| Phase / authorization | User authorized WP11-WP15 implementation. Code/synthetic/browser gates complete; new experimental preparation is not authorized and remains separate. |
 | Scientific settings | Three matched choice-aligned windows: Full [-1,+1), Before [-1,0), After [0,+1); prediction stays [-2,+2). Generalization retains seven targets; new mixed products add current_reward as target three. Both splits/outcomes and both lateralities are summarized. |
-| Source/tests | WP11 fixed windows/reward inputs implemented; 220 focused tests passed in 2.24 s; changed-file Ruff clean. WP12-WP15 pending. |
-| Documentation | Spec revision 4 is confirmed. This plan now specifies localized changes, v1/v2/v3 compatibility, test-first WP11-WP15 and the next handoff gate. Documentation edits are uncommitted. |
-| Existing user changes | Unstaged tracked: `src/main.py`, `src/neural_analysis/sync_ephys.py`; revision-4 spec edits are already present. Preserve these and unrelated untracked files. No staged file was reported at inspection. |
-| Team / writer | Current documentation chat is the sole writer; no worker launched. Implementation assignments: Sol orchestrator; at most one active worker, with bounded Luna integration/usage scope in Section 12. Runtime model/effort identity is not exposed to the agent. |
-| Running analysis | No process/worker launched by this planning revision. Prior preview liveness was not checked; do not infer it from the old log. |
-| Latest verification | Review identified the additional single_session_setup default-target consumer; WP11 and integration gates now include its regression. Document checks and evidence below cover the correction and explicit assignments. Historical baseline remains 237 tests/browser checks; no new code gate was run. |
-| Next action | WP14 RED tests; sole optional Luna worker owns runners/test_scripts, lead owns plotting/view tests/source. |
+| Source/tests | WP11-WP14 implemented; 408 integration tests passed in 27.02 s, including Node checks; changed-file Ruff clean. No new dependencies. |
+| Documentation | Spec/plan and three existing usage guides describe implemented v3 windows/reward/scoring and read-only v1/v2 contracts. Validation evidence below. |
+| Existing user changes | Unstaged tracked: `src/main.py`, `src/neural_analysis/sync_ephys.py`; preserved. Unrelated untracked files are untouched. |
+| Team / writer | Lead performed Sol orchestrator role and scientific/view work; sole Luna worker `/root/runner_integration` (`gpt-6-luna`, medium) handled bounded runner/usage work and is now idle. No overlapping workers. Lead runtime model/effort identity is not exposed. |
+| Running analysis | No analysis running. Synthetic loopback preview (8518, exec 4136) stopped and both temporary browser tabs closed. No experimental, cluster or batch processing. |
+| Latest verification | 408 tests passed; Ruff/whitespace clean. Saved-only browser verified all windows, cross-resolution pan, bounded reset, unprepared-window anchor, reward/class labels, both regional contributions and continuous scores. |
+| Next action | User review. New experimental validation requires a separately scoped instruction; do not restart completed implementation or automatically rerun Full results. |
 
 ### 0.2 Package ledger
 
@@ -60,11 +59,11 @@ experimental visual acceptance belongs to the user.
 | WP8 runner/inspection extension | Lead | GREEN | `4c6ee75` runner; `1a54eb0` UI/chart; `9732b6d` counts; `01b0cc1` actual chart position | Runner `1a466c9`; UI `5b72147`; 216 integration tests and real browser checks | Complete. |
 | WP9 extension docs/validation | Lead + user | Docs/synthetic/browser complete; experimental acceptance pending | Required code RED gates complete | Updated usage guides; 216 passed; screenshots below | Separately requested CT026 mixed preparation and user inspection. |
 | WP10 performance/laterality | Lead | GREEN | `c381dda` scoring collection error; `beb4770` three UI failures; `05d0011` continuous caption failure | `86b7131` scoring; `c315ef4` UI; 237 integrated tests, Ruff and synthetic browser checks | Complete; no fits/archive migration required. |
-| WP11 windows/reward inputs | Sol orchestrator, direct writer | GREEN | `f578d7b`; 26 failed/186 passed/6 setup errors; additional reward-local cases 2 failed. Metadata expectation correction `c03e763`. | 220 focused tests passed; changed-file Ruff clean; source commit follows this entry. | WP12 RED. |
-| WP12 versioned persistence | Sol orchestrator, direct writer | GREEN | `2c5bd2e`; 21 failed/22 passed. | 43 persistence tests passed in 3.11 s; changed-file Ruff clean. | WP13 RED. |
-| WP13 split/outcome scoring | Sol orchestrator, direct writer | GREEN | `f104d2a`; 12 failed/16 passed. | Scoring + persistence: 71 passed in 6.40 s; Ruff clean. | WP14 runner/view RED. |
-| WP14 runner/view integration | Sol orchestrator; optional single Luna worker | Planned | Not started | Not started | One window per preparation, saved selection, labels and anchored navigation; Sol reviews/accepts. |
-| WP15 docs/integration/acceptance | Sol orchestrator + user; optional same Luna worker for usage docs | Planned | Not started | Not started | Sol owns synthetic/browser checks; user inspects explicitly authorized experimental validation. |
+| WP11 windows/reward inputs | Sol orchestrator, direct writer | Complete | `f578d7b`, `c03e763`; RED evidence below. | `ade2b88`; 220 focused tests; integrated gate 408. | Complete. |
+| WP12 versioned persistence | Sol orchestrator, direct writer | Complete | `2c5bd2e`; 21 failed/22 passed; follow-up `31f1a45`. | `9274281`, `12c06f9`; 45 persistence tests; integrated gate 408. | Complete. |
+| WP13 split/outcome scoring | Sol orchestrator, direct writer | Complete | `f104d2a`; 12 failed/16 passed. | `0c0244b`, `12c06f9`; direct scoring oracles and integrated gate 408. | Complete. |
+| WP14 runner/view integration | Sol orchestrator; sole Luna runner worker | Complete | `f400505`, `8d06670`, `9884e0f`; evidence below. | `12c06f9`; integrated gate 408 plus actual browser checks. | Complete. |
+| WP15 docs/integration/acceptance | Sol orchestrator + user; same Luna usage worker | Code/docs/synthetic/browser complete; experimental acceptance pending | Required RED gates complete. | Updated guides; 408 tests, Ruff, saved-only browser evidence below. | Separately authorized experimental validation and user inspection. |
 
 ### 0.3 Resume and interruption procedure
 
@@ -617,6 +616,79 @@ Next exact action, owner, and any missing authority:
 - Next: WP14 bounded runner/CLI worker and lead plotting/view integration,
   one active worker maximum. No experimental fit or background analysis.
 
+### 2026-11-09 - WP14-WP15 / integrated GREEN and saved-only browser acceptance
+
+- Lead performed Sol orchestration and scientific/plot/view review. The sole
+  worker was /root/runner_integration, gpt-6-luna medium, limited to runners/
+  test_scripts and then the three usage guides. No worker-created agents or
+  overlapping workers. Lead verified RED and committed tests before authorizing
+  worker GREEN. All source reviewed and committed as 12c06f9.
+- Runner RED: project-cache/offline uv pytest -q prediction/test_scripts.py
+  --tb=short --show-capture=no: 8 failed, 5 passed in 1.21 s; tests 8d06670.
+  Corrected a genuine test error (100-ms Before has 10 bins) and retained the
+  original Full test cases alongside Before/After. Canonical-window/summary
+  follow-up RED: 4 failed, 11 passed in 2.73 s; tests 9884e0f. Final focused
+  runner suite: 15 passed in 2.98 s. Metadata uses training_window_s and
+  scoring_window_s consistently; no redundant bounds aliases.
+- View/plot RED: prediction/test_plotting.py plus test_session_prediction_webapp.py,
+  14 failed, 11 passed in 7.08 s; legacy-only case also failed. Tests f400505.
+  Follow-up positive reward-probability hover RED: 2 failed; tests 9884e0f.
+  The old UI test's table selector was ambiguous once laterality gained Split;
+  corrected it to select the fold table, without weakening metric assertions.
+  GREEN plotting/view/scoring/timeline-plotting: 83 passed in 16.27 s.
+- Persistence review found fractional binary actual labels were accepted by
+  the saved validator. Follow-up RED: 1 failed, 1 passed in 0.28 s; tests
+  31f1a45 (also explicit v3 T=2 rejection). Exact 0/1 validation added;
+  full persistence suite 45 passed in 3.58 s. No migration or fallback added.
+- Final integration command (all actual paths, no skipped Node checks):
+
+```bash
+UV_CACHE_DIR=.pytest_cache/uv MPLCONFIGDIR=.pytest_cache/matplotlib \
+NODE_BINARY=/home/matt/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node \
+uv run --frozen --no-sync --offline pytest -q \
+  src/tests/neural_analysis/task_decoding/session_prediction \
+  src/tests/neural_analysis/task_decoding/test_config.py \
+  src/tests/neural_analysis/task_decoding/test_targets.py \
+  src/tests/neural_analysis/test_single_session_setup.py \
+  src/tests/neural_analysis/test_session_prediction_webapp.py \
+  src/tests/neural_analysis/test_session_timeline.py \
+  src/tests/neural_analysis/test_session_timeline_io.py \
+  src/tests/neural_analysis/test_timeline_plotting.py \
+  src/tests/neural_analysis/test_session_timeline_webapp.py \
+  src/tests/neural_analysis/test_session_timeline_scripts.py \
+  src/tests/neural_analysis/test_timeline_chart.py --tb=short --show-capture=no
+```
+
+- Result: 408 passed in 27.02 s. Changed Python Ruff passed; whitespace clean.
+  Final post-gate edits were docstrings and a background-caption clarification
+  only. No broader neural suite, dependency, numerical fitter rewrite or JS
+  subsystem was needed.
+- Browser: loopback-only Streamlit 8518, exec 4136, using ignored saved-only
+  synthetic copies in .pytest_cache/revision4_saved_preview and
+  .pytest_cache/revision4_unprepared_preview. No raw inputs copied. Browser
+  pan showed ticks 40/60/80 across Full 500 -> Before 100 -> mixed Before 20
+  -> After 500 and adding weighted PC rows. Both regional reward axes read
+  P(rewarded); signed contributions read log-odds and gaps remained blank.
+  Panning After to ticks 100/120/140 then switching to bounded Before 20
+  (loaded -1..121 s) reset to the control-selected 1..61 s, ticks 20/40/60.
+- Before-only saved session initialized to mixed/Before. Selecting unprepared
+  After retained the 20-ms behavior/PCA background, disabled recomputation and
+  suppressed prediction/actual/weighted overlays; ordinary PC activity remained.
+  Training scoring switched from pooled held-out to Fold 0. Outcome and both
+  side groupings retained counts and undefined metrics. Continuous generalization
+  showed negative R2 and native RMSE for PFC/HPC without binary advice.
+- Proof images (ignored, synthetic values only):
+  .pytest_cache/revision4_reward_browser.png,
+  .pytest_cache/revision4_training_browser.png,
+  .pytest_cache/revision4_continuous_browser.png.
+  No browser errors observed; Streamlit's bundled tooltip emitted its existing
+  preventOverflow/hide console warnings on dropdown use. No dependency modified.
+  Both temporary tabs closed and preview stopped. No background jobs remain.
+- Usage/spec/plan updated for implemented contracts, exact commands and class
+  counts from actual labels. Original evidence retained; main/sync user work
+  untouched. No experimental fits, batch, transfer, push or scientific-acceptance
+  claim. New CT026 preparation and user inspection remain separately scoped.
+
 ## 1. Outcome and boundaries
 
 Retain individual choice-window predictions beneath the existing session
@@ -702,7 +774,7 @@ Interpretation to retain in captions/summary:
 
 Existing package files and tests reside under `task_decoding/session_prediction/`
 in the source and `src/tests/neural_analysis/` trees respectively. The table
-records the pending revision-4 ownership. Completed baseline references remain
+records the revision-4 ownership. Completed baseline references remain
 in Sections 13-14; Section 15 gives the new test-first gates.
 
 | Owner / package | Source responsibility | New tests |
@@ -1423,15 +1495,13 @@ implied. User inspection precedes processing further sessions.
 
 ## 11. Implementation authorization
 
-The earlier implementation authority covered the completed Full-window
-baseline. The current request expands the revision-4 implementation plan;
-it does not begin code or experimental processing. On implementation
-instruction, proceed through WP11-WP15 without repeated package-level approval.
-Record whether that instruction includes designated CT026 validation; when
-included, do not ask for the same permission again. No broader sessions,
-batch, cluster submission/resource change or transfer is implicit. Record
-actual authority in Section 0; historical experimental authority does not
-authorize a new run by itself.
+The user authorized revision-4 implementation on 2026-11-09. WP11-WP15 code,
+usage documentation, synthetic and browser checks are complete. This instruction
+did not include new experimental preparation. The designated CT026 validation
+and user inspection therefore remain pending. No broader sessions, batch,
+cluster submission/resource change or transfer is implicit. Later explicit
+experimental authority should be recorded in Section 0 and acted on without
+asking for the same permission again.
 
 ## 12. Sol orchestrator and single-worker handoff rules
 
@@ -1484,7 +1554,8 @@ Full-only/held-out-only implementation instructions.
 
 ## 15. Revision 4: window/reward expansion and handoff gates
 
-This is the pending implementation sequence. The design follows
+This implemented sequence is retained as a test-first reference; use the
+ledger for current status and do not restart completed packages. The design follows
 SoftwareDesign.md's function-first composition and KISS/YAGNI guidance:
 configuration selects fixed targets/bounds; preparation builds arrays/masks;
 the existing fitter consumes them; persistence owns version compatibility;

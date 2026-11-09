@@ -172,19 +172,24 @@ and `live` remains the only compute-capable source.
 ## Session timeline and PCA
 
 The same view also supports explicitly prepared condition prediction tracks.
-Choose **Analysis**: **Correct-rewarded generalization** retains seven readouts;
-**Mixed-outcome decoding** fits only state/action using correct-rewarded,
-correct-omission and incorrect trials. Click **Prepare predictions** with the
-desired mode/probes/bin width, then select a saved target and optional raw or
-weighted PC heatmaps. These offline readouts train on `[-1,+1)` bins and predict block-held-out `[-2,+2)`
-choice windows using all saved session PCs. PCA includes held-out neural data.
-Preparation requires the existing task-decoding behavioral config; saved
-display requires only metadata, the prediction run and its exact referenced
-PCA archive. Modes are saved separately; legacy v1 products remain readable.
-Mixed comparisons also change sample size and relative regularization at fixed C.
-The **Prediction performance** panel adds trial-mean training/held-out scores,
-outcome breakdowns, and separate left/right choice and state/context comparisons
-with counts. It uses existing saved models without refitting.
+Choose **Analysis**: correct-rewarded generalization has seven targets;
+mixed-outcome decoding has state, action, and current-trial actual reward,
+trained on correct-rewarded, correct-omission, and incorrect trials. Choose one
+**Training/scoring window**: Full `[-1,+1)`, Before `[-1,0)`, or After `[0,+1)`
+seconds. Each window predicts the full `[-2,+2)` choice window using the same
+saved PCA and block folds. Click **Prepare predictions** for one mode/window
+pair, then select a target and optional raw or weighted PC heatmaps. PCA includes
+held-out neural data. Saved display requires only metadata, the prediction run
+and its exact referenced PCA archive. Legacy v1/v2 Full-window products remain
+readable; old mixed products have no reward target and require explicit Prepare
+for expanded reward decoding. The **Prediction performance** panel reports
+training/held-out, per-fold, outcome, and left/right choice and state/context
+scores with counts. Single-class groups retain accuracy but have no balanced
+accuracy. Reward is the current trial's recorded outcome; Before predicts
+eventual reward, not subjective expectation, and After is not necessarily
+post-delivery. Reward class counts use actual outcome labels; performance
+thresholds apply only to predictions. Mixed comparisons also change sample size and relative
+regularization at fixed C.
 See [prediction usage](SESSION_TIMELINE.md#condition-prediction-tracks).
 
 Select **Session timeline and PCA** in the metadata-driven webapp to inspect

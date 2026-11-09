@@ -344,23 +344,39 @@ portable PCA references and scientific identities. `run_session.py` and
 `run_batch.py` compose preparation; `plotting.py` contains display-only helpers.
 Two fixed modes share the same source PCA and full-table block map:
 `correct_rewarded_generalization` (default seven targets) and
-`mixed_outcome_decoding` (state/action only, training on correct-rewarded,
-correct-omission and incorrect trials). Pass `--analysis-mode` to either runner
-or select **Analysis** in the timeline. Each mode has its own saved identity;
-the mixed product does not refit the original targets or matching PCA.
-New v2/schema-2 products persist explicit training membership; original
-v1/schema-1 archives load read-only as correct-rewarded generalization.
+`mixed_outcome_decoding` (state, action, and current-trial actual reward,
+training on correct-rewarded, correct-omission, and incorrect trials; up to 30
+models per window across both regions/five folds). Each preparation selects
+exactly one matched **Training/scoring window**: Full `[-1,+1)`, Before `[-1,0)`,
+or After `[0,+1)` choice-relative seconds. All predict within the full `[-2,+2)`
+choice windows and leave intertrial gaps unpredicted. Set `training_window` to
+`full` (default), `before`, or `after` in
+`session_prediction_config.json`, or pass `--training-window {full,before,after}`
+to the session or batch runner. Each command prepares one mode/window pair;
+other pairs are explicit separate preparations. All windows reuse matching PCA
+and the same deterministic full-table block folds.
+
+New products use v3/schema 3 and persist explicit training membership and
+matched scoring bounds. Original v1/schema-1 and v2/schema-2 Full-window
+products remain read-only displayable with their original contents and bytes;
+v1 is seven-target generalization, while v2 can be seven-target generalization
+or two-target mixed decoding without reward. To display current-trial reward,
+explicitly Prepare the expanded mixed product. There is no automatic rerun.
 At fixed C, mixed training changes sample size and regularization relative to
 average loss as well as outcome composition; it is not a controlled comparison
 of composition alone.
 
-`scoring.py` derives selected-target trial-mean performance from these saved
-products, averaging probabilities/values over `[-1,+1)` s. It reports binary
-accuracy/balanced accuracy, numerical R2/RMSE, exact per-fold training/matching
-test scores, pooled held-out outcome summaries, and left/right choice and
-state/context scores/counts/differences. The existing timeline performance
-panel caches only the small summaries; no fitting, raw reads, archive rewrite,
-or change to scientific fit identity is required.
+`scoring.py` derives selected-target trial-mean performance from saved
+products, averaging probabilities/values over the selected matched window. It
+reports training/held-out, per-fold training/held-out, outcome, and separate
+left/right choice and state/context scores and counts. Reward reports class
+counts from actual recorded labels and mean `P(rewarded)`; prediction thresholds
+do not define those class counts. Single-class groups retain ordinary accuracy
+and counts while balanced accuracy is unavailable. Actual reward is the current
+trial's recorded reward flag. Before predicts eventual recorded reward, not
+subjective expectation; After is post-choice, not necessarily post-delivery.
+The existing timeline panel caches only small summaries; it does not fit, read
+raw inputs, rewrite archives, or change scientific fit identity.
 
 This path preserves the existing decoder's models, pooled `full` window and
 saved schemas. Existing target-loader callers remain strict by default;

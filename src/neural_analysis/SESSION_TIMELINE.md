@@ -505,25 +505,36 @@ alternatively set `NODE_BINARY` to its executable.
 
 ## Condition prediction tracks
 
-Choose **Analysis**, then **Prepare predictions** to fit one mode on the selected
-regional session PCs:
+Choose **Analysis**, then **Prepare predictions** to fit one mode/window pair
+on the selected regional session PCs:
 
 - **Correct-rewarded generalization** (default): seven task readouts trained on
   correct-rewarded trials. Binary tracks are **State generalization** and
   **Action generalization**.
-- **Mixed-outcome decoding**: separate **State decoding** and **Action decoding**
+- **Mixed-outcome decoding**: **State decoding**, **Action decoding**, and
+  **Reward decoding**
   classifiers trained on the union of correct-rewarded, correct-omission, and
-  incorrect trials. It fits only these two targets, up to 20 models across
-  both regions/five folds; generalization fits up to 70.
+  incorrect trials. Actual reward is the current trial's recorded reward flag
+  (`1=rewarded`, `0=unrewarded`); correctness is not a substitute. It fits
+  three targets, up to 30 models across both regions/five folds; generalization
+  fits up to 70.
+
+Each preparation fits exactly one **Training/scoring window**: **Full**
+`[-1,+1)`, **Before** `[-1,0)`, or **After** `[0,+1)` seconds relative to
+choice. The same interval defines supervised fitting and trial-mean scoring.
+All variants still predict the full `[-2,+2)` choice window and leave gaps
+between choices unpredicted. They use the matching saved session PCA and the same
+deterministic full-table five-fold behavioral-block assignment.
 
 Preparation requires the session's existing
 `task_decoding_config.json`, augmented trial CSV, and behavioral feature-parameter
 JSON. The optional `session_prediction_config.json` accepts only
-`base_config_path`, `bin_width_ms`, and `analysis_mode`; defaults are the sibling
-base config, 500 ms, and `correct_rewarded_generalization`. The other mode ID is
-`mixed_outcome_decoding`. The GUI's selected mode, probes, and bin width override
-preparation defaults. Mixed mode does not require the continuous source columns,
-but still requires the base config and feature-parameter JSON.
+`base_config_path`, `bin_width_ms`, `analysis_mode`, and `training_window`;
+defaults are the sibling base config, 500 ms,
+`correct_rewarded_generalization`, and `full`. The other mode ID is
+`mixed_outcome_decoding`. The GUI's selected mode, window, probes, and bin width
+override preparation defaults. Mixed mode does not require the continuous
+source columns, but still requires the base config and feature-parameter JSON.
 The base loader still validates its full decoder config, including both region
 blocks; an invalid unused setting must be corrected in that input config.
 
@@ -540,7 +551,11 @@ PCA/results are reused. Missing PCA is prepared only on an explicit preparation
 request. `--rerun` creates another prediction run and retains the same compatible
 PCA; it does not overwrite either old output. The batch counterpart is
 `src.neural_analysis.task_decoding.session_prediction.run_batch --session-list
-/path/to/sessions.txt`, with the same mode/probe/bin, dry-run and rerun options.
+/path/to/sessions.txt`, with the same mode/window/probe/bin, dry-run and rerun
+options. Both commands accept `--training-window full`, `--training-window
+before`, or `--training-window after`; omission uses the controls-file value or
+Full default. One command prepares one mode and one window. Other windows and
+modes require explicit preparation and are never fit automatically.
 
 For mixed decoding, add `--analysis-mode mixed_outcome_decoding` to either CLI.
 For example:
@@ -551,8 +566,9 @@ uv run python -m src.neural_analysis.task_decoding.session_prediction.run_sessio
   --analysis-mode mixed_outcome_decoding --bin-width-ms 500 --dry-run
 ```
 
-Each saved product contains one mode; preparing mixed decoding reuses matching
-PCA and preserves the existing generalization product. It does not fit both modes.
+Each saved product contains one mode/window pair; preparing mixed decoding or
+another window reuses matching PCA and preserves existing products. It does not
+fit the other mode or windows.
 
 In **Session timeline and PCA**, enable **Show predictions**, select the saved
 run and target, and optionally select raw PC scores or weighted contributions.
@@ -565,17 +581,23 @@ binary class counts, and intercepts. Counts describe the saved training masks;
 they do not trigger balancing or subsampling.
 
 Open **Prediction performance** for the selected saved target. Scores use one
-value per trial: mean prediction over `[-1,+1)` s. State/action use mean left
-probability followed by a 0.5 threshold, with accuracy and balanced accuracy
-shown as percentages. Continuous targets show R2 and RMSE in target units.
-The panel covers the whole saved session, independently of pan or visible PCs.
+value per trial: mean prediction over the saved Training/scoring window.
+State/action use mean left probability; reward uses mean `P(rewarded)`. Apply
+the 0.5 threshold to predictions for accuracy and balanced accuracy. Class 0/1
+counts come from actual target labels (rewarded/unrewarded for reward), not
+thresholded predictions.
+Single-class groups retain ordinary accuracy and counts; balanced accuracy is unavailable.
+Continuous targets show R2 and RMSE in target units. The panel covers the whole
+saved session, independently of pan or visible PCs.
 
-The held-out table separates all eligible choices, the mode's training
-outcomes, correct-rewarded, correct-omission and incorrect trials. Expand
-**Training / test by fold** to compare each fit's exact training trials with
-its held-out training outcomes. Training sets overlap, so their counts and
-scores are shown per fold rather than pooled as independent trials. Pooled
-held-out scores use each trial's own held-out model and count it once per region.
+Use **Scoring split** to choose training or held-out scores. **Scoring fold**
+offers folds 0-4 for per-fold inspection and, for held-out scores, a pooled view.
+Training shows only rows used to fit that fold's model; training folds are never
+pooled. In generalization, training omission/incorrect outcome intersections
+are empty because those outcomes were not fit. Per-fold tables retain outcome
+summaries. Reward class 0/1 counts always come from actual recorded labels, not
+thresholded predictions. Pooled held-out scores use each trial's own held-out
+model and count it once per region.
 
 For laterality, select **Laterality scoring population** and compare left/right
 **Choice** and **State/context** rows separately for PFC and HPC. Counts and
@@ -590,14 +612,15 @@ accuracy, constant/singleton targets still have RMSE, and zero-trial groups
 are not assigned zero performance. Missing actual targets, invalid baseline,
 missing blocks and unavailable models are excluded from scoring; missing side
 labels affect only that split. This does not remove otherwise usable timeline
-predictions. Performance is cached from existing v1/v2 products and saved
+predictions. Performance is cached from v1/v2/v3 products and saved
 coefficients/PCA, without refitting, raw inputs, new files or schema migration.
 
-The Analysis selector filters saved runs and targets. A selected mode with no
-saved result stays unprepared; the last saved behavior/PCA background remains
-visible with its actual bin width, while all predictions, actual-target overlays,
-and weighted contributions are hidden. Hiding prepared predictions also retains
-the saved background. These paths work without raw inputs and never fit.
+The Analysis and Training/scoring window selectors filter saved runs and targets.
+A selected mode/window pair with no saved result stays unprepared; the last saved
+behavior/PCA background remains visible with its actual bin width, while all
+predictions, actual-target overlays, and weighted contributions are hidden.
+Hiding prepared predictions also retains the saved background. These paths work
+without raw inputs and never fit.
 
 Switching modes or saved PCA configurations preserves horizontal navigation,
 including browser pan. PC controls follow the displayed saved basis. With
@@ -605,8 +628,10 @@ including browser pan. PC controls follow the displayed saved basis. With
 the destination loaded interval resets to the control-selected interval; the
 caption identifies the loaded bounds. Use Window start or Jump to load elsewhere.
 
-Training pools the selected mode's eligible bins in `[-1,+1)` seconds; predictions occupy
-the full `[-2,+2)` choice window with intertrial gaps. One shared deterministic
+Training pools the selected mode's eligible bins in the chosen Full
+`[-1,+1)`, Before `[-1,0)`, or After `[0,+1)` seconds; scoring uses the same
+interval. Predictions occupy the unchanged full `[-2,+2)` choice window with
+intertrial gaps. One shared deterministic
 five-fold behavioral-block assignment excludes the destination block from
 supervised training. Missing actual values do not prevent predictions; missing
 blocks do. Entirely missing continuous targets remain selectable with explicit
@@ -631,6 +656,11 @@ trials reduce regularization relative to average loss. Mode differences do not
 isolate outcome composition. No class/outcome balancing or penalty rescaling
 is applied.
 
+Actual reward decoding predicts the current trial's recorded reward flag.
+Before predicts eventual recorded reward, not subjective expectation. After is
+post-choice, not necessarily post-delivery. Reward overlays show trial labels,
+not delivery-event timing.
+
 Runs live under `analysis_runs/condition_session_prediction_*`, with named-array
 `results.npz`, small `config.json`, logs, summary, runner copies and computational
 source snapshots. For a copied session, retain the prediction directory and
@@ -639,10 +669,14 @@ Saved display then needs only metadata and these products, even without raw
 behavior/spikes or the original machine paths. Current preparation widgets do
 not relabel a saved result as another resolution or basis. Viewing and target,
 event, PC or navigation changes do not refit or write analysis products.
-New products use `condition-session-prediction-v2` / schema 2 and explicitly
-record mode, ordered targets, and training membership. Original v1/schema-1
-seven-target products remain selectable as correct-rewarded generalization;
-loading them preserves their bytes and identity without raw inputs or migration.
+New products use `condition-session-prediction-v3` / schema 3 and explicitly
+record mode, ordered targets, training membership, and matched training/scoring
+window bounds. Original v1/schema-1 and v2/schema-2 Full-window products remain
+selectable read-only. V1 has seven generalization targets; v2 retains its
+seven-target generalization or two-target mixed set. Legacy mixed products have
+no reward target. To view actual reward, explicitly Prepare the expanded
+product; legacy products are not automatically rerun. Loading old products
+preserves their bytes and identity without raw inputs or migration.
 
 Fine-resolution viewport filtering limits contributions and browser payloads;
 the current NPZ loader still loads full regional score arrays into memory.

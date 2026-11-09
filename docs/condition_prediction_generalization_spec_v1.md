@@ -1,14 +1,13 @@
 # Condition Generalization and Mixed-Outcome Decoding on the Session Timeline
 
 Status: scientific decisions confirmed, document revision 4, 2026-11-09.
-The existing Full-window, seven-target generalization and two-target mixed
-analyses, with saved-model performance/laterality, are implemented. This
-revision specifies the pending Before/After fits, third mixed target (actual
-reward), and training/held-out summaries by outcome. Those additions are not
-implemented by this documentation update. Original CT026 validation remains
-recorded in the linked plan; no new experimental preparation is authorized.
-Keep this existing filename. The implementation plan records the revision-3
-baseline and the pending revision-4 work packages for these additions.
+Full/Before/After fits, actual reward as the third mixed target, and training/
+held-out outcome/laterality summaries are implemented. Synthetic integration
+(408 tests) and saved-only browser checks are complete; the linked plan records
+the evidence. Original Full-window v1/v2 products remain inspectable under their
+original seven-/two-target contracts. No new experimental preparation was run;
+CT026 validation and user scientific/visual acceptance remain separate gates.
+Keep this existing filename and the revision-3 baseline evidence in the plan.
 
 Implementation plan and validation record:
 [condition_prediction_generalization_implementation_plan.md](condition_prediction_generalization_implementation_plan.md).
@@ -738,10 +737,11 @@ hyperparameter searches, new behavioral-model fits, significance testing,
 cross-window scoring matrices, reward-centered alignment, model-expectation
 targets, a third analysis mode, or new Slurm resource settings.
 
-The revision-3 baseline was implemented and checked on synthetic data/browser
-views; its recorded experimental scope is unchanged. This revision-4 request
-authorizes expanding the scientific spec. Implementation planning, source/test
-changes and experimental preparation for these additions are separate steps.
+The revision-3 baseline and its recorded experimental scope are preserved.
+The user subsequently authorized revision-4 implementation; source/test changes
+and synthetic/browser checks are complete. That instruction did not include new
+experimental preparation. The linked plan records the remaining validation and
+user-acceptance gates.
 
 ## 13. Confirmed expansion decisions, 2026-11-09
 
