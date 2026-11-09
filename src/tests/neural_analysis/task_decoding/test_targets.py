@@ -132,6 +132,31 @@ def test_validate_augmented_trials_reports_all_missing_columns_together(tmp_path
         assert column in message
 
 
+def test_current_reward_is_same_row_binary_with_independent_baseline(tmp_path):
+    """Reward is recorded trial-i outcome, including correct omissions and missing labels."""
+    trials = make_augmented_trial_df()
+    trials.loc[127, "reward"] = np.nan
+    original = trials.copy(deep=True)
+    result = build_target_table(tmp_path, trials, target_names=["current_reward"])
+    np.testing.assert_allclose(result.current_reward, [1, 1, 0, 0, 1, np.nan], equal_nan=True)
+    np.testing.assert_array_equal(result.current_reward_valid, [True, True, True, True, True, False])
+    np.testing.assert_array_equal(result.baseline_valid, [True, False, True, False, True, True])
+    metadata = result.attrs["target_metadata"]["current_reward"]
+    assert metadata["source_column"] == "reward"
+    assert metadata["positive_label"] == "rewarded"
+    assert metadata["class_labels"] == {"0": "unrewarded", "1": "rewarded"}
+    assert trials.equals(original)
+
+
+@pytest.mark.parametrize("value", [2, -1, 0.5, "broken", np.inf])
+def test_current_reward_rejects_malformed_present_labels(tmp_path, value):
+    """New reward uses exact binary validation, without changing shifted reward semantics."""
+    trials = make_augmented_trial_df().astype({"reward": object})
+    trials.loc[101, "reward"] = value
+    with pytest.raises(ValueError, match="reward"):
+        build_target_table(tmp_path, trials, target_names=["current_reward"])
+
+
 def test_selected_target_subset_requires_only_its_sources_and_selected_alignment(tmp_path):
     """Choice alignment should not require start time or unselected target columns."""
     config = make_config(tmp_path, target_names=["current_action"])

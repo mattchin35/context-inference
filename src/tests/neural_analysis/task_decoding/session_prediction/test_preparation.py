@@ -113,7 +113,7 @@ def test_opt_in_target_validation_preserves_strict_defaults(prediction_inputs):
 
 
 def test_mixed_membership_targets_and_shared_folds(prediction_inputs):
-    """Mixed N-by-2 targets retain canonical outcome unions and full-table folds."""
+    """Mixed N-by-3 targets retain canonical outcome unions and full-table folds."""
     base, trials, timeline = prediction_inputs
     trials.loc[105, "correct"] = 0
     trials.loc[105, "state_int"] = 1 - trials.loc[105, "action"]
@@ -127,10 +127,10 @@ def test_mixed_membership_targets_and_shared_folds(prediction_inputs):
     masks = build_condition_masks(trials, CONDITION_IDENTIFIERS)
     expected = (masks["correct_rewarded"] | masks["omission"] | masks["incorrect"])[positions]
     assert mixed.analysis_mode == "mixed_outcome_decoding"
-    assert mixed.target_names == ("current_state", "current_action")
-    assert mixed.target_families == ("categorical", "categorical")
-    np.testing.assert_array_equal(mixed.target_values, reference.target_values[:, :2])
-    np.testing.assert_array_equal(mixed.target_valid, reference.target_valid[:, :2])
+    assert mixed.target_names == ("current_state", "current_action", "current_reward")
+    assert mixed.target_families == ("categorical", "categorical", "categorical")
+    np.testing.assert_array_equal(mixed.target_values[:, :2], reference.target_values[:, :2])
+    np.testing.assert_array_equal(mixed.target_valid[:, :2], reference.target_valid[:, :2])
     np.testing.assert_array_equal(mixed.training_condition_mask, expected)
     np.testing.assert_array_equal(mixed.correct_rewarded, reference.correct_rewarded)
     np.testing.assert_array_equal(mixed.fold_ids, reference.fold_ids)
@@ -147,13 +147,50 @@ def test_mixed_membership_targets_and_shared_folds(prediction_inputs):
 
 
 def test_mixed_does_not_require_continuous_source_columns(prediction_inputs):
-    """Select two targets before shared validation; strict generalization stays intact."""
+    """Select three targets before shared validation; strict generalization stays intact."""
     base, trials, timeline = prediction_inputs
     trials = trials.drop(columns=[
         "Qlearning_rel_value", "FQlearning_rel_value", "HMM_rel_value_logodds",
         "HMM_rel_value_logodds_decay", "relative_doubt_index",
     ])
     mixed = prepare_prediction_inputs(trials, timeline, base, analysis_mode="mixed_outcome_decoding")
-    assert mixed.target_values.shape == (len(timeline.choices), 2)
+    assert mixed.target_values.shape == (len(timeline.choices), 3)
     with pytest.raises(ValueError, match="missing"):
         prepare_prediction_inputs(trials, timeline, base)
+
+
+@pytest.mark.parametrize("width", [500, 100, 50, 20])
+def test_three_supervised_masks_partition_full_at_zero(width):
+    """Half-open masks partition Full exactly, retaining the complete prediction grid."""
+    edges = choice_bin_edges(width / 1000)
+    masks = {window: training_bin_mask(edges, training_window=window)
+             for window in ("full", "before", "after")}
+    np.testing.assert_array_equal(masks["before"] | masks["after"], masks["full"])
+    assert not (masks["before"] & masks["after"]).any()
+    assert masks["full"].sum() == 2000 // width
+    assert masks["before"].sum() == masks["after"].sum() == 1000 // width
+    assert edges[1:][masks["before"]][-1] == 0
+    assert edges[:-1][masks["after"]][0] == 0
+    with pytest.raises(ValueError):
+        training_bin_mask(np.array([-2., -1., 0.1, 1., 2.]), training_window="before")
+
+
+def test_window_variants_share_eligibility_folds_and_source_scores(prediction_inputs):
+    """Windows restrict bins only; a missing reward affects labels and canonical membership independently."""
+    base, trials, timeline = prediction_inputs
+    trials.loc[105, "correct"] = 0
+    trials.loc[105, "reward"] = np.nan  # Incorrect membership does not require reward.
+    trials.loc[106, "reward"] = np.nan  # Correct but unknown outcome leaves the training union.
+    reference = prepare_prediction_inputs(trials, timeline, base, analysis_mode="mixed_outcome_decoding")
+    position = np.flatnonzero(timeline.choices.row_position.to_numpy() == 5)[0]
+    assert reference.training_condition_mask[position]
+    assert reference.target_valid[position, :2].all()
+    assert not reference.target_valid[position, 2]
+    assert not reference.training_condition_mask[timeline.choices.row_position.to_numpy() == 6].any()
+    for window in ("full", "before", "after"):
+        result = prepare_prediction_inputs(trials, timeline, base, analysis_mode="mixed_outcome_decoding", training_window=window)
+        assert result.training_window == window
+        for field in ("target_values", "target_valid", "baseline_valid", "fold_ids", "training_condition_mask"):
+            np.testing.assert_array_equal(getattr(result, field), getattr(reference, field))
+        for role, source in timeline.regions.items():
+            assert result.timeline.regions[role] is source

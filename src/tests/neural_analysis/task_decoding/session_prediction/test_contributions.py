@@ -26,9 +26,10 @@ def test_contributions_reconstruct_predictions_and_use_original_pc_ids(predictio
                                    region.scores[:, :, 2] * result.coefficients[target, folds, 2, None])
 
 
-def test_strength_uses_training_sd_and_order_is_fixed_with_rank_ties(prediction_inputs):
+@pytest.mark.parametrize("window", ["full", "before", "after"])
+def test_strength_uses_training_sd_and_order_is_fixed_with_rank_ties(prediction_inputs, window):
     """Saved rankings use pooled training rows; tied strengths prefer original PC rank."""
-    prepared = prepare_prediction_inputs(*prediction_inputs[1:], prediction_inputs[0])
+    prepared = prepare_prediction_inputs(*prediction_inputs[1:], prediction_inputs[0], training_window=window)
     result = fit_region(prepared)
     region = prepared.timeline.regions["PFC"]
     for target in range(7):
@@ -60,11 +61,11 @@ def test_color_limit_is_global_and_missing_fold_never_borrows_weights(prediction
 
 @pytest.mark.parametrize("role", ["PFC", "HPC"])
 def test_mixed_contributions_reconstruct_own_classifiers(mixed_inputs, role):
-    """Both mixed target axes reconstruct logits and retain their own global PC ranks."""
+    """All mixed target axes reconstruct logits and retain their own global PC ranks."""
     source = mixed_inputs.timeline.regions[role]
     model = fit_region(mixed_inputs, role, use_training_membership=True)
     folds = mixed_inputs.fold_ids[source.choice_positions]
-    for target in range(2):
+    for target in range(3):
         contributions = modeling.build_pc_contributions(source.scores, folds, model, target, (3, 1, 2))
         linear = contributions.sum(axis=2) + model.intercepts[target, folds, None]
         np.testing.assert_allclose(1 / (1 + np.exp(-linear)), model.predictions[:, :, target])

@@ -52,7 +52,7 @@ def test_mode_controls_override_and_fixed_target_sets(prediction_inputs):
     controls.write_text(json.dumps({"analysis_mode": "mixed_outcome_decoding"}))
     result = config.load_prediction_config(base.session_metadata_path)
     assert result.analysis_mode == "mixed_outcome_decoding"
-    assert config.target_names_for_mode(result.analysis_mode) == ("current_state", "current_action")
+    assert config.target_names_for_mode(result.analysis_mode) == ("current_state", "current_action", "current_reward")
     result = config.load_prediction_config(
         base.session_metadata_path, analysis_mode="correct_rewarded_generalization",
     )
@@ -88,3 +88,23 @@ def test_invalid_explicit_mode_fails(prediction_inputs):
     base, _, _ = prediction_inputs
     with pytest.raises(ValueError, match="mode"):
         config.load_prediction_config(base.session_metadata_path, analysis_mode="mixed")
+
+
+def test_supervised_window_defaults_and_precedence(prediction_inputs):
+    """Old controls retain Full; an explicit window overrides the saved setting."""
+    base, _, _ = prediction_inputs
+    assert config.load_prediction_config(base.session_metadata_path).training_window == "full"
+    controls = base.session_root / "session_prediction_config.json"
+    for window in ("full", "before", "after"):
+        controls.write_text(json.dumps({"training_window": window}))
+        assert config.load_prediction_config(base.session_metadata_path).training_window == window
+        assert config.load_prediction_config(base.session_metadata_path, training_window="before").training_window == "before"
+
+
+@pytest.mark.parametrize("window", [None, "pre_choice", "whole", "", 1, [-1, 0]])
+def test_invalid_supervised_windows_fail(prediction_inputs, window):
+    """Only the three fixed identifiers are scientific controls; arbitrary bounds fail."""
+    base, _, _ = prediction_inputs
+    (base.session_root / "session_prediction_config.json").write_text(json.dumps({"training_window": window}))
+    with pytest.raises(ValueError, match="window"):
+        config.load_prediction_config(base.session_metadata_path)

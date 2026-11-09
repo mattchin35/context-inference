@@ -126,7 +126,8 @@ def test_defaults_freeze_revision_five_target_order_and_fold_counts(tmp_path):
     """Defaults should expose the complete revision-5 target order and legal folds."""
     config, _, _ = load_config(tmp_path)
 
-    assert decoding_config.TARGET_IDENTIFIERS == CANONICAL_TARGETS
+    assert decoding_config.DEFAULT_TARGET_IDENTIFIERS == CANONICAL_TARGETS
+    assert decoding_config.TARGET_IDENTIFIERS == (*CANONICAL_TARGETS, "current_reward")
     assert tuple(config.target_names) == CANONICAL_TARGETS
     assert decoding_config.CONDITION_IDENTIFIERS == CANONICAL_CONDITIONS
     assert tuple(config.condition_names) == ("all",)

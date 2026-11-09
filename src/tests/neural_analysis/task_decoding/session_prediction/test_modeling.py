@@ -23,9 +23,10 @@ def fit_region(prepared, role="PFC", *, use_training_membership=False):
     )
 
 
-def test_weighted_ridge_matches_independent_normal_equation(prediction_inputs):
+@pytest.mark.parametrize("window, bin_count", [("full", 4), ("before", 2), ("after", 2)])
+def test_weighted_ridge_matches_independent_normal_equation(prediction_inputs, window, bin_count):
     """Compare native-unit affine ridge to a weighted, intercept-exempt matrix oracle."""
-    prepared = prepare_prediction_inputs(*prediction_inputs[1:], prediction_inputs[0])
+    prepared = prepare_prediction_inputs(*prediction_inputs[1:], prediction_inputs[0], training_window=window)
     region = prepared.timeline.regions["PFC"]
     result = fit_region(prepared)
     for fold in range(5):
@@ -36,34 +37,36 @@ def test_weighted_ridge_matches_independent_normal_equation(prediction_inputs):
         local = mask[region.choice_positions]
         matrix = region.scores[local][:, prepared.training_bin_mask, :].reshape(-1, 3)
         design = np.column_stack([np.ones(len(matrix)), matrix])
-        labels = np.repeat(prepared.target_values[mask, target], 4)
-        row_weights = np.full(len(matrix), 1 / 4)
+        labels = np.repeat(prepared.target_values[mask, target], bin_count)
+        row_weights = np.full(len(matrix), 1 / bin_count)
+        assert row_weights.sum() == mask.sum()
         penalty = np.diag([0, 1, 1, 1])
         oracle = np.linalg.solve(design.T @ (row_weights[:, None] * design) + penalty,
                                  design.T @ (row_weights * labels))
         np.testing.assert_allclose(result.intercepts[target, fold], oracle[0], atol=1e-12)
         np.testing.assert_allclose(result.coefficients[target, fold], oracle[1:], atol=1e-12)
-        assert result.training_row_count[target, fold] == 4 * mask.sum()
+        assert result.training_row_count[target, fold] == bin_count * mask.sum()
         held = prepared.fold_ids[region.choice_positions] == fold
         np.testing.assert_allclose(result.predictions[held, :, target],
                                    oracle[0] + region.scores[held] @ oracle[1:])
 
 
-def test_binary_orientation_matches_objective_gradient_and_identical_labels(prediction_inputs):
+@pytest.mark.parametrize("window, bin_count", [("full", 4), ("before", 2), ("after", 2)])
+def test_binary_orientation_matches_objective_gradient_and_identical_labels(prediction_inputs, window, bin_count):
     """Class 1 means left; fitted logistic weights satisfy the selected weighted loss."""
     base, trials, timeline = prediction_inputs
-    prepared = prepare_prediction_inputs(trials, timeline, base)
+    prepared = prepare_prediction_inputs(trials, timeline, base, training_window=window)
     result = fit_region(prepared)
     np.testing.assert_allclose(result.predictions[:, :, 0], result.predictions[:, :, 1])
     region = timeline.regions["PFC"]
     for fold in range(5):
         mask = result.training_choice_mask[1, fold]
         x = region.scores[mask[region.choice_positions]][:, prepared.training_bin_mask].reshape(-1, 3)
-        y = np.repeat(prepared.target_values[mask, 1], 4)
+        y = np.repeat(prepared.target_values[mask, 1], bin_count)
         beta, intercept = result.coefficients[1, fold], result.intercepts[1, fold]
         probability = 1 / (1 + np.exp(-(x @ beta + intercept)))
-        np.testing.assert_allclose(x.T @ ((probability - y) / 4) + beta, 0, atol=0.003)
-        assert abs(np.sum((probability - y) / 4)) < 0.003
+        np.testing.assert_allclose(x.T @ ((probability - y) / bin_count) + beta, 0, atol=0.003)
+        assert abs(np.sum((probability - y) / bin_count)) < 0.003
     assert np.all((result.predictions[:, :, :2] >= 0) & (result.predictions[:, :, :2] <= 1))
 
 
@@ -133,7 +136,7 @@ def test_invalid_structural_inputs_raise_before_model_fitting(prediction_inputs)
 
 @pytest.fixture
 def mixed_inputs(prediction_inputs):
-    """Return N-choice mixed inputs with seeded independent state/action PC signals."""
+    """Return N-choice mixed inputs with seeded independent state/action/reward PC signals."""
     base, trials, timeline = prediction_inputs
     trials["state_int"] = np.arange(len(trials)) % 2
     trials["correct"] = (trials.state_int == trials.action).astype(int)
@@ -143,19 +146,19 @@ def mixed_inputs(prediction_inputs):
     for role, source in timeline.regions.items():
         labels = prepared.target_values[source.choice_positions]
         scores = generator.normal(0, 0.1, source.scores.shape)
-        scores[:, :, :2] += 3 * (2 * labels[:, None, :] - 1)
+        scores += 3 * (2 * labels[:, None, :] - 1)
         regions[role] = replace(source, scores=scores)
     return replace(prepared, timeline=replace(timeline, regions=regions))
 
 
 def test_mixed_training_masks_signal_recovery_and_logistic_objective(mixed_inputs):
-    """Two classifiers recover separate labels using every eligible trial once."""
+    """Three classifiers recover separate labels using every eligible trial once."""
     for role, source in mixed_inputs.timeline.regions.items():
         model = fit_region(mixed_inputs, role, use_training_membership=True)
-        assert model.predictions.shape == (*source.scores.shape[:2], 2)
+        assert model.predictions.shape == (*source.scores.shape[:2], 3)
         assert np.all(model.fit_status == "ok")
         coverage = np.isin(np.arange(len(mixed_inputs.fold_ids)), source.choice_positions)
-        for target in range(2):
+        for target in range(3):
             actual = mixed_inputs.target_values[source.choice_positions, target]
             assert np.mean((model.predictions[:, :, target] >= 0.5) == actual[:, None]) > 0.95
             for fold in range(5):
@@ -209,3 +212,17 @@ def test_explicit_membership_is_validated(mixed_inputs, defect):
     mask = mask[:-1] if defect == "shape" else mask.astype(float)
     with pytest.raises(ValueError, match="mask"):
         fit_region(replace(mixed_inputs, training_condition_mask=mask), use_training_membership=True)
+
+
+@pytest.mark.parametrize("reward", [0., np.nan])
+def test_unfit_reward_does_not_disable_state_or_action(prediction_inputs, reward):
+    """Single-class or missing reward is local; incorrect membership remains independent."""
+    base, trials, timeline = prediction_inputs
+    trials["correct"] = 0
+    trials["reward"] = reward
+    prepared = prepare_prediction_inputs(trials, timeline, base, analysis_mode="mixed_outcome_decoding")
+    model = fit_region(prepared, use_training_membership=True)
+    assert (model.fit_status[:2] == "ok").all()
+    assert (model.fit_status[2] == "unavailable").all()
+    assert np.isnan(model.predictions[:, :, 2]).all()
+    assert np.isfinite(model.predictions[:, :, :2]).all()

@@ -161,6 +161,10 @@ def test_scaffold_creates_editable_files_without_overwriting_metadata(tmp_path: 
         "interregional_regression_config.json",
     }
     assert result.preserved == (metadata_path.resolve(),)
+    from src.tests.neural_analysis.task_decoding.test_config import CANONICAL_TARGETS
+
+    task = json.loads((tmp_path / "task_decoding_config.json").read_text())
+    assert task["target_names"] == list(CANONICAL_TARGETS)
     pooled = json.loads((tmp_path / "pooled_task_decoding_config.json").read_text())
     assert pooled == {
         "base_config_path": "task_decoding_config.json",
