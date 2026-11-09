@@ -10,6 +10,7 @@ import streamlit as st
 
 from src.neural_analysis.event_sequences import io as event_io
 from src.neural_analysis.event_sequences import plotting as event_plotting
+from src.neural_analysis.event_sequences import selection as event_selection
 from src.neural_analysis.event_sequences.run_session import (
     EventSequenceRequest,
     prepare_event_sequences,
@@ -533,7 +534,11 @@ def _selected_zscore(st_module: object, scope: str, source: dict) -> bool:
 
 
 def _load_saved_product(product: dict) -> dict:
-    """Input: discovered NPZ product; return its validated packet through a two-entry source-stat cache."""
+    """Input: discovered NPZ product; return packet through a source-stat/selector-version cache.
+
+    Saved activity axes/units are preserved. The two-entry cache also refreshes
+    runtime-only matches when behavioral selector definitions change.
+    """
     path = Path(product["result_path"]).resolve(strict=True)
     event_stat = path.stat()
     meta = product["meta"]
@@ -550,7 +555,7 @@ def _load_saved_product(product: dict) -> dict:
             pca_path, pca_size, pca_mtime_ns = str(referenced), -1, -1
     return _load_saved_product_cached(
         str(path), event_stat.st_size, event_stat.st_mtime_ns,
-        pca_path, pca_size, pca_mtime_ns,
+        pca_path, pca_size, pca_mtime_ns, event_selection.ADDITIONAL_SELECTOR_VERSION,
     )
 
 
@@ -562,10 +567,16 @@ def _load_saved_product_cached(
     pca_path: str,
     pca_size: int,
     pca_mtime_ns: int,
+    additional_selector_version: str,
 ) -> dict:
-    """Input: NPZ/PCA paths and current byte-size/mtime-ns stats; return packet arrays/tables with saved axes and units."""
+    """Input: NPZ/PCA paths, size bytes/mtime ns and selector-revision string.
+
+    Return validated packet arrays/tables with saved axes/units and current
+    runtime-only behavioral matches. The selector revision changes only this
+    display-load cache key, never the persisted neural source configuration.
+    """
     # All scalar identity arguments participate in Streamlit's cache key; io validates the exact PCA content hash.
-    _ = (result_size, result_mtime_ns, pca_path, pca_size, pca_mtime_ns)
+    _ = (result_size, result_mtime_ns, pca_path, pca_size, pca_mtime_ns, additional_selector_version)
     return event_io.load_event_sequences(Path(result_path))
 
 

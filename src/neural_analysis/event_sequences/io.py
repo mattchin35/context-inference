@@ -22,6 +22,7 @@ from src.neural_analysis.population import session_timeline as timeline
 from src.neural_analysis.population import session_timeline_io as timeline_io
 from src.neural_analysis.session_metadata import ResolvedSession, resolve_probe_sources
 from src.neural_analysis.spike_behavior import loading
+from . import selection
 from .activity import SourceActivity, select_pc_activity
 from .selection import (
     CENTRAL_CONDITIONS, TRANSITION_CONDITIONS, _ordinary_choices,
@@ -164,6 +165,12 @@ def load_event_sequences(input_path: Path | str) -> dict:
     Return the plain packet with original saved shapes/units and runtime-bound
     session_root. PCs verify exact referenced bytes/config/maps and load that
     fixed timeline once into runtime-only timeline_result for live rank changes.
+    After validation, additional_matches contains all 24 derived integer (E,S)
+    source-position arrays (S=3..7). additional_unavailable_reason names absent
+    block/context columns, otherwise is empty; row-level missing values affect
+    only matching episodes. additional_selector_version is the current selector
+    revision. These fields are runtime-only; source metadata/identity and saved
+    arrays are unchanged. No source preparation or archive rewriting occurs.
     Missing PCA raises FileNotFoundError; malformed products raise ValueError.
     """
     path = Path(input_path).resolve(strict=True)
@@ -182,6 +189,22 @@ def load_event_sequences(input_path: Path | str) -> dict:
                 regional_choice_positions=archive["regional_choice_positions"] if meta["source_kind"] == "pc" else np.empty(0, dtype=int),
             )
         _validate_packet(packet)
+        absent = sorted({"cur_block", "state_int"} - set(packet["trials"].columns))
+        reason = ""
+        if absent:
+            reason = "Additional sequences unavailable; missing required processed trial fields: " + ", ".join(absent)
+            offsets = {"probe": 2, "omission_probe": 3, "indecisive_transition": 4}
+            additional = {}
+            for key in selection.ADDITIONAL_CONDITIONS:
+                family, _, repeats = key
+                length = 3 if repeats is None else repeats + offsets[family]
+                additional[key] = np.empty((0, length), dtype=int)
+        else:
+            additional = selection.select_additional_sequences(packet["trials"])
+        packet.update(
+            additional_matches=additional, additional_unavailable_reason=reason,
+            additional_selector_version=selection.ADDITIONAL_SELECTOR_VERSION,
+        )
         return packet
     except (KeyError, TypeError, IndexError, AttributeError, EOFError, BadZipFile, UnpicklingError, DecompressionError) as error:
         raise ValueError(f"Invalid saved event sequence product: {error}") from error
