@@ -8,6 +8,7 @@ Transition offsets are display coordinates, never physical elapsed session time.
 from __future__ import annotations
 
 from copy import deepcopy
+from numbers import Integral
 from pathlib import Path
 import textwrap
 
@@ -125,15 +126,92 @@ def build_transition_view(
     panel["hover_fields"] = _TRANSITION_FIELDS
     panel["customdata"] = _transition_customdata(trials, positions, display_source["bin_edges_s"], direction)
     view = _base_view(display_source, "transition", [panel])
-    segments = repeats + 2
-    offsets = np.arange(segments) * (4.0 + SEGMENT_GAP_WIDTH)
-    view.update(
-        segment_edges=display_source["bin_edges_s"][None, :] + offsets[:, None],
-        zero_positions=offsets,
-        segment_labels=["Trigger"] + [f"Incorrect\nrepeat {index}" for index in range(1, repeats + 1)] + ["Rewarded\nswitch"],
-    )
+    labels = ["Trigger"] + [f"Incorrect\nrepeat {index}" for index in range(1, repeats + 1)] + ["Rewarded\nswitch"]
+    view.update(_sequence_geometry(display_source["bin_edges_s"], labels))
     selection = f"Ideal transition {label}; x{repeats} incorrect repeats"
     view["caption"] = _caption(display_source, [panel], selection) + (
+        " Each segment uses local choice-relative seconds in [-2,+2). Fixed gaps are display separators; they do not represent elapsed time."
+    )
+    return view
+
+
+def build_sequence_view(
+    packet: dict, display_source: dict, *, family: str = "ideal_transition",
+    initial_side: str = "left", repeats: int | None = 1,
+) -> dict:
+    """Build one complete multi-trial condition from a loaded source product.
+
+    Parameters
+    ----------
+    packet : dict
+        Loaded io.load_event_sequences packet, including runtime-only
+        additional_matches (integer (E,S) original positions), availability
+        reason and selector version. Saved trials retain original IDs/labels
+        and UTC Unix-second choices. No files are read or matches recomputed.
+    display_source : dict
+        Matching prepare_display_source output: all-session values (W,B),
+        global limits and units (Hz, signed PC scores or source SD units).
+    family : str, keyword-only
+        ideal_transition, probe, omission_probe, lucky_omission_switch or
+        indecisive_transition. The ideal family delegates to the unchanged
+        build_transition_view contract and does not need additional fields.
+    initial_side : str, keyword-only
+        left or right: probe starting side or transition's old active side.
+    repeats : int or None, keyword-only
+        Exactly x initial incorrect trials: 1..4 for ideal/probes, 1..3 for
+        indecisive. Lucky omission-switch requires None because x is absent.
+
+    Returns
+    -------
+    dict
+        Common one-panel kind=transition view with logical values (E_covered,S,B)
+        and original row_positions (E_covered,S). Every segment retains its
+        [-2,+2) local-second window, zero line and fixed display separator.
+        Hover data (E_covered,S,B,H) identify family, episode start, full IDs,
+        segment identities and choice path/context direction. Boundary fields
+        identify lucky's omission (segment index 1) or indecisive's trigger
+        (index 0); probes have no trigger or boundary fields. Counts distinguish
+        behavioral matches from whole-episode coverage exclusions. Empty and
+        unavailable conditions remain explicit. Source arrays/scaling and
+        persisted identities are unchanged; no fitting or publication occurs.
+    """
+    _validate_source_binding(packet, display_source)
+    allowed = ("ideal_transition", "probe", "omission_probe", "lucky_omission_switch", "indecisive_transition")
+    if family not in allowed or initial_side not in ("left", "right"):
+        raise ValueError("Sequence view requires a supported family and initial side left/right.")
+    if family == "lucky_omission_switch":
+        if repeats is not None:
+            raise ValueError("Lucky omission-switch repeats must be None.")
+    else:
+        maximum = 3 if family == "indecisive_transition" else 4
+        if isinstance(repeats, bool) or not isinstance(repeats, Integral) or not 1 <= repeats <= maximum:
+            raise ValueError(f"Sequence family {family} requires integer repeats 1..{maximum}.")
+    direction = "left_to_right" if initial_side == "left" else "right_to_left"
+    if family == "ideal_transition":
+        return build_transition_view(packet, display_source, direction=direction, repeats=repeats)
+
+    key = (family, initial_side, repeats)
+    panel = activity.assemble_heatmap(display_source, packet["additional_matches"][key])
+    panel.update(condition=key, row=0, col=0)
+    path = "L -> R" if initial_side == "left" else "R -> L"
+    if family in ("probe", "omission_probe"):
+        path += " -> L" if initial_side == "left" else " -> R"
+    description = f"{family.replace('_', ' ').capitalize()} {path}"
+    if repeats is not None:
+        description += f"; x{repeats} incorrect trials"
+    panel["title"] = f"{description}; n={panel['n']}"
+    panel["title"] = _coverage_title(panel)
+    panel["message"] = _panel_message(panel, "sequences", packet["additional_unavailable_reason"])
+    positions = panel["row_positions"]
+    starts = packet["trials"].iloc[positions[:, 0]]
+    panel["row_labels"] = [f"Episode start {identity}" for identity in starts.trial_id]
+    panel["hover_fields"], panel["customdata"] = _sequence_customdata(
+        packet["trials"], positions, display_source["bin_edges_s"], family, initial_side, repeats,
+    )
+    view = _base_view(display_source, "transition", [panel])
+    view.update(_sequence_geometry(display_source["bin_edges_s"], _sequence_labels(family, repeats)))
+    view["caption"] = _caption(display_source, [panel], description) + (
+        f" Additional selector version={packet['additional_selector_version']}."
         " Each segment uses local choice-relative seconds in [-2,+2). Fixed gaps are display separators; they do not represent elapsed time."
     )
     return view
@@ -284,6 +362,86 @@ def export_png(view: dict, output_path: Path | str, *, dpi: float = 150) -> Path
 
 
 # Small payload/format helpers; scientific selection and scaling stay upstream.
+def _sequence_geometry(bin_edges_s: np.ndarray, labels: list[str]) -> dict:
+    """Return shared geometry from float (B+1,) local-second edges and S labels.
+
+    segment_edges (S,B+1) and zero_positions (S,) use shifted display
+    coordinates with fixed gaps. Labels stay in chronological segment order.
+    Gaps contain no samples and have no physical elapsed-time interpretation.
+    """
+    offsets = np.arange(len(labels)) * (4.0 + SEGMENT_GAP_WIDTH)
+    return {
+        "segment_edges": bin_edges_s[None, :] + offsets[:, None],
+        "zero_positions": offsets, "segment_labels": labels,
+    }
+
+
+def _sequence_labels(family: str, repeats: int | None) -> list[str]:
+    """Return S readable labels for a validated unitless additional family/x.
+
+    x is 1..4 for probes, 1..3 for indecisive, None for lucky. Labels describe
+    actual displayed trials; only indecisive starts at a rewarded trigger.
+    """
+    if family == "lucky_omission_switch":
+        return ["Rewarded\nstart", "Omission\npre-change", "Rewarded\nswitch"]
+    if family == "indecisive_transition":
+        return ["Trigger"] + [f"Incorrect\nrepeat {index}" for index in range(1, repeats + 1)] + [
+            "Rewarded\nswitch", "Incorrect\nreturn", "Rewarded\nswitch",
+        ]
+    labels = ["Rewarded\nstart"]
+    if family == "omission_probe":
+        labels.append("Correct\nomission")
+    return labels + [f"Incorrect\nexcursion {index}" for index in range(1, repeats + 1)] + ["Rewarded\nreturn"]
+
+
+def _sequence_customdata(
+    trials, positions: np.ndarray, edges_s: np.ndarray,
+    family: str, initial_side: str, repeats: int | None,
+) -> tuple[tuple[str, ...], np.ndarray]:
+    """Return named fields and object hover data (E,S,B,H) for one condition.
+
+    trials is the full pandas DataFrame (N,C); positions are integer (E,S)
+    original rows and edges_s float (B+1,) local-second edges. family/initial_side/x are
+    validated unitless selectors. Original IDs/labels, UTC-second choices and
+    zero-based segment indices are preserved, including empty E=0 conditions.
+    Probes expose their choice path; boundary families expose context direction
+    and the actual pre-boundary row. No source values or arrays are modified.
+    """
+    episodes, segments = positions.shape
+    rows = trials.iloc[positions.reshape(-1)]
+    ids = rows.trial_id.to_numpy().reshape(episodes, segments)
+    labels = rows.index_label.to_numpy().reshape(episodes, segments)
+    full_ids = np.asarray([", ".join(str(identity) for identity in episode) for episode in ids], dtype=object)
+    fields = {
+        "family": family, "initial_side": initial_side, "repeats": repeats,
+        "episode_start_row_position": positions[:, :1, None],
+        "episode_start_trial_id": ids[:, :1, None],
+        "episode_start_index_label": labels[:, :1, None],
+        "episode_trial_ids": full_ids[:, None, None],
+        "segment_index": np.arange(segments)[None, :, None],
+        "segment_row_position": positions[:, :, None],
+        "segment_trial_id": ids[:, :, None],
+        "segment_index_label": labels[:, :, None],
+        "segment_choice_time": rows.choice_time.to_numpy().reshape(episodes, segments, 1),
+        "local_time_s": ((edges_s[:-1] + edges_s[1:]) / 2)[None, None, :],
+    }
+    if family in ("probe", "omission_probe"):
+        fields["choice_path"] = "L -> R -> L" if initial_side == "left" else "R -> L -> R"
+    else:
+        fields["direction"] = "left_to_right" if initial_side == "left" else "right_to_left"
+        boundary = 1 if family == "lucky_omission_switch" else 0
+        fields.update(
+            pre_boundary_segment_index=boundary,
+            pre_boundary_row_position=positions[:, boundary, None, None],
+            pre_boundary_trial_id=ids[:, boundary, None, None],
+            pre_boundary_index_label=labels[:, boundary, None, None],
+        )
+    data = np.empty((episodes, segments, len(edges_s) - 1, len(fields)), dtype=object)
+    for index, values in enumerate(fields.values()):
+        data[..., index] = values
+    return tuple(fields), data
+
+
 def _validate_source_binding(packet: dict, source: dict) -> None:
     """Input: saved packet/prepared source. Return None or reject mixed config/labels/(W,) maps/(B+1,) edges."""
     meta = packet["meta"]
