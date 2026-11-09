@@ -148,6 +148,57 @@ def test_failed_automatic_unit_preparation_waits_for_retry_or_changed_selection(
     assert not at.exception and prepare.call_count == 2
 
 
+def test_repeat_state_is_valid_when_switching_to_shorter_family_range(event_session):
+    """Input: saved synthetic unit product; x=4 in probe clamps to x=3 in indecisive transition."""
+    _prepare_unit_product(event_session)
+    at = AppTest.from_function(
+        _render_event_view, args=(str(event_session.metadata_path), "transition")
+    ).run()
+    _assert_selector(at, "selectbox", "Sequence family", "probe")
+    _assert_selector(at, "selectbox", "Initial side", "right")
+    next(item for item in at.slider if item.label == "Incorrect repeats").set_value(4).run()
+    assert not at.exception
+    _assert_selector(at, "selectbox", "Sequence family", "indecisive_transition")
+    indecisive_x = next(item for item in at.slider if item.label == "Incorrect repeats")
+    assert indecisive_x.value in (1, 2, 3)
+    _assert_selector(at, "selectbox", "Sequence family", "omission_probe")
+    omission_x = next(item for item in at.slider if item.label == "Incorrect repeats")
+    assert omission_x.value in (1, 2, 3, 4)
+
+
+@pytest.mark.parametrize("missing_context", [False, True])
+def test_all_families_remain_browsable_offline_with_empty_or_missing_matches(
+    event_session, monkeypatch, missing_context
+):
+    """Input: saved offline product with optional missing context columns; retain family-specific availability."""
+    if missing_context:
+        trials = pd.read_csv(event_session.behavior.trial_table_file)
+        trials.drop(columns=["state_int", "cur_block"]).to_csv(
+            event_session.behavior.trial_table_file, index=False
+        )
+    _prepare_unit_product(event_session)
+    _remove_current_sources(event_session)
+    monkeypatch.setattr(pd, "read_csv", _forbidden_display_operation)
+    monkeypatch.setattr(io, "load_probe_spike_arrays", _forbidden_display_operation)
+    monkeypatch.setattr(io, "save_event_sequences", _forbidden_display_operation)
+    monkeypatch.setattr(view, "prepare_event_sequences", _forbidden_display_operation)
+    at = AppTest.from_function(
+        _render_event_view, args=(str(event_session.metadata_path), "transition")
+    ).run()
+    assert not at.exception
+    for family in (
+        "ideal_transition", "probe", "omission_probe",
+        "lucky_omission_switch", "indecisive_transition",
+    ):
+        _assert_selector(at, "selectbox", "Sequence family", family)
+        _assert_plotly_output(at)
+        if missing_context and family != "ideal_transition":
+            availability_text = " ".join(
+                item.value for item in list(at.info) + list(at.warning) + list(at.caption)
+            )
+            assert "state_int" in availability_text or "cur_block" in availability_text
+
+
 def test_changed_unit_sources_invalidate_the_saved_selection_once(event_session, monkeypatch):
     """Input: saved unit and changed alignment file identity. Return None; publish one fresh configuration, then reuse it."""
     original = _prepare_unit_product(event_session)

@@ -33,7 +33,7 @@ from src.tests.neural_analysis.test_session_timeline_io import (
 event_session = event_session_fixture
 synthetic_timeline_session = synthetic_timeline_session_fixture
 CENTRAL_VIEW = "Event sequences: central trials"
-TRANSITION_VIEW = "Event sequences: ideal transitions"
+TRANSITION_VIEW = "Event sequences: multi-trial sequences"
 
 
 def _prepare_unit_product(session, unit_id: str = "A:7") -> Path:
@@ -394,6 +394,119 @@ def test_transition_direction_and_repeat_selectors_are_display_only(event_sessio
     repeats.set_value(4).run()
     assert not at.exception
     _assert_plotly_output(at)
+
+
+def test_multi_trial_view_defaults_to_ideal_family_and_uses_new_title(event_session):
+    """Input: one saved synthetic unit product; assert family view defaults and title render."""
+    _prepare_unit_product(event_session)
+    at = AppTest.from_function(
+        _render_event_view, args=(str(event_session.metadata_path), "transition")
+    ).run()
+    assert not at.exception
+    assert any(item.value == TRANSITION_VIEW for item in at.subheader)
+    family = next(item for item in at.selectbox if item.label == "Sequence family")
+    assert family.value == "ideal_transition"
+
+
+@pytest.mark.parametrize(
+    ("family", "expected_control", "expected_options"),
+    [
+        ("probe", "Initial side", None),
+        ("omission_probe", "Initial side", None),
+        ("lucky_omission_switch", "Transition direction", ["left_to_right", "right_to_left"]),
+        ("indecisive_transition", "Transition direction", ["left_to_right", "right_to_left"]),
+    ],
+)
+def test_family_uses_choice_orientation_or_context_direction(
+    event_session, family, expected_control, expected_options
+):
+    """Input: family slug and saved synthetic unit product; assert its orientation widget contract."""
+    _prepare_unit_product(event_session)
+    at = AppTest.from_function(
+        _render_event_view, args=(str(event_session.metadata_path), "transition")
+    ).run()
+    _assert_selector(at, "selectbox", "Sequence family", family)
+    control = next(item for item in at.selectbox if item.label == expected_control)
+    if expected_options is None:
+        assert control.value in ("left", "right")
+        assert any("->" in str(option) or "path" in str(option).lower() for option in control.options)
+    else:
+        assert list(control.options) == expected_options
+
+
+def test_lucky_family_has_no_repeat_control_and_indecisive_clamps_x(event_session):
+    """Input: saved synthetic unit product; assert x widget appears only for x families and clamps to 3."""
+    _prepare_unit_product(event_session)
+    at = AppTest.from_function(
+        _render_event_view, args=(str(event_session.metadata_path), "transition")
+    ).run()
+    _assert_selector(at, "selectbox", "Sequence family", "lucky_omission_switch")
+    assert not any(item.label == "Incorrect repeats" for item in at.slider)
+    _assert_selector(at, "selectbox", "Sequence family", "probe")
+    repeats = next(item for item in at.slider if item.label == "Incorrect repeats")
+    repeats.set_value(4).run()
+    _assert_selector(at, "selectbox", "Sequence family", "indecisive_transition")
+    repeats = next(item for item in at.slider if item.label == "Incorrect repeats")
+    assert repeats.value == 3
+
+
+def test_family_switch_reuses_loaded_packet_and_preserves_display_settings(event_session, monkeypatch):
+    """Input: saved two-rank PC product; family switches retain source/rank/scaling without loading or preparation."""
+    request = EventSequenceRequest(
+        event_session.metadata_path, "pc", region="PFC", population_quality="good_mua"
+    )
+    prepare_event_sequences(request)
+    from src.neural_analysis.webapp import event_sequence_views
+
+    at = AppTest.from_function(
+        _render_event_view, args=(str(event_session.metadata_path), "transition")
+    ).run()
+    _assert_selector(at, "selectbox", "Neural source", "pc")
+    source = next(item for item in at.selectbox if item.label == "Saved source configuration")
+    assert "good_mua" in source.value
+    rank = next(item for item in at.slider if item.label == "PC rank")
+    rank.set_value(2).run()
+    next(item for item in at.checkbox if item.label == "Z-score").check().run()
+    assert not at.exception
+    selected_source = next(item for item in at.selectbox if item.label == "Saved source configuration").value
+    prepare = Mock(side_effect=_forbidden_display_operation)
+    monkeypatch.setattr(event_sequence_views, "prepare_event_sequences", prepare)
+    monkeypatch.setattr(event_io, "load_event_sequences", _forbidden_display_operation)
+    monkeypatch.setattr(event_io, "load_probe_spike_arrays", _forbidden_display_operation)
+    monkeypatch.setattr(event_io, "save_event_sequences", _forbidden_display_operation)
+    monkeypatch.setattr(pd, "read_csv", _forbidden_display_operation)
+    monkeypatch.setattr(run_session, "prepare_event_sequences", _forbidden_display_operation)
+    monkeypatch.setattr(timeline, "bin_choice_counts", _forbidden_display_operation)
+    monkeypatch.setattr(timeline, "fit_timeline_activity", _forbidden_display_operation)
+    monkeypatch.setattr(event_activity, "extract_unit_activity", _forbidden_display_operation)
+    for family in (
+        "probe", "omission_probe", "lucky_omission_switch",
+        "indecisive_transition", "ideal_transition",
+    ):
+        _assert_selector(at, "selectbox", "Sequence family", family)
+        assert not at.exception
+        assert next(item for item in at.selectbox if item.label == "Neural source").value == "pc"
+        assert next(item for item in at.selectbox if item.label == "Saved source configuration").value == selected_source
+        assert next(item for item in at.slider if item.label == "PC rank").value == 2
+        assert next(item for item in at.checkbox if item.label == "Z-score").value is True
+    prepare.assert_not_called()
+
+
+def test_ideal_family_builds_with_explicit_default_parameters(event_session, monkeypatch):
+    """Input: saved unit product; require the ideal family builder's stable initial UI parameters."""
+    _prepare_unit_product(event_session)
+    from src.neural_analysis.event_sequences import plotting
+
+    builder = Mock(wraps=plotting.build_sequence_view)
+    monkeypatch.setattr(plotting, "build_sequence_view", builder)
+    at = AppTest.from_function(
+        _render_event_view, args=(str(event_session.metadata_path), "transition")
+    ).run()
+    assert not at.exception
+    builder.assert_called_once()
+    assert builder.call_args.kwargs == {
+        "family": "ideal_transition", "initial_side": "left", "repeats": 1,
+    }
 
 
 def test_zero_spike_good_unit_keeps_raw_plot_and_disables_zscore(event_session):
