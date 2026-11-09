@@ -12,15 +12,17 @@ import numpy as np
 import pandas as pd
 from scipy.special import expit
 
+from src.neural_analysis.population.session_timeline import choice_bin_edges
 from src.neural_analysis.population.session_timeline_io import load_timeline_result
 from src.neural_analysis.task_decoding.config import CONDITION_IDENTIFIERS, TARGET_DEFINITION_BY_IDENTIFIER
 
 from .config import (
     ANALYSIS_VERSION, FOLD_COUNT, GENERALIZATION_MODE, LOGISTIC_C, RIDGE_ALPHA,
-    SCHEMA_VERSION, target_names_for_mode, training_conditions_for_mode,
+    SCHEMA_VERSION, MIXED_MODE, TARGET_NAMES, target_names_for_mode, training_conditions_for_mode,
+    training_window_bounds,
 )
 from .modeling import RegionPredictions
-from .preparation import PredictionInputs, training_membership
+from .preparation import PredictionInputs, training_membership, training_bin_mask
 
 
 SHARED_ARRAYS = (
@@ -51,6 +53,7 @@ class PredictionRunOption:
     session_id: str
     display_label: str
     analysis_mode: str = GENERALIZATION_MODE
+    training_window: str = "full"
 
 
 def build_prediction_metadata(
@@ -84,6 +87,10 @@ def build_prediction_metadata(
     scientific_mode = {
         "analysis_mode": inputs.analysis_mode, "target_names": list(inputs.target_names),
         "training_condition_names": list(training_conditions_for_mode(inputs.analysis_mode)),
+        "training_window": inputs.training_window,
+        "training_window_s": list(training_window_bounds(inputs.training_window)),
+        "scoring_window_s": list(training_window_bounds(inputs.training_window)),
+        "prediction_window_s": [-2.0, 2.0],
     }
     if inputs.target_names != target_names_for_mode(inputs.analysis_mode):
         raise ValueError("Target set contradicts analysis mode")
@@ -92,7 +99,6 @@ def build_prediction_metadata(
             raise ValueError(f"Effective configuration {key} contradicts prepared mode/targets")
     config.update(scientific_mode)
     config.update({"ridge_alpha": RIDGE_ALPHA, "logistic_C": LOGISTIC_C,
-                   "training_window_s": [-1.0, 1.0], "prediction_window_s": [-2.0, 2.0],
                    "fold_count": FOLD_COUNT})
     pca = file_identity(source_pca, root)
     pca["configuration_id"] = inputs.timeline.meta["configuration_id"]
@@ -104,7 +110,7 @@ def build_prediction_metadata(
         "library_versions": {name: version(name) for name in ("numpy", "scipy", "scikit-learn", "pandas")},
     }
     encoded = json.dumps(identity_payload, sort_keys=True, separators=(",", ":"))
-    return {
+    meta = {
         **identity_payload, "identity": hashlib.sha256(encoded.encode()).hexdigest()[:20],
         "generator": "src.neural_analysis.task_decoding.session_prediction.run_session",
         "time_origin_s": inputs.timeline.time_origin_s,
@@ -119,7 +125,7 @@ def build_prediction_metadata(
         "contribution_strength": "abs(beta)*population_SD(pooled training PC); equal mean across fitted folds",
         "units": {"time": "seconds", "absolute_time": "UTC Unix seconds",
                   "scores": "unwhitened standardized-unit scores",
-                  "categorical_prediction": "P(class 1 = left)",
+                  "categorical_prediction": "P(class 1); label specified per target",
                   "categorical_contribution": "log-odds", "numerical": "native source target units"},
         "axes": {"predictions": ["regional_window", "choice_bin", "target"],
                  "coefficients": ["target", "held_out_fold", "original_pc"],
@@ -130,6 +136,8 @@ def build_prediction_metadata(
                    | {role: {"status": "unavailable", "reason": reason}
                       for role, reason in inputs.timeline.unavailable.items()},
     }
+    _validate_mode_metadata(meta, inputs)
+    return meta
 
 
 def file_identity(path: Path | str, session_root: Path | str) -> dict:
@@ -158,7 +166,7 @@ def save_prediction_result(
     validate_prediction_result(inputs, regions)
     _validate_mode_metadata(meta, inputs)
     if (meta.get("analysis_version"), meta.get("schema_version")) != (ANALYSIS_VERSION, SCHEMA_VERSION):
-        raise ValueError("New prediction products require v2/schema-2 metadata")
+        raise ValueError("New prediction products require v3/schema-3 metadata")
     arrays = {name: getattr(inputs, name) for name in SHARED_ARRAYS}
     arrays["training_condition_mask"] = inputs.training_condition_mask
     arrays.update({"choices": inputs.timeline.choices.to_records(index=False),
@@ -198,7 +206,7 @@ def load_prediction_result(path: Path | str, *, session_root: Path | str | None 
         mode = _normalize_mode_metadata(meta)
         legacy = meta["schema_version"] == 1
         if not legacy and "training_condition_mask" not in archive:
-            raise ValueError("Schema-2 results require training_condition_mask")
+            raise ValueError("Schema-2/3 results require training_condition_mask")
         source = meta["source_pca"]
         source_path = root / source["path"]
         identity = file_identity(source_path, root)
@@ -220,6 +228,7 @@ def load_prediction_result(path: Path | str, *, session_root: Path | str | None 
             condition_names=tuple(archive["condition_names"]),
             target_metadata=meta["target_metadata"], target_availability=meta["target_availability"],
             analysis_mode=mode,
+            training_window=meta["effective_config"]["training_window"],
             training_condition_mask=(archive["correct_rewarded"].copy() if legacy
                                      else archive["training_condition_mask"]),
             **{name: archive[name] for name in SHARED_ARRAYS},
@@ -250,8 +259,9 @@ def discover_prediction_runs(session_root: Path | str) -> tuple[PredictionRunOpt
         try:
             meta = json.loads(path.read_text(encoding="ascii"))
             mode = _normalize_mode_metadata(meta)
-            label = f"{mode} - {meta['effective_config']['bin_width_ms']} ms - {path.parent.name}"
-            options.append(PredictionRunOption(result, meta["identity"], meta["session_id"], label, mode))
+            window = meta["effective_config"]["training_window"]
+            label = f"{mode} - {window} - {meta['effective_config']['bin_width_ms']} ms - {path.parent.name}"
+            options.append(PredictionRunOption(result, meta["identity"], meta["session_id"], label, mode, window))
         except (OSError, ValueError, KeyError, TypeError):
             continue
     return tuple(options)
@@ -276,13 +286,18 @@ def validate_prediction_result(inputs: PredictionInputs, regions: dict[str, Regi
     Inputs and region records follow their documented contracts. Return None or
     raise ValueError before publication/display. No array is changed or refitted.
     """
-    targets = target_names_for_mode(inputs.analysis_mode)
+    targets = inputs.target_names
+    current_targets = target_names_for_mode(inputs.analysis_mode)
+    legacy_mixed = inputs.analysis_mode == MIXED_MODE and targets == TARGET_NAMES[:2] and inputs.training_window == "full"
     n, t, b = len(inputs.timeline.choices), len(targets), len(inputs.bin_edges_s) - 1
-    if inputs.target_names != targets or inputs.condition_names != CONDITION_IDENTIFIERS:
+    if (targets != current_targets and not legacy_mixed) or inputs.condition_names != CONDITION_IDENTIFIERS:
         raise ValueError("Noncanonical target or condition order")
     families = tuple(TARGET_DEFINITION_BY_IDENTIFIER[name].family for name in targets)
     if inputs.target_families != families:
         raise ValueError("Noncanonical target families for analysis mode")
+    expected_bins = training_bin_mask(inputs.bin_edges_s, training_window=inputs.training_window)
+    if not np.array_equal(inputs.training_bin_mask, expected_bins):
+        raise ValueError("Saved bin mask contradicts training window")
     _shape(inputs.target_values, (n, t), "target values")
     for array, shape in ((inputs.target_valid, (n, t)), (inputs.baseline_valid, (n,)),
                          (inputs.correct_rewarded, (n,)), (inputs.condition_masks, (n, 6)),
@@ -312,13 +327,14 @@ def validate_prediction_result(inputs: PredictionInputs, regions: dict[str, Regi
 
 # Validation helpers keep file loading separate from scientific array checks.
 def _normalize_mode_metadata(meta: dict) -> str:
-    """Validate exact version/schema and mode metadata; normalize only v1 in memory.
+    """Resolve the small v1/v2/v3 contract; normalize legacy Full fields in memory.
 
     meta is a saved provenance dictionary. Return its canonical mode string;
     legacy identity/version remain unchanged and no source files are accessed.
     """
     pair = (meta.get("analysis_version"), meta.get("schema_version"))
-    if pair not in (("condition-session-prediction-v1", 1), (ANALYSIS_VERSION, SCHEMA_VERSION)):
+    if pair not in (("condition-session-prediction-v1", 1), ("condition-session-prediction-v2", 2),
+                    (ANALYSIS_VERSION, SCHEMA_VERSION)):
         raise ValueError("Unsupported session prediction result version/schema pair")
     config = meta["effective_config"]
     if pair[1] == 1:
@@ -328,17 +344,50 @@ def _normalize_mode_metadata(meta: dict) -> str:
             raise ValueError("Legacy prediction mode must be correct-rewarded generalization")
     mode = config.get("analysis_mode")
     targets = target_names_for_mode(mode)
+    if pair[1] < 3:
+        if mode == MIXED_MODE:
+            targets = TARGET_NAMES[:2]
+        config.setdefault("training_window", "full")
+        config.setdefault("scoring_window_s", [-1.0, 1.0])
+        if config["training_window"] != "full":
+            raise ValueError("Legacy supervised window must be Full")
+    bounds = list(training_window_bounds(config.get("training_window")))
     if (config.get("target_names") != list(targets)
             or config.get("training_condition_names") != list(training_conditions_for_mode(mode))):
         raise ValueError("Saved mode/target/condition metadata contradicts the scientific contract")
+    if (config.get("training_window_s") != bounds or config.get("scoring_window_s") != bounds
+            or config.get("prediction_window_s") != [-2.0, 2.0]):
+        raise ValueError("Saved training/scoring/prediction bounds contradict the window contract")
     return mode
 
 
 def _validate_mode_metadata(meta: dict, inputs: PredictionInputs) -> None:
     """Check saved provenance against prepared mode/target axes without changing arrays."""
     mode = _normalize_mode_metadata(meta)
-    if mode != inputs.analysis_mode or tuple(meta["effective_config"]["target_names"]) != inputs.target_names:
+    config = meta["effective_config"]
+    if (mode != inputs.analysis_mode or tuple(config["target_names"]) != inputs.target_names
+            or config["training_window"] != inputs.training_window):
         raise ValueError("Saved mode/targets disagree with prepared inputs")
+    width = config.get("bin_width_ms")
+    if (type(width) is not int or width not in (500, 100, 50, 20)
+            or inputs.timeline.meta["bin_width_s"] != width / 1000):
+        raise ValueError("Saved bin width contradicts the source PCA grid")
+    expected_edges = choice_bin_edges(width / 1000)
+    if (inputs.bin_edges_s.shape != expected_edges.shape
+            or not np.allclose(inputs.bin_edges_s, expected_edges, rtol=0, atol=1e-12)):
+        raise ValueError("Saved prediction bin grid contradicts the bin width")
+    if meta["schema_version"] == 3:
+        for name in inputs.target_names:
+            definition = TARGET_DEFINITION_BY_IDENTIFIER[name]
+            target = meta["target_metadata"][name]
+            if (target.get("family") != definition.family or target.get("source_column") != definition.source_column
+                    or target.get("derivation") != definition.derivation):
+                raise ValueError("Saved target metadata contradicts its source definition")
+            if definition.family == "categorical":
+                labels = {"0": "unrewarded", "1": "rewarded"} if name == "current_reward" else {"0": "right", "1": "left"}
+                if (target.get("positive_class") != 1 or target.get("positive_label") != definition.positive_label
+                        or target.get("class_labels") != labels):
+                    raise ValueError("Saved target class labels contradict the binary orientation")
 
 
 def _validate_region(inputs: PredictionInputs, role: str, model: RegionPredictions) -> None:

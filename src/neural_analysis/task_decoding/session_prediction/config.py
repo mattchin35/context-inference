@@ -7,8 +7,8 @@ from pathlib import Path
 from src.neural_analysis.task_decoding.config import SUPPORTED_BIN_WIDTH_MS
 
 
-ANALYSIS_VERSION = "condition-session-prediction-v2"
-SCHEMA_VERSION = 2
+ANALYSIS_VERSION = "condition-session-prediction-v3"
+SCHEMA_VERSION = 3
 RIDGE_ALPHA = 1.0
 LOGISTIC_C = 1.0
 FOLD_COUNT = 5
