@@ -9,8 +9,9 @@ The two visualization types are:
    - Rows are trials selected by the relationship between the central trial and its neighboring trials.
    - Only the **central trial's** neural activity is shown.
 
-2. **Ideal-transition sequence stack**
-   - Rows are matched multi-trial transition episodes around a block/context change.
+2. **Multi-trial sequence stack**
+   - Rows are matched multi-trial episodes, including ideal transitions around
+     block/context changes and the additional families defined in Part III.
    - The **entire multi-trial sequence** is shown, with each trial displayed as its own aligned neural segment.
 
 These are descriptive inspection tools. They are not summary-statistics or significance-testing analyses.
@@ -18,6 +19,10 @@ These are descriptive inspection tools. They are not summary-statistics or signi
 This revision records the scientific and workflow decisions agreed on
 2026-11-05. It defines required behavior; the concrete implementation plan and
 its approval are separate steps.
+
+Part III records additional families and scientific decisions confirmed on
+2026-11-08. Those additions are implemented using the existing saved neural
+source products.
 
 ---
 
@@ -121,7 +126,7 @@ For PCs:
   window; the first and last spike do not define recording coverage.
 - Part I requires full coverage for the central trial only. Its neighbors
   need valid behavioral information, but their neural activity is not displayed.
-- Part II requires full coverage for every displayed trial in the episode.
+- Parts II and III require full coverage for every displayed trial in the episode.
   If any segment lacks coverage, exclude the entire episode from display.
 - Do not truncate windows or zero-pad unavailable data. Measured silence within
   a covered window is valid zero firing rate.
@@ -155,7 +160,7 @@ Resulting bins per trial window:
 - Preserve the sign of the displayed values.
 - Use a fixed color scale for each session/source/bin-width/scaling
   configuration across both tools, sides, central outcomes, directions, and
-  motif lengths.
+  motif lengths and families.
 - Derive limits from all eligible session choice-window bins for that selected
   source, not from the current panel or motif. Use symmetric maximum-absolute
   limits for raw PCs and all z-scored displays; raw unit rates start at zero
@@ -168,7 +173,8 @@ Resulting bins per trial window:
 
 ### Trial ordering
 Default row ordering:
-- Chronological order of the central trial (or transition trigger trial).
+- Chronological order of the central trial, or first displayed trial for a
+  multi-trial episode. For Part II this is the transition trigger trial.
 
 ### Handling missing conditions
 The code must not fail when a condition does not exist.
@@ -508,6 +514,122 @@ Hover or row labels should expose at least:
 
 ---
 
+# Part III. Additional Multi-Trial Sequence Families
+
+Status: scientific definitions confirmed and implementation completed 2026-11-08.
+Existing Part I/II definitions remain in force. Implementation planning and
+approval are separate steps.
+
+## Notation and patterns
+
+- `A` is the side chosen on the first correct-rewarded trial; `B` is the
+  opposite side. Include both left/right orientations.
+- `R_A` / `R_B`: correct and actually rewarded choice on the named side.
+- `O_A`: correct unrewarded choice on side A, using the existing omission
+  definition. It is not generic absence of reward.
+- `I_A` / `I_B`: incorrect choice on the named side. Retain the existing
+  incorrect definition without adding a reward requirement.
+- `->` denotes the immediately next original trial; do not skip intervening
+  trials. `[x trials]` means exactly x consecutive trials of that type,
+  including the first trial after the switch.
+- `|` marks a true block/opposite-context change immediately after the trial
+  to its left, established from adjacent processed trial rows.
+
+| Family | Complete episode | x | Displayed trials |
+| --- | --- | --- | --- |
+| Probe | `R_A -> I_B [x trials] -> R_A` | 1-4 | x+2 (3-6) |
+| Omission probe | `R_A -> O_A -> I_B [x trials] -> R_A` | 1-4 | x+3 (4-7) |
+| Lucky omission-switch | `R_A -> O_A \| R_B` | Not applicable | 3 |
+| Indecisive transition | `R_A \| I_A [x trials] -> R_B -> I_A -> R_B` | 1-3 | x+4 (5-7) |
+
+The final `R_A` in both probe patterns must be correct and actually rewarded.
+A correct omission does not qualify as the return trial; do not skip it to
+find a later reward.
+
+## Probe and omission probe
+
+For a probe, the initial rewarded action is followed immediately by an
+opposite-side incorrect excursion lasting exactly x trials, then an immediate
+return to side A. Count the first opposite-side incorrect trial in x; do not
+add x more repeats after it.
+
+For an omission probe, insert exactly one correct omission on side A between
+the initial rewarded trial and the incorrect excursion. The omission repeats
+the initial action; the excursion starts on the following trial.
+
+The entire episode must stay within one block and active context: all rows
+have the same `cur_block` and `state_int`, with A remaining the active/correct
+side throughout.
+
+## Lucky omission-switch
+
+Boundary placement:
+- Initial `R_A` and the following `O_A` belong to the same old block/context.
+- The context changes immediately after `O_A`: the following row has a
+  different `cur_block` and the opposite active `state_int` in `{0, 1}`.
+- The animal immediately switches to B, which is correct and rewarded in the
+  new context. There are no intervening incorrect trials.
+
+Displayed segment numbers are one-based: segment 2, `O_A`, is the final
+old-context trial (zero-based segment index 1). Segment 3, `R_B`, is the first
+new-context trial (index 2). Boundary labels/hover identify `O_A` as the
+pre-boundary trial; they must not label the initial `R_A` as the trigger.
+
+This family allows a correct omission as the pre-change trial. The
+existing Part II ideal-transition trigger specifically requires reward;
+matching this new family must not silently change that existing requirement.
+
+## Indecisive transition
+
+- Start with the existing correct-rewarded context-change trigger on A.
+- Follow it with exactly x incorrect repeats on A, where x is 1, 2, or 3.
+- Switch to B on a correct-rewarded trial.
+- Immediately switch back to A for exactly one incorrect trial.
+- Immediately switch again to B on a correct-rewarded trial.
+- All post-trigger trials remain in the same new block/context. An additional
+  context change or disqualifying intervening trial breaks the motif.
+
+Only the initial incorrect run varies with x. The later incorrect return to A
+is one trial, not another x-trial run.
+
+An indecisive episode contains a Part II ideal-transition match as its prefix.
+The existing definition does not constrain the trial after its first rewarded
+switch. Allow the event to match both families: show the shorter prefix in
+the ideal-transition family and the full episode in the indecisive family.
+Preserve the existing ideal-transition definition. Family counts are not
+mutually exclusive; do not remove a match solely because another family
+contains the same event.
+
+Its final `R_B -> I_A -> R_B` also satisfies the opposite-side x1 probe
+definition within the new block/context; retain that match as well.
+
+## Shared display and inclusion requirements
+
+- Use the full-sequence layout from Part II: display every trial's own
+  choice-aligned `[-2,+2)` window, fixed display separators, and local zero
+  references. Support episodes of up to seven displayed trials.
+- Select one family and condition at a time. Probes use initial-side/choice
+  paths `L -> R -> L` or `R -> L -> R`; these are not context-change directions.
+  Lucky and indecisive transitions use the old-to-new context direction.
+- Expose x only for families with a variable run length, using the ranges in
+  the table. Do not apply the original x=1-4 control to every family.
+- Apply the common ordinary-choice, original adjacency, trial-ID continuity,
+  and missing-value rules to every participating row. Intervening trials
+  break the motif; do not search ahead for a later successful return.
+- An absent `cur_block` or `state_int` column makes all Part III families
+  unavailable, with an explicit missing-field reason; Part I remains usable.
+  Missing context values in individual rows invalidate only episodes containing
+  those rows, rather than making the whole family unavailable.
+- Require full neural coverage for every displayed segment. Report behavioral
+  matches and coverage exclusions separately, and retain explicit empty views.
+- Reuse the same prepared source, session PCA axes, session-wide z-scoring,
+  and color limits across families. Family selection must not refit PCA.
+- Order rows by episode-start chronology. Labels/hover include family,
+  initial side or context direction, x when relevant, all original trial IDs,
+  and the pre-boundary trial identity when applicable.
+
+---
+
 # Implementation and Robustness Notes
 
 ## General robustness
@@ -540,10 +662,16 @@ For units:
   so unit activity requires its own extraction/preparation.
 
 ### Preparation and display
-- Provide an explicit Prepare action for missing compatible neural products.
+- Units use dedicated Probe / Unit / Bin width controls. Load a compatible
+  saved product directly; selecting an unprepared unit/bin-width combination
+  automatically prepares and saves only that selected unit's activity.
+- PCs retain an explicit Prepare action for a missing compatible
+  population/bin-width product, reusing a compatible saved PCA basis when
+  available. Recompute remains an explicit action for either source type.
 - Changing a behavioral condition, source rank, or display scaling must not
-  implicitly refit PCA. A new population/bin-width configuration can require
-  explicit preparation.
+  itself trigger neural preparation or refit PCA. Existing source-change
+  invalidation still applies; adding or selecting a family alone does not
+  invalidate the prepared neural source.
 - Keep computation/preparation separate from plotting prepared values.
 - Reuse compatible results; do not overwrite outputs from another source,
   parameter set, or analysis version.

@@ -1,7 +1,9 @@
 # Event-Sequence Heatmap Implementation Handoff
 
-Status: base implementation, designated-session validation and approved dedicated
-unit-selector revision complete. No experimental batch run.
+Status: base implementation, dedicated unit selector and Part III extension
+complete. WP8-WP12 in [Section 8](#8-additional-sequence-families-extension-2026-11-08)
+are accepted, including synthetic and designated-session saved-view validation.
+User inspection still precedes any experimental batch; none has been run.
 
 Authority: [spec](event_sequence_heatmap_spec_v1.md), [AGENTS.md](../AGENTS.md),
 and [SoftwareDesign.md](SoftwareDesign.md). The spec owns scientific meaning;
@@ -28,12 +30,12 @@ commit, GREEN, review, interruption, and user-inspection boundaries.
 
 | Field | Current value |
 | --- | --- |
-| Date / branch / inspected HEAD | 2026-11-05 / `refactor` / unit revision tests `01d3bde`; accepted source/handoff commit follows. Recheck; do not reset to this observation. |
-| Authority / next action | Approved unit-selector revision is complete. User can select any eligible unit for on-demand preparation; PC preparation remains explicit. Inspection still precedes any experimental multi-session batch. |
-| Feature files | Feature source/tests and this handoff are committed. The user's spec remains staged with unstaged refinements, preserved exactly. Transfer those actual user files if changing checkouts. |
-| Other work to preserve | Staged PCA spec, single-unit plan, ridge spec; staged/unstaged phase-synchrony spec; unstaged `src/main.py`, `src/neural_analysis/sync_ephys.py`; unrelated untracked files. |
-| Team / running work | Lead runtime identity is not exposed. Both workers idle. Revised CT026 app runs on loopback 127.0.0.1:8516, tool session 92006; no computations or experimental batches are running. |
-| Verification | Latest scoped regression: 600 passed, no warnings. Dedicated unit controls validated on CT026: one new unit prepared, cached switches and tool changes reused saved products. |
+| Date / branch / inspected HEAD | 2026-11-08 / `refactor` / accepted source `20b34e1`; final documentation handoff follows. Recheck; do not reset to this observation. |
+| Authority / next action | Implementation and agent QA complete. User can inspect the CT026 app/report. No new-session preparation or experimental batch is authorized by this handoff. |
+| Feature files | Extension source/tests are committed. This handoff includes the final spec/plan revision and acceptance evidence. |
+| Other work to preserve | Unstaged `docs/SAC_behavior_prep.md`, `src/Rcode/README.md`, and `src/Rcode/block_residual_modeling.R`; unrelated untracked files. Historical dirty-state records below describe their original dates. |
+| Team / running work | Both workers idle. Main CT026 app runs on 127.0.0.1:8516, tool session 10962; log in `.pytest_cache/event_sequence_extension_20261108/full_app.log`. Temporary saved-review server 61525 stopped and its tab closed. No computations or experimental batch running. |
+| Verification | Final combined regression: 873 passed in 42.97 s, session 20064. CT026 saved-view report 233057 completed; 12 additive PNGs checked, source/PCA hashes unchanged and source-product count remains 13. |
 
 ### Package ledger
 
@@ -52,6 +54,11 @@ instead of advancing on a worker's completion message alone.
 | WP5b app wiring/usage docs | Luna + lead | Accepted | `ca8e213`, `e1ebea8`; missing app and live-state regressions | `1c8a515`, `4da688b`; 593 combined passed |
 | WP6 synthetic/browser/regression audit | Sol lead | Accepted | `2df8a34`, `049ff5c`, `6bf8714`, `1cbb5f2`, `ca45558` display regressions | Six full-pipeline cases; 20 benchmark configurations; sparse/dense browser, physical PNG text-bounds; 593 combined passed |
 | WP7 designated-session inspection | Sol lead + user | Computation and lead QA complete; awaiting user inspection | Static real-layout regressions `ca45558` | `5ecdcbf`; 12 configurations / 26 reviewed exports, no batch |
+| WP8 additional-family selection | Sol worker | Accepted | `ef21c43`; 171 failed on absent selector, reproduced | `52724a1`; actual diff reviewed; 328 passed |
+| WP9 derived saved-product matches | Sol worker | Accepted | `cba5288`; 10 failed / 1 passed, reproduced; fixture correction `07acd7f` | `150d98d`; 57 passed; actual diff reviewed |
+| WP10 additional-family plots/export | Sol worker | Accepted | `e953ad2`; 69 missing-builder failures, reproduced | `dfb43bb`; 116 passed; actual diff and both seven-segment PNGs reviewed |
+| WP11 family controls/routing/docs | Luna | Accepted | `7e4a9e2`; 15 failed / 24 passed; helper import corrected in `54735ff` | `a6f6b9f`; 39 UI tests passed; actual diff reviewed |
+| WP12 extension acceptance | Sol lead | Accepted; user inspection precedes any batch | Caption `9bae668`; short-label bounds `874a19a`; provenance clearance `477d03c` | `28680de`; pipeline acceptance; fixes `6d95f13`/`d53705a`/`20b34e1`; 873 passed; CT026 saved report and browser reviewed |
 
 ### Receiving and resuming
 
@@ -62,13 +69,14 @@ instead of advancing on a worker's completion message alone.
 2. Inspect branch/HEAD, staged/unstaged diffs, untracked files, and any recorded
    worker/command sessions. Preserve partial work; stop for unexpected changes.
    Do not create duplicate writers or rerun completed analysis to recover context.
-3. Run the baseline below after initial approval. Subsequently reproduce checks
-   only when evidence is missing, interrupted, or invalidated by relevant edits.
+3. For the Part III extension, use Section 8's focused baseline and WP8-WP12.
+   The base baseline below is historical. Subsequently reproduce checks only
+   when evidence is missing, interrupted, or invalidated by relevant edits.
 4. Resume the first unfinished gate using Section 6. Before stopping, record
    owner, model/effort/agent ID when known, writable files, exact commands and
    commits, running session/PID/log/output paths, and next action.
 
-Initial baseline from the repository root; existing files only:
+Base-delivery baseline (historical reference; do not restart completed work):
 
 ```bash
 UV_CACHE_DIR=.pytest_cache/uv uv run --frozen --no-sync --offline pytest -q \
@@ -85,6 +93,9 @@ Record pre-existing failures. An environment failure or nonexistent test path
 is not meaningful feature RED evidence.
 
 ## 1. Scope and architecture
+
+Sections 1-6 retain the base delivery reference and shared contracts. Section 8
+defines the active extension and its file ownership; Section 7 retains evidence.
 
 Deliver the two agreed single-session app views, explicit preparation,
 interactive hover, and light-mode PNG export. Implement 500/100-ms bins first;
@@ -200,9 +211,10 @@ is valid. Display matrices are `(matched_trial,B)` or logically
 ## 3. App preparation, saved display, and persistence
 
 A request selects session metadata, source, probe/region, unit ID for a unit,
-PC population mode for a PC, and bin width. PC rank/outcome/side/direction/x and
-z-scoring are display settings. Use metadata PFC/HPC roles for PCs with an
-explicit probe override; unit selection always identifies its metadata probe.
+PC population mode for a PC, and bin width. Family, PC rank, outcome, side,
+direction, x and z-scoring are display settings. Use metadata PFC/HPC roles for
+PCs with an explicit probe override; unit selection always identifies its
+metadata probe.
 
 The app uses dedicated Probe / Unit / Bin width controls for units. A saved
 unit selection loads directly, including offline saved-unit browsing; a newly
@@ -241,6 +253,10 @@ For PC products, save the shared/regional choice mappings and verify a
 session-relative PCA reference by configuration identity, byte size, and content
 hash. Reuse existing portable-reference conventions where suitable. Saved
 labels and availability reasons must support display without current CSVs.
+
+This is the base persisted schema. Section 8 derives the additional families
+from its saved full trial table and coverage map, without changing these arrays
+or forcing existing products to be prepared again.
 
 Reuse requires matching analysis version, parameters, source identities, and
 unit or PCA identity. Save Git revision as provenance; use the analysis version
@@ -376,10 +392,12 @@ precedes any experimental batch.
 ## 6. Sol/Luna execution rules
 
 - **Sol orchestrator: `gpt-6.1-sol`, high.** Own assignments, scientific
-  acceptance, integration, Git operations, user communication, live state, WP6
-  and authorized WP7. Record actual runtime identity when exposed.
+  acceptance, integration, Git operations, user communication, live state,
+  WP6/WP12 and authorized designated-session checks. Record actual runtime
+  identity when exposed.
 - **Sol scientific worker: `gpt-6.1-sol`, high.** WP1-WP3, WP4a, WP5a and
-  bounded scientific fixes/review. **Luna: `gpt-6-luna`, medium.** WP4b/WP5b
+  extension WP8-WP10, plus bounded scientific fixes/review.
+  **Luna: `gpt-6-luna`, medium.** WP4b/WP5b and extension WP11:
   callable batch wrapper, widgets, routing, and docs after Sol accepts
   scientific interfaces.
 - At most **one active worker plus the orchestrator**, including review work.
@@ -387,7 +405,7 @@ precedes any experimental batch.
   scope becomes scientific, return it to Sol. Check model availability; do not
   silently substitute another family. Current assignments are in Section 0.
 
-Section 4 defines writable scope. Only one editor owns a file at a time;
+Sections 4 and 8 define writable scope. Only one editor owns a file at a time;
 WP4a owns `run_session.py` and releases its interface before WP4b starts the
 batch wrapper. The lead alone updates this ledger and stages/commits explicit
 paths, preserving unrelated staging. Do not amend/reset/revert user work.
@@ -407,7 +425,8 @@ preserve, spec/array contracts, test oracles, and focused `uv run` command:
 
 Order: WP1 -> WP2 -> WP3 -> WP4a -> WP4b -> WP5a -> WP5b -> WP6 -> WP7.
 These are internal acceptance gates after implementation approval; no repeated
-user approval is needed for each code package.
+user approval is needed for each code package. The extension resumes with
+WP8 -> WP9 -> WP10 -> WP11 -> WP12 under the same single-active-worker rule.
 
 ## 7. Review and execution record
 
@@ -1061,3 +1080,363 @@ output paths, and next action. Preserve history; append corrections to mistakes.
   app log is unit_selector_webapp.log in that directory. App remains available
   at 127.0.0.1:8516 with ProbeA:7 selected. Existing science interfaces, source
   arrays, PCA bases, CLI/metadata schema and prior products remain unchanged.
+
+### 2026-11-08 - Part III specification and extension handoff
+
+- User confirmed the four additional families, same-block probes, actually
+  rewarded returns, the lucky boundary after omission, and overlap between
+  indecisive and existing ideal-transition matches. Requested a plan update;
+  extension implementation approval remains pending.
+- Reviewed actual selection, saved packets, preparation, plotting, and app
+  controls at HEAD `73e2adb`. Existing packets retain the full trial table and
+  complete source-window maps, so this extension can derive new matches without
+  repeating neural preparation or migrating the persisted schema.
+- Updated the live snapshot/ledger and added WP8-WP12 below. Preserved completed
+  base evidence and the Sol/Luna, single-active-worker, tests-first rules.
+- Documentation only: no workers, tests, code edits, analysis, staging, or
+  commits. Next: review/approve Section 8, then run its baseline and WP8 RED.
+
+### 2026-11-08 - Extension authorization and baseline
+
+- User requested implementation after documentation review and tightening.
+  Section 8 and its single-active-worker assignments are approved. No repeated
+  package-level approval is required.
+- HEAD `73e2adb`, branch `refactor`; no staged changes at start. Preserve
+  unrelated dirty SAC/R files and untracked files. Spec/plan Part III changes
+  are expected. Focused Section 8 baseline: 435 passed in 22.27 s, session
+  92140, using `MPLCONFIGDIR=.pytest_cache/event_sequence_matplotlib` and
+  `UV_CACHE_DIR=.pytest_cache/uv uv run --frozen --no-sync --offline pytest -q`
+  with the four Section 8.4 paths.
+- Assigned WP8 tests only to `/root/extension_science`, requested
+  `gpt-6.1-sol`/high; no subworkers. Root owns integration/Git/live evidence.
+  Experimental validation remains limited to already saved CT026 products;
+  no new neural products or batch is authorized for validation.
+
+### 2026-11-08 - WP8 selection RED acceptance
+
+- Worker wrote only `test_additional_selection.py`, with independent raw
+  motifs/position oracles for all 24 keys and their validity/boundary rules.
+  Tests also retain the valid opposite-side x1 probe tail in indecisive
+  episodes, as implied by the specified patterns; no cross-family deduplication.
+- Worker RED: 171 failed in 1.98 s. Lead reviewed all test oracles and
+  reproduced 171 missing-selector failures in 1.42 s, session 57179. Tests-only
+  commit `ef21c43` precedes implementation. Assigned GREEN in `selection.py`
+  only to the same worker; existing central/ideal public contracts are fixed.
+
+### 2026-11-08 - WP8 GREEN acceptance / WP9 RED
+
+- Selector adds 24 condition keys, `ADDITIONAL_SELECTOR_VERSION`, and explicit
+  bounded episode checks. Existing central/ideal selectors remain unchanged.
+  Lead reviewed ordinary-row/ID continuity, finite contexts/blocks, exact
+  rewarded returns and initial/later runs, missingness, and overlapping tails.
+- Worker selection regression: 328 passed in 4.76 s. Lead reproduction:
+  328 passed in 4.72 s, session 33989; source commit `52724a1`. No scientific
+  ambiguity or remaining selection failure. Assigned WP9 tests only to the
+  same worker: saved-only derived matches and selector-version cache binding.
+
+### 2026-11-08 - WP9 saved-data RED acceptance
+
+- Reviewed ten offline/schema-v1 tests and one actual display-cache test.
+  Synthetic sources use five-second choice spacing and deterministically
+  extended fixture recordings; an earlier overlapping-window fixture error was
+  corrected before acceptance. No production fix was used for that setup issue.
+- Worker and lead RED: 10 failed / 1 passed in 1.67 s; lead session 24361.
+  Failures name missing runtime matches, missing selector-error propagation,
+  and a cache that ignores selector revision. Existing-validation ordering
+  already passes. Tests-only commit `cba5288`; same worker assigned GREEN.
+- Accepted WP10 builder contract for later RED: `build_sequence_view` uses
+  family/initial_side/repeats, delegates ideal conditions to the unchanged
+  legacy builder, and distinguishes episode starts from actual pre-boundary
+  identities. No WP10 source edits yet.
+
+### 2026-11-08 - WP9 GREEN acceptance / WP10 RED
+
+- Runtime adapter derives matches only after existing packet validation; absent
+  context columns get shaped empty arrays/reasons without calling the selector.
+  Selector revision is a display-load cache argument, separate from source
+  identity. Schema, persisted arrays/meta, preparation and neural caches stay
+  unchanged. Actual 38-insertion/4-deletion production diff reviewed.
+- First GREEN exposed a genuine test-oracle error: `R_A,I_B,R_A` has an
+  incorrect central trial and cannot yield a Part I match. Corrected only that
+  fixture to `R_A,O_A,I_B,R_A`, which has the intended central omission;
+  separate tests correction commit `07acd7f`, no assertion relaxed.
+- Lead focused IO/app regression: 57 passed in 10.47 s, session 57660. GREEN
+  commit `150d98d`. Assigned WP10 tests only in `test_additional_plotting.py`;
+  view file released for later WP11. No experimental sources were loaded.
+
+### 2026-11-08 - WP10 plotting RED acceptance
+
+- Reviewed 69 bounded plotting cases: all 24 actual value/identity payloads,
+  seven-segment geometry at four widths, unchanged legacy defaults/results,
+  missingness/coverage/overlap, shared scaling/renderers, and two physical
+  seven-segment PNG text-bounds checks. No source-preparation matrix is repeated.
+- An initial missing `start_time` in the new raw plotting fixture was corrected
+  before feature RED. Worker RED: 69 failed in 2.36 s; lead reproduction:
+  69 absent-builder failures in 1.85 s, session 50496. Tests-only commit
+  `e953ad2`; assigned GREEN in `plotting.py` only. Existing renderer/scientific
+  contracts and the direct legacy builder's output stay fixed.
+
+### 2026-11-08 - WP10 GREEN acceptance / WP11 RED
+
+- Family builder validates selectors, assembles existing saved activity, and
+  supplies explicit family/episode/path/boundary hover. Shared geometry helper
+  retains exact legacy ideal results; Plotly/Matplotlib renderers are unchanged.
+  Lead reviewed actual 165-insertion/7-deletion diff and both physical
+  seven-segment PNGs: complete windows, local zero axes, gaps, readable labels
+  and captions, white backgrounds and consistent signed source-SD color scale.
+- Worker regression: 116 passed in 6.35 s. Lead: 116 passed in 6.20 s,
+  session 58799. GREEN commit `dfb43bb`. Science worker now idle.
+- Assigned bounded UI/routing tests to `/root/extension_interface`, requested
+  `gpt-6-luna`/medium. It must return scientific/cache-policy questions to root;
+  root owns final integration tests and saved-product/browser inspection.
+
+### 2026-11-08 - WP11 RED acceptance / integration coverage
+
+- Lead corrected the proposed cache oracle before acceptance: the saved-load
+  wrapper must still check NPZ/PCA stats on reruns; only archive decoding/raw
+  reads/computation/publication are forbidden for a cached family switch.
+  Revised tests retain selected PC2/scaling/source, allow readable probe paths,
+  require valid repeat ranges without inventing a restore policy, and exercise
+  offline families with and without missing context columns.
+- Lead reproduced 15 failed / 24 passed in 10.76 s, session 7454. Tests-only
+  commit `7e4a9e2`; Luna assigned GREEN in view/routing label/README only.
+- Root extended synthetic pipeline acceptance over all 24 conditions, both
+  PC populations, raw/SD values and 500/100/50/20-ms bins using four bounded
+  source configurations. Every raw input is removed before saved display;
+  source/fit/publish operations are forbidden and source/PCA hashes preserved.
+  Existing plus new pipeline checks: 10 passed in 4.02 s, session 48658,
+  acceptance commit `28680de`. These verify the already accepted backend;
+  no additional implementation was needed. Final UI/browser acceptance waits
+  for WP11. The existing 13 CT026 source products are present and available.
+
+### 2026-11-08 - WP11 GREEN / final visual regressions
+
+- WP11 initially exposed a missing shared test-helper import (two NameErrors),
+  corrected separately in `54735ff`. New families now show their own missing
+  context reason; ideal retains its existing Part II reason. Lead reviewed
+  source controls, routing, range clamping and cache-preserving dispatch.
+  Worker 39 passed in 11.30 s; lead 39 passed in 11.18 s, session 27341.
+  UI/usage commit `a6f6b9f`.
+- Root added a caption regression because indecisive x counts only initial
+  errors, separately from the later error: 1 failed in 0.36 s, commit
+  `9bae668`; wording fix `6d95f13`, 117 plotting tests passed in 6.53 s.
+- First combined extension regression: 867 passed in 44.29 s, session 65020.
+  Saved-only CT026 export then exposed clipped episode-axis titles in short
+  PNGs. Three synthetic physical-bound regressions reproduced x0=-33.9 px;
+  tests commit `874a19a`, simple physical-margin fix `d53705a`. Worker 120
+  plotting tests passed; lead combined 870 passed in 44.34 s, session 26237.
+- Unit exports then passed, but a four-segment PC caption overlapped the
+  local-time label by 1.84 px. Added realistic PC provenance cases: 1 failed /
+  2 passed in 0.57 s, tests commit `477d03c`. Worker reserves more noncentral
+  bottom space; 123 plotting tests passed in 6.92 s. No source data, scaling,
+  selection or Plotly geometry changed. Final combined run is session 20064.
+- Bounded worker review of root's integration cases found no actionable
+  contract/oracle defects. Existing source pools, exact joins and archive
+  immutability checks remain coherent.
+- Live saved-only browser review verified populated probe/omission/lucky
+  families, explicit empty seven-segment views, x4->x3 clamping, and retained
+  PC2/scaling/source across families. Probe switch took 286 ms. Source reads,
+  preparation/fits/publication are guarded in the temporary wrapper. Screenshot
+  saved under `.pytest_cache/event_sequence_extension_20261108/browser_review.jpg`.
+
+### 2026-11-08 - Extension acceptance / user-inspection handoff
+
+- Final noncentral caption-margin fix `20b34e1` passed all 123 plotting tests
+  in the worker's run. Lead combined regression including neighboring timeline,
+  encoding, prediction, variance and behavior contracts: 873 passed in 42.97 s,
+  session 20064, no warnings. No new dependencies, CLI or metadata fields,
+  persisted schema changes, source invalidation or PCA-fit changes.
+- Saved-only CT026 validation used ProbeA:7 raw Hz and PFC/ProbeA good+MUA
+  PC1 source-SD at 100 ms. All 24 additional conditions, source coverage and
+  both kinds of indecisive overlap were checked. Source product count stayed
+  13; selected event archives and exact PCA SHA256s were unchanged. No current
+  CSV/spike reads, preparation, fitting or source publication was permitted.
+- Final report: `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/analysis_runs/event_sequence_extension_review_20261108_233057_048241/summary.md`.
+  The new directory includes the review script, run log and 12 additive PNGs.
+  Every export passed physical text-bound/caption-clearance checks; lead
+  visually inspected the corrected short PC omission plot, populated
+  seven-trial indecisive plot and empty seven-trial unit view. Earlier failed
+  review directories 231737 and 232253 remain intact. No source product was
+  overwritten. Final review/export runtime was 2.402 s; cached builders took
+  about 0.44-0.46 ms median for these source configurations.
+- Browser verified HPC/ProbeB good PCs at 100 ms, all new controls, populated
+  and empty conditions, x-range clamping and retained rank/scaling/source.
+  Cached probe-family switch: 286 ms. Native screenshot is preserved under
+  `.pytest_cache/event_sequence_extension_20261108/browser_review.jpg`.
+  Temporary saved-only server 61525 was stopped and its temporary tab closed;
+  normal app server 10962 remains on 127.0.0.1:8516 for user inspection.
+- Unrelated SAC/R file SHA256s still match the initial snapshot; their dirty
+  edits and unrelated untracked files are preserved. User inspection remains
+  the gate before any experimental batch; no batch or new neural preparation
+  was performed for this extension's experimental validation.
+
+## 8. Additional sequence families extension (2026-11-08)
+
+Status: implementation and agent acceptance complete 2026-11-08. User inspection
+precedes any experimental batch.
+Part III of the spec is authoritative. Base delivery and its user-approved
+unit-selection behavior remain in effect. Extend the existing sequence view;
+do not add four new app views or restart completed work packages.
+
+### 8.1 Matching and display contract
+
+Keep the existing 24 central conditions and eight ideal-transition conditions.
+Add these 24 conditions, including explicit correctly shaped empty arrays:
+
+| Family | Orientations / x | Conditions | Episode length S |
+| --- | --- | --- | --- |
+| Probe | Initial left/right, x=1-4 | 8 | x+2, up to 6 |
+| Omission probe | Initial left/right, x=1-4 | 8 | x+3, up to 7 |
+| Lucky omission-switch | Old side left/right, no x | 2 | 3 |
+| Indecisive transition | Old side left/right, x=1-3 | 6 | x+4, up to 7 |
+
+Probe families stay in one block and active context and end with an actually
+correct-rewarded return. Lucky omission-switch changes context after its
+same-side correct omission. Indecisive transitions include one later incorrect
+return; x counts only the initial incorrect run. Preserve incorrect's existing
+reward-unconstrained definition. All arrows mean original immediate adjacency;
+invalid rows and trial-ID gaps break a match. All new families need block/context
+fields; missing fields make them unavailable while keeping Part I usable.
+
+An indecisive match also contributes its shorter prefix to the existing ideal
+family. Do not add a later-stability requirement, cross-family deduplication,
+or a disjoint total. Source-specific coverage is applied after matching: every
+displayed segment must be covered, independently for the shorter and longer
+episodes. Thus a covered ideal prefix can remain visible when the full
+indecisive episode loses a later segment to incomplete coverage.
+
+The final `R_B -> I_A -> R_B` of an indecisive episode also satisfies the
+opposite-side x1 probe definition within the new block/context. Retain this
+match too; negative tests remove only the episodes affected by a mutation.
+
+### 8.2 Minimal changes and reuse
+
+1. **Selection:** add `select_additional_sequences` in `selection.py`, using
+   small explicit checks for the four families and existing normalization,
+   ordinary-choice and adjacency helpers. Return a dictionary keyed by
+   `(family, initial_side, x)`; use `None` for lucky's x. Each value is an integer
+   `(E,S)` array of original trial positions, ordered by episode start. Do not
+   alter `select_ideal_transitions`'s public contract or introduce a pattern DSL.
+   Family codes are `probe`, `omission_probe`, `lucky_omission_switch`, and
+   `indecisive_transition`; initial side is `left` or `right`.
+   Raise `ValueError` naming absent required columns, including `cur_block`
+   and `state_int`, consistently with the existing selectors. Missing context
+   values within present columns invalidate only episodes containing those
+   rows; a valid table with no matches returns all 24 shaped empty conditions.
+2. **Saved-data adapter:** after its existing validation, `io.load_event_sequences`
+   attaches runtime-only additional matches, selector revision, and availability
+   reason derived from the saved trial table. Before calling the new selector,
+   explicitly check for absent `cur_block`/`state_int` columns: attach all 24
+   shaped empty conditions and a missing-field unavailable reason when absent.
+   Do not convert unrelated validation errors into an unavailable condition.
+   Reuse `activity.assemble_heatmap` for selected-condition coverage/counts;
+   do not expand the old persisted `central_summary` or `transition_summary`
+   tables.
+3. **Persistence:** keep the existing NPZ schema, source analysis version,
+   configuration IDs, `EventSequenceRequest`, and unit/PCA caches. New matches
+   need no serialized arrays or raw sources: both old and newly prepared source
+   products contain their inputs. Add a small selector-version constant for the
+   derived definitions, include it in exported captions and the display-load
+   cache key, and keep it separate from neural source identity. Never rewrite
+   old archives or implicitly prepare a source solely to add families.
+4. **Plotting:** add a family-aware sequence builder in `plotting.py`; share
+   the existing segment geometry/renderers and keep `build_transition_view`
+   working with its existing defaults/results. Values remain `(E,S,B)` and
+   every segment retains its full window, zero line and fixed gap. Support all
+   seven segments at every supported bin width. Use episode-start labels for
+   probes. Segment numbers here are one-based: lucky's pre-boundary `O_A` is
+   segment 2 (zero-based index 1), and its first new-context `R_B` is segment 3
+   (index 2). Ideal/indecisive pre-boundary triggers are segment 1 (index 0).
+   Do not label every episode's first trial as a context-change trigger.
+   Hover/captions identify family, choice path/context direction, x when
+   relevant, all trial IDs, and the pre-boundary trial when applicable.
+5. **App:** broaden the existing ideal-transition view's label to
+   **Event sequences: multi-trial sequences** and add a family selector with
+   ideal transition as its default. Probes use initial-side/return-path labels;
+   lucky and indecisive use context direction. Show x=1-4 for ideal/probe/
+   omission probe, x=1-3 for indecisive, and no x control for lucky. Keep family
+   widget state valid when switching ranges. Source, bins, PC rank and z-scoring
+   persist; family switches alone neither prepare nor publish products. Preserve
+   automatic preparation for a newly selected unit/bin-width combination,
+   explicit PC preparation, and existing source-change invalidation. Reuse
+   current PNG export and source availability behavior.
+
+No new modules/dependencies, public CLI, metadata fields, batch behavior, or
+PCA fitting changes are needed. Source-level work stays in `selection.py`,
+`io.py`, `plotting.py`, the existing view/routing labels, tests and usage docs.
+Use shared helpers only for actual repeated logic; keep each motif reviewable.
+
+### 8.3 Tests-first packages and ownership
+
+Apply Section 6's RED -> tests-only commit -> GREEN -> review protocol to each
+package. At most one worker is active alongside the Sol lead. Feature test
+filenames below are under `src/tests/neural_analysis/event_sequences/`.
+
+1. **WP8 / Sol scientific worker:** `selection.py` and
+   `test_additional_selection.py`. Test all 24 new conditions against independently
+   specified episode positions, both sides and every x. Cover empty/single/multiple
+   episodes, chronological identities, invalid rows/ID gaps, exact run lengths,
+   absent context columns raising `ValueError`, row-level missing context
+   breaking only affected episodes, and outcomes on every required segment.
+   Reject context/block changes within probes, omission returns, a lucky
+   boundary before the omission or no actual boundary, multiple later incorrect
+   trials before the final indecisive reward, and intervening context changes.
+   Prove the original ideal-prefix match remains present for each indecisive
+   episode, together with its valid opposite-side x1 probe tail.
+2. **WP9 / Sol scientific worker:** runtime adapter in `io.py`, bounded saved-load
+   cache-key changes in `webapp/event_sequence_views.py`, `test_additional_io.py`
+   and supporting app cache tests. Release the view file before WP11. Use
+   existing-schema unit and PC products; remove current raw/CSV/quality inputs
+   and forbid fitting, binning and publication.
+   Verify new matches derive correctly, availability is family-specific, and
+   original NPZ/PCA bytes, old match sets, scaling pool and identities remain
+   unchanged. Distinguish missing-column unavailability from valid zero-match
+   conditions. No schema migration or source invalidation is expected.
+3. **WP10 / Sol scientific worker:** `plotting.py` and
+   `test_additional_plotting.py`. Verify actual segment values, all lengths and
+   local zero/gap geometry, both orientations, lucky's pre-boundary and first
+   new-context identities, and the absence of a fabricated probe trigger.
+   Test n=0/1, missing context,
+   whole-episode coverage exclusion, and the independently covered ideal prefix.
+   Confirm identical source/z-score limits across all families and agreement
+   between Plotly and Matplotlib. Inspect seven-segment PNG captions/labels.
+4. **WP11 / Luna routine worker:** `webapp/event_sequence_views.py`, bounded
+   `webapp/session_inputs.py` label changes, existing app/unit-selector tests,
+   and `src/neural_analysis/README.md`. After Sol accepts the builder and
+   derived-match contracts, test family-specific side/x controls, valid state
+   across family switches, offline cached display, unchanged unit auto-preparation,
+   and explicit PC preparation. With source inputs unchanged, forbid preparation,
+   raw reads and writes on family/outcome/scaling/rank changes. Do not delegate
+   scientific selection, cache-identity policy or plot geometry to Luna.
+5. **WP12 / Sol lead:** extend `test_synthetic_integration.py`, run focused
+   regressions, and inspect the browser/PNGs. Exercise old-schema reloads, both
+   PC populations, selected units, z-scoring, all families/orientations/x, and
+   500/100/50/20-ms geometry. Check cached family-switch latency and the selected
+   seven-segment payload; do not rerun the base PCA benchmark matrix. After
+   synthetic acceptance, inspect the same previously designated CT026 saved
+   products for the new views and record counts/coverage/overlap. Source NPZs
+   remain unchanged; only explicit additive PNG exports are written. A sparse
+   or absent family is a valid result, not a reason to choose another session.
+
+The Sol lead owns integration, commits, evidence and acceptance. If it authors
+scientific code, use the existing Sol worker for bounded review as in Section 6.
+No extension worker has been launched for this documentation update.
+
+### 8.4 Receiving baseline and acceptance boundary
+
+After extension approval, record one current feature baseline before WP8 RED:
+
+```bash
+UV_CACHE_DIR=.pytest_cache/uv uv run --frozen --no-sync --offline pytest -q \
+  src/tests/neural_analysis/event_sequences \
+  src/tests/neural_analysis/test_event_sequence_webapp.py \
+  src/tests/neural_analysis/test_event_sequence_unit_selector.py \
+  src/tests/mouse_behavior_preprocessing/test_event_sequence_context.py
+```
+
+Then advance WP8 -> WP9 -> WP10 -> WP11 -> WP12, updating Section 0 and appending
+Section 7 evidence. Historical test counts are not a new baseline result.
+Implementation approval covers these code/synthetic/saved-view checks on the
+already designated session. It does not authorize new experimental sessions,
+new unit/PC preparation for validation, or an experimental batch. If the needed
+saved products are unavailable, report that limitation rather than recomputing.
