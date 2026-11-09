@@ -345,7 +345,8 @@ def test_target_definitions_freeze_each_identifier_metadata_and_order():
         for definition in decoding_config.TARGET_DEFINITIONS
     )
 
-    assert observed == EXPECTED_TARGET_METADATA
+    assert observed == (*EXPECTED_TARGET_METADATA,
+                        ("current_reward", "categorical", "Current reward", "reward", "source"))
 
 
 def test_target_subset_normalizes_to_canonical_order(tmp_path):
