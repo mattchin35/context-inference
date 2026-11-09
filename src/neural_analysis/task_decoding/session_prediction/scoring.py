@@ -11,14 +11,14 @@ from .modeling import RegionPredictions
 from .preparation import PredictionInputs
 
 
-SCORING_VERSION = "trial-mean-performance-v1"
+SCORING_VERSION = "trial-mean-performance-v2"
 SCORING_POPULATIONS = ("all", "training_outcomes", "correct_rewarded", "omission", "incorrect")
 
 
 def trial_metrics(actual: np.ndarray, predictions: np.ndarray, family: str) -> dict:
     """Score aligned finite float vectors (trial,) with equal weight per trial.
 
-    Categorical values are 0=right/1=left and predictions are left probabilities;
+    Categorical values are binary 0/1 and predictions are class-1 probabilities;
     threshold the trial-mean probability at >=0.5. Return n_trials, accuracy and
     balanced_accuracy (fractions). Numerical values/predictions use native units;
     return n_trials, dimensionless r2 and native-unit rmse. Empty/undefined
@@ -50,7 +50,7 @@ def compute_prediction_performance(
     """Return small selected-target performance records for validated saved inputs/models.
 
     Inputs retain N-choice targets (N,T), regional scores (W,B,K), coefficients
-    (T,5,K), and saved predictions (W,B,T). Average only [-1,+1) bins; sigmoid
+    (T,5,K), and saved predictions (W,B,T). Average only the saved supervised-window bins; sigmoid
     precedes averaging for binary models. Each held-out trial occurs once per
     region/population. Training sets overlap, so report each fit separately.
 
@@ -81,42 +81,73 @@ def compute_prediction_performance(
                        "training_outcomes": inputs.training_condition_mask[positions]}
         populations.update({name: inputs.condition_masks[positions, inputs.condition_names.index(name)]
                             for name in SCORING_POPULATIONS[2:]})
+        side_labels = {}
+        for grouping, side_target in (("choice", "current_action"), ("state", "current_state")):
+            side_index = inputs.target_names.index(side_target)
+            side_labels[grouping] = (inputs.target_values[positions, side_index], inputs.target_valid[positions, side_index])
         for fold in range(FOLD_COUNT):
             train = baseline & model.training_choice_mask[target, fold, positions]
+            training_predictions = np.full(len(positions), np.nan)
             if model.fit_status[target, fold] == "ok":
-                predicted = _training_trial_means(source.scores, np.flatnonzero(train), inputs.training_bin_mask,
-                                                  model.coefficients[target, fold], model.intercepts[target, fold], family)
-                finite = np.isfinite(predicted)
-                metrics = trial_metrics(actual[train][finite], predicted[finite], family)
-            else:
-                metrics = trial_metrics(np.array([]), np.array([]), family)
-            common = {"region": role, "fold": fold, "population": "training_outcomes",
+                training_predictions[train] = _training_trial_means(
+                    source.scores, np.flatnonzero(train), inputs.training_bin_mask,
+                    model.coefficients[target, fold], model.intercepts[target, fold], family,
+                )
+            train &= np.isfinite(training_predictions)
+            common = {"region": role, "fold": fold,
                       "fit_status": str(model.fit_status[target, fold]), "fit_reason": str(model.fit_reason[target, fold])}
-            report["folds"].append({**common, "split": "training", **metrics})
-            test = eligible & (folds == fold) & populations["training_outcomes"]
-            report["folds"].append({**common, "split": "held_out", **trial_metrics(actual[test], predictions[test], family)})
-        for population, members in populations.items():
-            selected = eligible & members
-            common = {"region": role, "population": population}
-            report["held_out"].append({**common, **trial_metrics(actual[selected], predictions[selected], family)})
-            for grouping, side_target in (("choice", "current_action"), ("state", "current_state")):
-                side_index = inputs.target_names.index(side_target)
-                side_values = inputs.target_values[positions, side_index]
-                side_valid = inputs.target_valid[positions, side_index]
-                sides = {}
-                for side, value in (("left", 1), ("right", 0)):
-                    mask = selected & side_valid & (side_values == value)
-                    sides[side] = trial_metrics(actual[mask], predictions[mask], family)
-                    report["laterality"].append({**common, "grouping": grouping, "side": side, **sides[side]})
-                differences = {
-                    name: (sides["left"][name] - sides["right"][name]
-                           if sides["left"][name] is not None and sides["right"][name] is not None else None)
-                    for name in sides["left"] if name != "n_trials"
-                }
-                report["gaps"].append({**common, "grouping": grouping,
-                                       "left_n_trials": sides["left"]["n_trials"],
-                                       "right_n_trials": sides["right"]["n_trials"], **differences})
+            for split, selected, values in (("training", train, training_predictions),
+                                             ("held_out", eligible & (folds == fold), predictions)):
+                _append_performance_records(report, "folds", {**common, "split": split},
+                                            populations, selected, actual, values, family, side_labels)
+        _append_performance_records(report, "held_out", {"region": role, "split": "held_out", "fold": None},
+                                    populations, eligible, actual, predictions, family, side_labels)
     return report
+
+
+def _performance_metrics(actual: np.ndarray, predictions: np.ndarray, family: str) -> dict:
+    """Return trial metrics plus binary class counts from aligned finite (trial,) vectors.
+
+    Class counts are independent of laterality. Accuracy/R2 are dimensionless;
+    RMSE retains target units. The public trial_metrics contract is unchanged.
+    """
+    metrics = trial_metrics(actual, predictions, family)
+    if family == "categorical":
+        metrics.update(class_0_trials=int((actual == 0).sum()), class_1_trials=int((actual == 1).sum()))
+    return metrics
+
+
+def _append_performance_records(
+    report: dict[str, list[dict]], destination: str, common: dict,
+    populations: dict[str, np.ndarray], eligible: np.ndarray, actual: np.ndarray,
+    predictions: np.ndarray, family: str, side_labels: dict[str, tuple[np.ndarray, np.ndarray]],
+) -> None:
+    """Append one split/fold's outcome and side summaries; return None.
+
+    All values/masks share the regional (window,) axis, each window one trial.
+    side_labels maps choice/state to (0/1 actual labels, validity). common holds
+    region/split/fold/status scalars. Mutate only the small report lists; metrics
+    retain fraction/native units. Neural products are reused across all masks.
+    """
+    metric_names = ("accuracy", "balanced_accuracy") if family == "categorical" else ("r2", "rmse")
+    for population, members in populations.items():
+        selected = eligible & members
+        identity = {**common, "population": population}
+        report[destination].append({**identity, **_performance_metrics(actual[selected], predictions[selected], family)})
+        for grouping, (labels, valid) in side_labels.items():
+            sides = {}
+            for side, value in (("left", 1), ("right", 0)):
+                mask = selected & valid & (labels == value)
+                sides[side] = _performance_metrics(actual[mask], predictions[mask], family)
+                report["laterality"].append({**identity, "grouping": grouping, "side": side, **sides[side]})
+            differences = {
+                name: (sides["left"][name] - sides["right"][name]
+                       if sides["left"][name] is not None and sides["right"][name] is not None else None)
+                for name in metric_names
+            }
+            report["gaps"].append({**identity, "grouping": grouping,
+                                   "left_n_trials": sides["left"]["n_trials"],
+                                   "right_n_trials": sides["right"]["n_trials"], **differences})
 
 
 # Training reconstruction keeps temporary storage to one bin's windows/PCs.

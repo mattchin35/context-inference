@@ -29,7 +29,7 @@ checkpointing to this analysis.
 | Field | Current value |
 | --- | --- |
 | Date / branch / inspected HEAD | 2026-11-09 / `refactor` / `04ca54d`. Earlier computational commits remain in the evidence log; recheck checkout state on resumption. |
-| Phase / authorization | User authorized WP11-WP15 implementation. WP11/WP12 GREEN; WP13 RED next. No new experimental preparation authorized. |
+| Phase / authorization | WP11-WP13 GREEN under user implementation authority; WP14 runner/view next. No experimental preparation authorized. |
 | Scientific settings | Three matched choice-aligned windows: Full [-1,+1), Before [-1,0), After [0,+1); prediction stays [-2,+2). Generalization retains seven targets; new mixed products add current_reward as target three. Both splits/outcomes and both lateralities are summarized. |
 | Source/tests | WP11 fixed windows/reward inputs implemented; 220 focused tests passed in 2.24 s; changed-file Ruff clean. WP12-WP15 pending. |
 | Documentation | Spec revision 4 is confirmed. This plan now specifies localized changes, v1/v2/v3 compatibility, test-first WP11-WP15 and the next handoff gate. Documentation edits are uncommitted. |
@@ -37,7 +37,7 @@ checkpointing to this analysis.
 | Team / writer | Current documentation chat is the sole writer; no worker launched. Implementation assignments: Sol orchestrator; at most one active worker, with bounded Luna integration/usage scope in Section 12. Runtime model/effort identity is not exposed to the agent. |
 | Running analysis | No process/worker launched by this planning revision. Prior preview liveness was not checked; do not infer it from the old log. |
 | Latest verification | Review identified the additional single_session_setup default-target consumer; WP11 and integration gates now include its regression. Document checks and evidence below cover the correction and explicit assignments. Historical baseline remains 237 tests/browser checks; no new code gate was run. |
-| Next action | WP13 matched-window training/outcome/laterality tests, RED and test commit before source. |
+| Next action | WP14 RED tests; sole optional Luna worker owns runners/test_scripts, lead owns plotting/view tests/source. |
 
 ### 0.2 Package ledger
 
@@ -62,7 +62,7 @@ experimental visual acceptance belongs to the user.
 | WP10 performance/laterality | Lead | GREEN | `c381dda` scoring collection error; `beb4770` three UI failures; `05d0011` continuous caption failure | `86b7131` scoring; `c315ef4` UI; 237 integrated tests, Ruff and synthetic browser checks | Complete; no fits/archive migration required. |
 | WP11 windows/reward inputs | Sol orchestrator, direct writer | GREEN | `f578d7b`; 26 failed/186 passed/6 setup errors; additional reward-local cases 2 failed. Metadata expectation correction `c03e763`. | 220 focused tests passed; changed-file Ruff clean; source commit follows this entry. | WP12 RED. |
 | WP12 versioned persistence | Sol orchestrator, direct writer | GREEN | `2c5bd2e`; 21 failed/22 passed. | 43 persistence tests passed in 3.11 s; changed-file Ruff clean. | WP13 RED. |
-| WP13 split/outcome scoring | Sol orchestrator, direct writer | Planned | Not started | Not started | Matched-window scores, exact split/outcome/side masks and reward counts. |
+| WP13 split/outcome scoring | Sol orchestrator, direct writer | GREEN | `f104d2a`; 12 failed/16 passed. | Scoring + persistence: 71 passed in 6.40 s; Ruff clean. | WP14 runner/view RED. |
 | WP14 runner/view integration | Sol orchestrator; optional single Luna worker | Planned | Not started | Not started | One window per preparation, saved selection, labels and anchored navigation; Sol reviews/accepts. |
 | WP15 docs/integration/acceptance | Sol orchestrator + user; optional same Luna worker for usage docs | Planned | Not started | Not started | Sol owns synthetic/browser checks; user inspects explicitly authorized experimental validation. |
 
@@ -601,6 +601,21 @@ Next exact action, owner, and any missing authority:
   permits only the two known mixed tuples, with legacy T=2 restricted to Full.
   No new storage abstraction, migration or experimental fit. WP11 source ade2b88.
 - Next: WP13 scoring RED. No worker or background job active.
+
+### 2026-11-09 - WP13 / RED and GREEN
+
+- RED: offline uv pytest -q prediction/test_scoring.py --tb=short: 12 failed,
+  16 passed. Tests committed f104d2a before source. WP12 source 9274281.
+- GREEN: scoring plus persistence tests, 71 passed in 6.40 s; changed-file
+  Ruff clean. Direct independent trial-mean oracles cover both modes/all windows,
+  continuous and reward labels, each split/fold/outcome and choice/state side.
+  Single-class reward counts/metrics and failed-destination versus valid-training
+  availability are verified. Scoring version is trial-mean-performance-v2.
+- Reconstruct training probabilities/values once per model, then reuse small
+  arrays for all population/side intersections. Never pool training folds or
+  subtract class counts into metric gaps; public trial_metrics is unchanged.
+- Next: WP14 bounded runner/CLI worker and lead plotting/view integration,
+  one active worker maximum. No experimental fit or background analysis.
 
 ## 1. Outcome and boundaries
 
