@@ -52,6 +52,7 @@ class SessionPredictionConfig:
     session_metadata_path/base_config_path are absolute paths; bin_width_ms
     selects the matching saved PCA, never a resampling of another basis.
     analysis_mode selects one fixed target set and training-condition union.
+    training_window is full/before/after, a fixed choice-relative second interval.
     """
 
     session_metadata_path: Path

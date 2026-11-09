@@ -7,9 +7,10 @@ from pathlib import Path
 import streamlit as st
 
 from src.neural_analysis.session_metadata import ResolvedSession
-from src.neural_analysis.task_decoding.session_prediction.config import ANALYSIS_MODES, GENERALIZATION_MODE, MIXED_MODE
+from src.neural_analysis.task_decoding.session_prediction.config import ANALYSIS_MODES, GENERALIZATION_MODE, MIXED_MODE, TRAINING_WINDOWS
 from src.neural_analysis.task_decoding.session_prediction.plotting import (
     PredictionDisplay, analysis_mode_label, prediction_target_label, training_population_label,
+    training_window_label,
 )
 from src.neural_analysis.task_decoding.session_prediction.results import (
     SessionPredictions, discover_prediction_runs, load_prediction_result,
@@ -33,6 +34,7 @@ class PredictionViewState:
     prepared: bool
     anchor: SessionPredictions | None
     display: PredictionDisplay | None
+    training_window: str = "full"
 
 
 def render_prediction_controls(
@@ -49,14 +51,20 @@ def render_prediction_controls(
                     if option.session_id == session.session_id)
     st_module.sidebar.markdown("**Condition predictions**")
     mode_key = f"{scope}_prediction_analysis"
+    window_key = f"{scope}_prediction_training_window"
     if mode_key not in st_module.session_state:
-        available = {option.analysis_mode for option in options}
-        st_module.session_state[mode_key] = (MIXED_MODE if available and GENERALIZATION_MODE not in available
-                                            else GENERALIZATION_MODE)
+        initial = next((option for option in options if option.analysis_mode == GENERALIZATION_MODE
+                        and option.training_window == "full"), options[0] if options else None)
+        st_module.session_state[mode_key] = initial.analysis_mode if initial else GENERALIZATION_MODE
+        st_module.session_state[window_key] = initial.training_window if initial else "full"
+    if window_key not in st_module.session_state:
+        st_module.session_state[window_key] = "full"
     analysis_mode = st_module.sidebar.selectbox("Analysis", options=ANALYSIS_MODES,
                                                format_func=analysis_mode_label, key=mode_key)
-    options = tuple(option for option in options if option.analysis_mode == analysis_mode)
-    mode_scope = f"{scope}_{analysis_mode}"
+    training_window = st_module.sidebar.selectbox("Training/scoring window", options=tuple(TRAINING_WINDOWS),
+                                                  format_func=training_window_label, key=window_key)
+    options = tuple(option for option in options if option.analysis_mode == analysis_mode and option.training_window == training_window)
+    mode_scope = f"{scope}_{analysis_mode}_{training_window}"
     prepare = st_module.sidebar.button("Prepare predictions", key=f"{scope}_prepare_predictions")
     recompute = st_module.sidebar.button("Recompute predictions", disabled=not options,
                                         key=f"{scope}_recompute_predictions")
@@ -68,9 +76,11 @@ def render_prediction_controls(
             with st_module.spinner("Preparing block-held-out session predictions..."):
                 report = prepare_session_predictions(session.metadata_path, probe_roles=probe_roles,
                                                        bin_width_ms=bin_width_ms, analysis_mode=analysis_mode,
+                                                       training_window=training_window,
                                                        rerun=recompute)
             options = tuple(option for option in discover_prediction_runs(session.session_root)
-                            if option.session_id == session.session_id and option.analysis_mode == analysis_mode)
+                            if option.session_id == session.session_id and option.analysis_mode == analysis_mode
+                            and option.training_window == training_window)
             st_module.session_state[selection_key] = str(report.result_path)
             st_module.session_state[show_key] = True
         except (OSError, ValueError) as error:
@@ -80,10 +90,10 @@ def render_prediction_controls(
         st_module.session_state[show_key] = bool(by_path)
     show = st_module.sidebar.checkbox("Show predictions", disabled=not by_path, key=show_key)
     if not by_path:
-        st_module.caption(f"{analysis_mode_label(analysis_mode)} predictions are not prepared. "
+        st_module.caption(f"{analysis_mode_label(analysis_mode)} - {training_window_label(training_window)} predictions are not prepared. "
                           "Prepare predictions uses the selected probes/bin width and the session's task_decoding_config.json.")
         anchor = _retained_anchor(st_module, session, anchor_key)
-        return PredictionViewState(analysis_mode, False, anchor, None)
+        return PredictionViewState(analysis_mode, False, anchor, None, training_window)
     if st_module.session_state.get(selection_key) not in by_path:
         st_module.session_state[selection_key] = next(iter(by_path))
     labels = {path: option.display_label.replace(option.analysis_mode, analysis_mode_label(option.analysis_mode), 1)
@@ -92,22 +102,29 @@ def render_prediction_controls(
                                           format_func=labels.get)
     try:
         result = load_saved_prediction_cached_for_path(Path(selected), session.session_root)
-        if result.inputs.timeline.session_id != session.session_id or result.inputs.analysis_mode != analysis_mode:
-            raise ValueError("Saved prediction session/mode differs from the selection")
+        if (result.inputs.timeline.session_id != session.session_id or result.inputs.analysis_mode != analysis_mode
+                or result.inputs.training_window != training_window):
+            raise ValueError("Saved prediction session/mode/window differs from the selection")
     except (OSError, ValueError, KeyError) as error:
         st_module.error(f"Could not load saved predictions: {error}")
-        return PredictionViewState(analysis_mode, False, _retained_anchor(st_module, session, anchor_key), None)
+        return PredictionViewState(analysis_mode, False, _retained_anchor(st_module, session, anchor_key), None, training_window)
     st_module.session_state[anchor_key] = selected
     inputs = result.inputs
-    st_module.caption(f"Saved {analysis_mode_label(inputs.analysis_mode)}: {selected}; "
+    st_module.caption(f"Saved {analysis_mode_label(inputs.analysis_mode)} - {training_window_label(inputs.training_window)}: {selected}; "
                       f"{result.meta['effective_config']['bin_width_ms']} ms. "
                       "Preparation probe/bin controls do not change this saved basis.")
+    if inputs.analysis_mode == MIXED_MODE and "current_reward" not in inputs.target_names:
+        st_module.caption("Legacy mixed result: state/action only; reward is not prepared. "
+                          "Use Prepare predictions to create the expanded reward product.")
     if not show:
-        return PredictionViewState(analysis_mode, True, result, None)
+        return PredictionViewState(analysis_mode, True, result, None, training_window)
     target_labels = {name: prediction_target_label(inputs.analysis_mode, name, inputs.target_metadata[name]["display_label"])
                      for name in inputs.target_names}
+    target_key = f"{mode_scope}_prediction_target"
+    if target_key in st_module.session_state and st_module.session_state[target_key] not in inputs.target_names:
+        st_module.session_state[target_key] = inputs.target_names[0]
     target = st_module.sidebar.selectbox("Prediction target", options=list(inputs.target_names),
-                                         format_func=target_labels.get, key=f"{mode_scope}_prediction_target")
+                                         format_func=target_labels.get, key=target_key)
     mode = st_module.sidebar.selectbox("Prediction PC view", options=["hidden", "raw", "weighted"],
                                        key=f"{mode_scope}_prediction_pc_mode")
     order = st_module.sidebar.selectbox("Prediction PC order", options=["original", "contribution"],
@@ -120,7 +137,7 @@ def render_prediction_controls(
                                                help="Contribution order shows the top N PCs; original order uses regional rank ranges.",
                                                key=count_key))
     st_module.caption("Block-held-out prediction using a fixed session-wide PCA basis. "
-                      "Supervised training: [-1,+1) s; prediction: [-2,+2) s. "
+                      f"Supervised training/scoring: {training_window_label(inputs.training_window)}; prediction: [-2,+2) s. "
                       "PCA/unit scaling include held-out neural data. This is an offline readout. "
                       "State and action readouts can coincide on correct-rewarded training labels.")
     if inputs.analysis_mode == MIXED_MODE:
@@ -128,12 +145,16 @@ def render_prediction_controls(
                           "State decoding targets recorded task state; action decoding targets choice. "
                           "Mixed training changes outcome composition and sample size. At fixed C, more trials reduce "
                           "regularization relative to average loss; differences do not isolate outcome composition.")
+    if target == "current_reward":
+        st_module.caption("Reward decoding uses actual trial reward: Before predicts the eventual outcome; "
+                          "After is post-choice, not necessarily post-delivery. Actual overlays are trial labels, "
+                          "not reward-delivery events or subjective expectation.")
     unavailable = inputs.target_availability.get(target, "")
     if unavailable:
         st_module.info(f"{target} unavailable: {unavailable}. Other targets remain available.")
     _render_model_details(st_module, result, target)
     _render_performance_panel(st_module, result, Path(selected), session.session_root, target, mode_scope)
-    return PredictionViewState(analysis_mode, True, result, PredictionDisplay(result, target, mode, order, count))
+    return PredictionViewState(analysis_mode, True, result, PredictionDisplay(result, target, mode, order, count), training_window)
 
 
 def load_saved_prediction_cached_for_path(path: Path, session_root: Path) -> SessionPredictions:
@@ -165,7 +186,7 @@ def _render_performance_panel(
     source_stat = (session_root / result.meta["source_pca"]["path"]).stat()
     report = _cached_prediction_performance(
         str(path.resolve()), result_stat.st_size, result_stat.st_mtime_ns,
-        source_stat.st_size, source_stat.st_mtime_ns, target, SCORING_VERSION,
+        source_stat.st_size, source_stat.st_mtime_ns, target, result.inputs.training_window, SCORING_VERSION,
         _result=result,
     )
     populations = {"all": "All eligible choices", "training_outcomes": "Training outcomes",
@@ -174,22 +195,34 @@ def _render_performance_panel(
         inputs = result.inputs
         label = prediction_target_label(inputs.analysis_mode, target, inputs.target_metadata[target]["display_label"])
         binary = inputs.target_families[inputs.target_names.index(target)] == "categorical"
-        aggregation = ("Binary probabilities are averaged before the 0.5 left/right threshold. " if binary else
+        class_labels = inputs.target_metadata[target].get("class_labels", {})
+        aggregation = (f"Binary probabilities are averaged before the 0.5 threshold for {class_labels.get('1', 'class 1')}. " if binary else
                        "Predictions and RMSE retain target units; R2 uses target variation within each scored group. ")
-        st_module.caption(f"{label}: one prediction per trial, averaged over [-1,+1) s. "
+        st_module.caption(f"{label}: one prediction per trial, averaged over {training_window_label(inputs.training_window)}. "
                           + aggregation +
                           "Scores describe the full saved session and do not change with pan or visible PCs.")
-        st_module.markdown("**Held-out performance**")
         st_module.caption("Every held-out trial is counted once per region. Training outcomes matches the model's "
                           "training pool; All eligible choices also includes other outcomes. "
                           "Unavailable metrics do not mean zero performance.")
-        st_module.dataframe(_performance_rows(report["held_out"], populations), hide_index=True)
-        st_module.markdown("**Left versus right on held-out trials**")
+        split = st_module.selectbox("Scoring split", options=("held_out", "training"),
+                                     format_func=_scoring_split_label, key=f"{scope}_score_split")
+        fold_options = (None, *range(5)) if split == "held_out" else tuple(range(5))
+        fold_key = f"{scope}_score_fold"
+        if fold_key in st_module.session_state and st_module.session_state[fold_key] not in fold_options:
+            st_module.session_state[fold_key] = 0
+        fold = st_module.selectbox("Scoring fold", options=fold_options, format_func=_scoring_fold_label, key=fold_key)
+        overview = report["held_out"] if fold is None else [row for row in report["folds"]
+                                                           if row["split"] == split and row["fold"] == fold]
+        st_module.markdown(f"**{_scoring_split_label(split)} performance**")
+        st_module.dataframe(_performance_rows(overview, populations, class_labels=class_labels), hide_index=True)
+        st_module.markdown("**Left versus right**")
         population = st_module.selectbox("Laterality scoring population", options=SCORING_POPULATIONS,
                                          format_func=populations.get, key=f"{scope}_score_population")
-        side_rows = [row for row in report["laterality"] if row["population"] == population]
-        gap_rows = [row for row in report["gaps"] if row["population"] == population]
-        st_module.dataframe(_performance_rows(side_rows, populations), hide_index=True)
+        side_rows = [row for row in report["laterality"] if row["population"] == population
+                     and row["split"] == split and row["fold"] == fold]
+        gap_rows = [row for row in report["gaps"] if row["population"] == population
+                    and row["split"] == split and row["fold"] == fold]
+        st_module.dataframe(_performance_rows(side_rows, populations, class_labels=class_labels), hide_index=True)
         st_module.dataframe(_performance_rows(gap_rows, populations, differences=True), hide_index=True)
         interpretation = ("Positive accuracy differences (percentage points) favor left. "
                           "Single-class groups have accuracy but no balanced accuracy. " if binary else
@@ -201,17 +234,31 @@ def _render_performance_panel(
                           "they do not alone establish a hemisphere effect.")
         with st_module.expander("Training / test by fold"):
             st_module.caption("Training uses each model's exact saved training trials and coefficients. "
-                              "Held-out uses that fold's matching training outcomes. Training sets overlap across "
+                              "Outcome rows intersect each split's actual eligible trials. Training sets overlap across "
                               "folds, so their counts and scores are not pooled as independent trials.")
-            st_module.dataframe(_performance_rows(report["folds"], populations), hide_index=True)
+            st_module.dataframe(_performance_rows(report["folds"], populations, class_labels=class_labels), hide_index=True)
 
 
-def _performance_rows(rows: list[dict], populations: dict[str, str], *, differences: bool = False) -> list[dict]:
+def _scoring_split_label(split: str) -> str:
+    """Return a display label for a training/held_out split identifier."""
+    return "Training" if split == "training" else "Held-out"
+
+
+def _scoring_fold_label(fold: int | None) -> str:
+    """Return a display label for a 0..4 model fold, or pooled held-out None."""
+    return "Pooled held-out" if fold is None else f"Fold {fold}"
+
+
+def _performance_rows(
+    rows: list[dict], populations: dict[str, str], *, differences: bool = False,
+    class_labels: dict[str, str] | None = None,
+) -> list[dict]:
     """Format small metric records for tables; fractions become percent/percentage points.
 
     rows contain dimensionless accuracy/R2, native-unit RMSE and trial counts.
     populations maps canonical IDs to labels. Return new dictionaries without
     altering records. Side differences use ordinary accuracy, not balanced accuracy.
+    Optional class_labels maps string 0/1 to target-specific class names.
     """
     labels = {"region": "Region", "population": "Population", "grouping": "Grouping", "side": "Side",
               "fold": "Fold", "split": "Split", "n_trials": "Trials", "fit_status": "Fit status",
@@ -219,6 +266,9 @@ def _performance_rows(rows: list[dict], populations: dict[str, str], *, differen
               "accuracy": "Accuracy difference (pp)" if differences else "Accuracy (%)",
               "balanced_accuracy": "Balanced accuracy (%)", "r2": "R2 difference" if differences else "R2",
               "rmse": "RMSE difference" if differences else "RMSE"}
+    for value in ("0", "1"):
+        class_label = (class_labels or {}).get(value, f"Class {value}")
+        labels[f"class_{value}_trials"] = f"{class_label.capitalize()} trials"
     formatted = []
     for row in rows:
         record = {}
@@ -243,7 +293,7 @@ def _performance_rows(rows: list[dict], populations: dict[str, str], *, differen
 @st.cache_data(show_spinner=False, max_entries=16)
 def _cached_prediction_performance(
     path: str, size: int, mtime_ns: int, source_size: int, source_mtime_ns: int,
-    target: str, scoring_version: str, *, _result: SessionPredictions,
+    target: str, training_window: str, scoring_version: str, *, _result: SessionPredictions,
 ) -> dict[str, list[dict]]:
     """Cache small target-score records by saved paths/stats and scoring version.
 
@@ -251,6 +301,7 @@ def _cached_prediction_performance(
     contains already-validated N/W/B/T/K products and is deliberately excluded
     from hashing, avoiding another PCA load/copy or hash on each widget change.
     No model is fitted and no cached score alters saved scientific identity.
+    training_window is the saved full/before/after identifier, never a display crop.
     """
     return compute_prediction_performance(_result.inputs, _result.regions, target)
 
@@ -265,7 +316,8 @@ def _render_model_details(st_module: object, result: SessionPredictions, target:
     inputs = result.inputs
     target_index = inputs.target_names.index(target)
     with st_module.expander("Prediction model details"):
-        st_module.write(f"{analysis_mode_label(inputs.analysis_mode)}; {training_population_label(inputs.analysis_mode)}")
+        st_module.write(f"{analysis_mode_label(inputs.analysis_mode)}; {training_population_label(inputs.analysis_mode)}; "
+                        f"{training_window_label(inputs.training_window)}")
         for role, model in result.regions.items():
             st_module.write(f"{role}: {len(model.pc_ids)} predictor PCs; displaying fewer rows does not change the model.")
             rows = []
@@ -279,8 +331,9 @@ def _render_model_details(st_module: object, result: SessionPredictions, target:
                  **{name: int((mask & inputs.condition_masks[:, inputs.condition_names.index(name)]).sum())
                     for name in ("correct_rewarded", "omission", "incorrect")}}
                 if inputs.target_families[target_index] == "categorical":
-                    row.update({"right_class_0": int((mask & (inputs.target_values[:, target_index] == 0)).sum()),
-                                "left_class_1": int((mask & (inputs.target_values[:, target_index] == 1)).sum())})
+                    classes = inputs.target_metadata[target]["class_labels"]
+                    row.update({f"{classes[str(value)]}_class_{value}": int((mask & (inputs.target_values[:, target_index] == value)).sum())
+                                for value in (0, 1)})
                 rows.append(row)
             st_module.dataframe(rows, hide_index=True)
 

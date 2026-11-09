@@ -69,7 +69,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
             bin_width_s = anchor.meta["effective_config"]["bin_width_ms"] / 1000
             st_module.caption(f"Saved background PCA: {saved}; {int(round(bin_width_s * 1000))} ms. "
                               f"Configuration: {config['configuration_id']}. "
-                              "This saved background does not prepare an unprepared analysis mode.")
+                              "This saved background does not prepare an unprepared analysis mode or window.")
         else:
             try:
                 config = timeline_io.timeline_configuration(session, roles, bin_width_s)

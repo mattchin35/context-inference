@@ -133,7 +133,8 @@ def _append_performance_records(
     for population, members in populations.items():
         selected = eligible & members
         identity = {**common, "population": population}
-        report[destination].append({**identity, **_performance_metrics(actual[selected], predictions[selected], family)})
+        summary_identity = identity if destination == "folds" else {"region": common["region"], "population": population}
+        report[destination].append({**summary_identity, **_performance_metrics(actual[selected], predictions[selected], family)})
         for grouping, (labels, valid) in side_labels.items():
             sides = {}
             for side, value in (("left", 1), ("right", 0)):

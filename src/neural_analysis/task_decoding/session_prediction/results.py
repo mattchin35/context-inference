@@ -308,6 +308,9 @@ def validate_prediction_result(inputs: PredictionInputs, regions: dict[str, Regi
             or not np.isnan(inputs.target_values[~inputs.target_valid]).all()
             or not np.array_equal(inputs.correct_rewarded, inputs.condition_masks[:, 1])):
         raise ValueError("Target validity/condition mask conventions disagree")
+    for target, family in enumerate(families):
+        if family == "categorical" and not np.isin(inputs.target_values[inputs.target_valid[:, target], target], [0, 1]).all():
+            raise ValueError("Saved binary actual labels must be exact 0 or 1")
     expected_membership = training_membership(inputs.analysis_mode, inputs.condition_names, inputs.condition_masks)
     if not np.array_equal(inputs.training_condition_mask, expected_membership):
         raise ValueError("Training condition mask contradicts analysis mode memberships")

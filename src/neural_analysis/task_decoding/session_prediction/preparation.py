@@ -31,6 +31,7 @@ class PredictionInputs:
     are -1. condition_masks is bool (N,C), retaining overlapping memberships.
     target_metadata preserves source/family/class labels; availability maps
     target names to an empty string or a reason. Time edges are relative seconds.
+    training_window identifies the fixed full/before/after fitting/scoring interval.
     """
 
     timeline: SessionTimelineResult

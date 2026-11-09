@@ -10,6 +10,11 @@ from .results import SessionPredictions
 from .config import GENERALIZATION_MODE
 
 
+def training_window_label(training_window: str) -> str:
+    """Return the display name/bounds in choice-relative seconds for a validated window ID."""
+    return {"full": "Full [-1,+1) s", "before": "Before [-1,0) s", "after": "After [0,+1) s"}[training_window]
+
+
 def analysis_mode_label(analysis_mode: str) -> str:
     """Return the visible analysis name for a validated canonical mode identifier."""
     return ("Correct-rewarded generalization" if analysis_mode == GENERALIZATION_MODE
@@ -23,18 +28,25 @@ def training_population_label(analysis_mode: str) -> str:
 
 def prediction_target_label(analysis_mode: str, target_name: str, source_label: str) -> str:
     """Return a mode-specific binary label, or retain a continuous target's source label."""
-    if target_name in ("current_state", "current_action"):
+    if target_name in ("current_state", "current_action", "current_reward"):
         suffix = "generalization" if analysis_mode == GENERALIZATION_MODE else "decoding"
         return f"{target_name.removeprefix('current_').capitalize()} {suffix}"
     return source_label
 
 
-def prediction_display_label(display: "PredictionDisplay") -> str:
-    """Return the selected target label and training population from saved display data."""
+def prediction_display_label(display: "PredictionDisplay", *, include_probability: bool = False) -> str:
+    """Return saved target/population/window text, optionally including binary probability units.
+
+    display contains saved N/W/B/T/F/K products; include_probability is a
+    display-only bool for hover. Return a string; no scientific arrays change.
+    """
     inputs = display.result.inputs
     source = inputs.target_metadata[display.target_name]["display_label"]
     target = prediction_target_label(inputs.analysis_mode, display.target_name, source)
-    return f"{target} ({training_population_label(inputs.analysis_mode)})"
+    label = f"{target} ({training_population_label(inputs.analysis_mode)}) - {training_window_label(inputs.training_window)}"
+    if include_probability and inputs.target_families[inputs.target_names.index(display.target_name)] == "categorical":
+        label += f"; P({inputs.target_metadata[display.target_name]['positive_label']})"
+    return label
 
 
 @dataclass(frozen=True)
@@ -86,7 +98,7 @@ def add_prediction_tracks(
     inputs = display.result.inputs
     target = inputs.target_names.index(display.target_name)
     binary = inputs.target_families[target] == "categorical"
-    label = prediction_display_label(display)
+    label = prediction_display_label(display, include_probability=True)
     for offset, role in enumerate(("PFC", "HPC")):
         row = first_row + offset
         actual_x, actual_y, actual_custom = [], [], []
@@ -137,7 +149,8 @@ def add_prediction_tracks(
             figure.add_annotation(text=f"{role} unavailable: {inputs.timeline.unavailable.get(role, 'No saved model')}",
                                   x=0.5, y=0.5, xref="x domain", yref="y domain", showarrow=False,
                                   row=row, col=1)
-        figure.update_yaxes(title_text="P(left)" if binary else label, row=row, col=1)
+        probability_label = f"P({inputs.target_metadata[display.target_name].get('positive_label', 'class 1')})"
+        figure.update_yaxes(title_text=probability_label if binary else label, row=row, col=1)
         if binary:
             figure.update_yaxes(range=[0, 1], autorange=False, row=row, col=1)
 

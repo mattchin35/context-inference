@@ -16,6 +16,7 @@ def run_prediction_batch(
     metadata_paths: tuple[Path, ...], *, probe_roles: dict[str, str] | None = None,
     bin_width_ms: int | None = None, workers: int | None = None,
     analysis_mode: str | None = None,
+    training_window: str | None = None,
     rerun: bool = False, dry_run: bool = False,
 ) -> list[PredictionRunReport]:
     """Return reports in input path order; parallelize sessions only.
@@ -25,10 +26,13 @@ def run_prediction_batch(
     sequential, writes nothing and never starts a worker pool.
     analysis_mode optionally overrides each session's controls with one fixed
     mode identifier; None preserves per-session configuration/defaults.
+    training_window optionally selects full/before/after choice-relative seconds
+    for every session; None preserves each session's controls/defaults.
     """
     count = choose_worker_count(len(metadata_paths), workers)
     kwargs = {"probe_roles": probe_roles, "bin_width_ms": bin_width_ms,
-              "analysis_mode": analysis_mode, "rerun": rerun, "dry_run": dry_run}
+              "analysis_mode": analysis_mode, "training_window": training_window,
+              "rerun": rerun, "dry_run": dry_run}
     if dry_run:
         return [prepare_session_predictions(path, **kwargs) for path in metadata_paths]
     with ProcessPoolExecutor(max_workers=count) as executor:
@@ -42,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-list", type=Path, required=True)
     parser.add_argument("--bin-width-ms", type=int, choices=(500, 100, 50, 20))
     parser.add_argument("--analysis-mode", choices=ANALYSIS_MODES)
+    parser.add_argument("--training-window", choices=("full", "before", "after"))
     parser.add_argument("--pfc-probe")
     parser.add_argument("--hpc-probe")
     parser.add_argument("--workers", type=int)
@@ -53,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
             read_session_list(args.session_list),
             probe_roles=probe_roles_from_arguments(args.pfc_probe, args.hpc_probe),
             bin_width_ms=args.bin_width_ms, analysis_mode=args.analysis_mode,
+            training_window=args.training_window,
             workers=args.workers, rerun=args.rerun, dry_run=args.dry_run,
         )
     except (OSError, ValueError) as error:
