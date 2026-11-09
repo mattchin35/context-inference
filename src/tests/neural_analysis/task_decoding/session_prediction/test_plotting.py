@@ -146,3 +146,27 @@ def test_horizontal_identity_uses_session_origin_while_vertical_uses_basis(displ
     assert first.layout.yaxis.uirevision != second.layout.yaxis.uirevision
     shifted = plot_session_timeline(replace(changed, time_origin_s=changed.time_origin_s + 1), viewport_revision=2)
     assert shifted.layout.uirevision != second.layout.uirevision
+
+
+@pytest.mark.parametrize("window,label", [("before", "Before [-1,0) s"), ("after", "After [0,+1) s")])
+def test_reward_half_window_labels_and_full_prediction_geometry(prediction_inputs, window, label):
+    """Reward labels disclose eventual outcome and selected fit while retaining all eight bins."""
+    base, trials, timeline = prediction_inputs
+    prepared = prepare_prediction_inputs(trials, timeline, base, analysis_mode="mixed_outcome_decoding", training_window=window)
+    saved = SessionPredictions(prepared, {role: fit_region(prepared, role, use_training_membership=True)
+                                         for role in timeline.regions}, {})
+    figure = plot_session_timeline(timeline, prediction_display=plotting.PredictionDisplay(saved, "current_reward", pc_mode="weighted"))
+    prediction = next(trace for trace in figure.data if trace.name == "PFC prediction")
+    actual = next(trace for trace in figure.data if trace.name == "PFC actual")
+    axis = figure.layout["yaxis" + prediction.yaxis.removeprefix("y")]
+    assert axis.title.text == "P(rewarded)"
+    assert "Reward decoding" in prediction.hovertemplate
+    assert label in prediction.hovertemplate and label in actual.hovertemplate
+    assert any(label in item.text and "Reward decoding" in item.text for item in figure.layout.annotations)
+    np.testing.assert_array_equal(np.asarray(prediction.x[:16], dtype=float),
+                                  timeline.choices.elapsed_s.iloc[0] + np.repeat(prepared.bin_edges_s, 2)[1:-1])
+    assert prediction.x[16] is None
+    assert actual.y[0] == actual.y[1] == prepared.target_values[0, 2]
+    heatmap = next(trace for trace in figure.data if trace.type == "heatmap" and trace.name == "PFC")
+    assert "log-odds" in heatmap.colorbar.title.text
+    assert label in heatmap.hovertemplate

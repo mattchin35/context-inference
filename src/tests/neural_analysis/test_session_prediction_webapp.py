@@ -189,7 +189,7 @@ def test_cross_configuration_mode_switch_retains_navigation_and_clear_labels(run
     assert next(widget for widget in at.number_input if widget.label == "Visible duration (s)").value == 40
     assert next(widget for widget in at.number_input if widget.label == "Window start (s)").value == 50
     assert next(widget for widget in at.selectbox if widget.label == "Jump to trial").value == 9
-    assert next(widget for widget in at.selectbox if widget.label == "Prediction target").options == ["State decoding", "Action decoding"]
+    assert next(widget for widget in at.selectbox if widget.label == "Prediction target").options == ["State decoding", "Action decoding", "Reward decoding"]
     assert "Mixed-outcome decoding" in next(widget for widget in at.selectbox if widget.label == "Saved predictions").options[0]
     assert any("State decoding (mixed-outcome training)" in item["text"] for item in updated["layout"]["annotations"])
     assert any("sample size" in item.value and "regularization" in item.value for item in at.caption)
@@ -207,7 +207,7 @@ def test_cross_configuration_mode_switch_retains_navigation_and_clear_labels(run
 
 
 def test_gui_prepare_forwards_selected_mode_and_bounded_caption(runnable_session):
-    """Explicit mixed Prepare yields two-target products and explains bounded resets."""
+    """Explicit mixed Prepare yields three-target products and explains bounded resets."""
     prepare_session_predictions(runnable_session, probe_roles={"PFC": "A"})
     at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
     next(widget for widget in at.selectbox if widget.label == "PFC probe").select("A").run()
@@ -217,7 +217,7 @@ def test_gui_prepare_forwards_selected_mode_and_bounded_caption(runnable_session
     assert not at.exception
     products = [load_prediction_result(path) for path in runnable_session.parent.glob("analysis_runs/condition_session_prediction_*/results.npz")]
     mixed = next(product for product in products if product.inputs.analysis_mode == "mixed_outcome_decoding")
-    assert mixed.inputs.target_names == ("current_state", "current_action")
+    assert mixed.inputs.target_names == ("current_state", "current_action", "current_reward")
     assert mixed.meta["effective_config"]["bin_width_ms"] == 20
     assert next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval").value
     next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval").check().run()
@@ -313,3 +313,88 @@ def test_continuous_performance_panel_has_native_errors_and_no_class_accuracy(ru
     assert not any("Single-class groups" in item.value for item in at.caption)
     gaps = next(item.value for item in at.dataframe if "RMSE difference" in item.value.columns)
     assert "R2 difference" in gaps.columns
+
+
+def test_saved_window_pair_initialization_and_unprepared_switch_keep_anchor(runnable_session, tmp_path, monkeypatch):
+    """A Before-only saved session initializes honestly; an unprepared After keeps background and pan scope."""
+    from src.neural_analysis.webapp import session_prediction_view, timeline_view
+
+    prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"},
+                                analysis_mode="mixed_outcome_decoding", training_window="before")
+    copied = tmp_path / "window_portable"
+    shutil.copytree(runnable_session.parent / "analysis_runs", copied / "analysis_runs")
+    shutil.copyfile(runnable_session, copied / "neural_session.json")
+    forbidden = Mock(side_effect=AssertionError("Saved switching must not read raw inputs or fit"))
+    monkeypatch.setattr(timeline_view.timeline_io, "timeline_configuration", forbidden)
+    monkeypatch.setattr(timeline_view, "load_timeline_behavior_cached", forbidden)
+    monkeypatch.setattr(session_prediction_view, "prepare_session_predictions", forbidden)
+    at = AppTest.from_function(render_prediction_test_app, args=(str(copied / "neural_session.json"),)).run()
+    assert not at.exception
+    assert next(widget for widget in at.selectbox if widget.label == "Training/scoring window").value == "before"
+    next(widget for widget in at.selectbox if widget.label == "Prediction target").select("current_reward").run()
+    assert not at.exception
+    assert any("Before [-1,0) s" in item.value and "trial" in item.value for item in at.caption)
+    assert any("eventual" in item.value and "reward" in item.value for item in at.caption)
+    assert not any("0.5 left/right threshold" in item.value for item in at.caption)
+    details = at.dataframe[0].value
+    assert "rewarded_class_1" in details.columns and "unrewarded_class_0" in details.columns
+    assert "left_class_1" not in details.columns
+    before_path, revision = component_path(at.main), figure_spec(at)["layout"]["uirevision"]
+    next(widget for widget in at.selectbox if widget.label == "Training/scoring window").select("after").run()
+    assert not at.exception
+    assert any("not prepared" in item.value for item in at.caption)
+    assert component_path(at.main) == before_path
+    assert figure_spec(at)["layout"]["uirevision"] == revision
+    assert any(trace.get("name") == "PFC" for trace in figure_spec(at)["data"])
+    assert not any("prediction" in trace.get("name", "") or "actual" in trace.get("name", "")
+                   for trace in figure_spec(at)["data"])
+    next(widget for widget in at.selectbox if widget.label == "Training/scoring window").select("before").run()
+    assert not at.exception
+    assert any(trace.get("name") == "PFC prediction" for trace in figure_spec(at)["data"])
+    forbidden.assert_not_called()
+
+
+def test_performance_split_fold_controls_filter_cached_records(runnable_session, monkeypatch):
+    """Training outcome/side rows remain per model and no filter repeats neural reconstruction."""
+    from src.neural_analysis.webapp import session_prediction_view
+
+    prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"})
+    compute = Mock(wraps=session_prediction_view.compute_prediction_performance)
+    monkeypatch.setattr(session_prediction_view, "compute_prediction_performance", compute)
+    at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
+    assert not at.exception
+    next(widget for widget in at.selectbox if widget.label == "Scoring split").select("training").run()
+    assert next(widget for widget in at.selectbox if widget.label == "Scoring fold").value == 0
+    next(widget for widget in at.selectbox if widget.label == "Laterality scoring population").select("omission").run()
+    assert not at.exception
+    sides = next(item.value for item in at.dataframe if "Side" in item.value.columns)
+    assert set(sides["Split"]) == {"Training"} and set(sides["Fold"]) == {0}
+    assert sides["Trials"].eq(0).all()
+    assert sides["Accuracy (%)"].isna().all()
+    next(widget for widget in at.selectbox if widget.label == "Scoring fold").select(2).run()
+    assert compute.call_count == 1
+    next(widget for widget in at.selectbox if widget.label == "Scoring split").select("held_out").run()
+    next(widget for widget in at.selectbox if widget.label == "Scoring fold").select(None).run()
+    assert not at.exception
+    sides = next(item.value for item in at.dataframe if "Side" in item.value.columns)
+    assert set(sides["Split"]) == {"Held-out"}
+    assert sides["Trials"].sum() > 0
+    assert compute.call_count == 1
+
+
+def test_legacy_mixed_view_keeps_two_targets_and_explains_reward_preparation(runnable_session):
+    """A genuine v2 mixed product stays inspectable without presenting reward as prepared."""
+    from src.tests.neural_analysis.task_decoding.session_prediction.test_results import write_legacy_product
+
+    report = prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"},
+                                        analysis_mode="mixed_outcome_decoding")
+    saved = load_prediction_result(report.result_path)
+    write_legacy_product((runnable_session.parent, report.result_path, saved.inputs, saved.regions, saved.meta),
+                         2, "mixed_outcome_decoding")
+    before = report.result_path.read_bytes()
+    at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
+    assert not at.exception
+    assert next(widget for widget in at.selectbox if widget.label == "Prediction target").options == ["State decoding", "Action decoding"]
+    assert any("legacy" in item.value.lower() and "reward" in item.value.lower() for item in at.caption)
+    assert next(widget for widget in at.selectbox if widget.label == "Training/scoring window").value == "full"
+    assert report.result_path.read_bytes() == before
