@@ -13,7 +13,7 @@ from src.neural_analysis.spike_behavior import loading
 from src.neural_analysis.webapp import event_sequence_views as view
 from src.tests.neural_analysis.test_event_sequence_webapp import (
     event_session, synthetic_timeline_session, _prepare_unit_product,
-    _render_event_view, _render_event_tool, _assert_selector,
+    _render_event_view, _render_event_tool, _assert_selector, _assert_plotly_output,
     _plotly_spec, _remove_current_sources, _forbidden_display_operation,
 )
 
