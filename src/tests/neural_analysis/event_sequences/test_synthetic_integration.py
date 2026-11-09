@@ -10,6 +10,7 @@ from src.neural_analysis.event_sequences import io, plotting
 from src.neural_analysis.event_sequences.run_session import EventSequenceRequest, prepare_event_sequences
 from src.neural_analysis.population import session_timeline as timeline
 from src.neural_analysis.spike_behavior import loading
+from .test_additional_io import _all_motifs, _freeze_current_sources, _write_trials
 from .test_plotting import _all_trials
 
 
@@ -106,3 +107,100 @@ def test_full_synthetic_preparation_saved_display_and_png(
     if source_kind == "pc":
         assert sha256(reference.read_bytes()).hexdigest() == pca_digest
     forbidden.assert_not_called()
+
+
+@pytest.fixture
+def additional_motif_session(event_session):
+    """Return a synthetic session and expected integer (E,S) episode positions.
+
+    The full (147,C) table includes all 24 additional conditions and manual
+    separators. Deterministic fixture spikes and UTC recording coverage span
+    every four-second choice window. No experimental inputs are accessed.
+    """
+    trials, expected = _all_motifs()
+    _write_trials(event_session, trials)
+    io.clear_probe_spike_cache()
+    return event_session, expected
+
+
+@pytest.mark.parametrize("source_kind,quality,width", [
+    ("unit", "good", 0.5),
+    ("pc", "good_mua", 0.1),
+    ("pc", "good", 0.05),
+    ("unit", "good", 0.02),
+])
+def test_additional_families_end_to_end_reuse_saved_sources_at_all_bin_widths(
+    additional_motif_session, monkeypatch, source_kind: str, quality: str, width: float,
+) -> None:
+    """Verify full preparation -> offline family display -> seven-segment PNG.
+
+    Inputs are a synthetic session/oracle fixture, pytest patch fixture, source
+    kind, manual quality mode and bin width in seconds. Return None. All 24
+    conditions use original (E,S) positions and actual (E,S,B) values, B=4/width;
+    units remain Hz/PC scores or session SD units. Both PC populations and all
+    supported widths are exercised without repeating the PCA benchmark matrix.
+    """
+    session, expected = additional_motif_session
+    options = {"unit_id": "A:7"} if source_kind == "unit" else {"region": "PFC"}
+    request = EventSequenceRequest(
+        session.metadata_path, source_kind, population_quality=quality,
+        bin_width_s=width, **options,
+    )
+    report = prepare_event_sequences(request)
+    path = report["result_path"]
+    assert prepare_event_sequences(request)["result_path"] == path
+    digest = sha256(path.read_bytes()).hexdigest()
+    packet = io.load_event_sequences(path)
+    metadata = packet["meta"]
+    assert metadata["schema_version"] == 1
+    assert metadata["analysis_version"] == "event-sequence-heatmaps-v1"
+    with np.load(path, allow_pickle=True) as archive:
+        assert not any(name.startswith("additional") for name in archive.files)
+    rank = 2 if source_kind == "pc" and quality == "good_mua" else 1
+    reference = metadata["pca_reference"]
+    pca_path = None if reference is None else session.session_root / reference["path"]
+    pca_digest = None if pca_path is None else sha256(pca_path.read_bytes()).hexdigest()
+    raw = io.get_source_activity(packet, pc_rank=rank)
+    raw_values = raw.values.copy()
+
+    _freeze_current_sources(session, monkeypatch)
+    packet = io.load_event_sequences(path)
+    assert packet["meta"] == metadata
+    assert not packet["additional_unavailable_reason"]
+    bins = round(4 / width)
+    for zscore in (False, True):
+        source = plotting.prepare_display_source(packet, pc_rank=rank, zscore=zscore)
+        assert source["session_mean"] == pytest.approx(raw_values.mean())
+        assert source["session_sd"] == pytest.approx(raw_values.std(ddof=0))
+        central = plotting.build_central_view(packet, source)
+        ideal = plotting.build_sequence_view(packet, source)
+        assert central["color_limits"] == ideal["color_limits"] == source["color_limits"]
+        for (family, side, repeats), rows in expected.items():
+            positions = np.asarray(rows, dtype=int)
+            np.testing.assert_array_equal(packet["additional_matches"][(family, side, repeats)], positions)
+            view = plotting.build_sequence_view(
+                packet, source, family=family, initial_side=side, repeats=repeats,
+            )
+            panel = view["panels"][0]
+            assert (panel["behavioral_count"], panel["excluded_count"], panel["n"]) == (len(rows), 0, len(rows))
+            np.testing.assert_array_equal(panel["row_positions"], positions)
+            indices = np.searchsorted(source["row_positions"], positions)
+            np.testing.assert_array_equal(panel["values"], source["values"][indices])
+            assert panel["values"].shape == (*positions.shape, bins)
+            assert view["color_limits"] == source["color_limits"]
+            assert view["configuration_id"] == metadata["configuration_id"]
+            assert packet["additional_selector_version"] in view["caption"]
+
+    seven = plotting.build_sequence_view(
+        packet, source, family="omission_probe", initial_side="left", repeats=4,
+    )
+    interactive = plotting.plotly_figure(seven)
+    static = plotting.matplotlib_figure(seven)
+    assert len([trace for trace in interactive.data if trace.type == "heatmap"]) == 7
+    assert len(static.axes[0].images) == 7
+    exported = plotting.export_png(seven, path.parent / "figures" / "additional_seven_segments.png", dpi=80)
+    assert exported.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert sha256(path.read_bytes()).hexdigest() == digest
+    if pca_path is not None:
+        assert sha256(pca_path.read_bytes()).hexdigest() == pca_digest
+    np.testing.assert_array_equal(io.get_source_activity(packet, pc_rank=rank).values, raw_values)
