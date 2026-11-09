@@ -93,6 +93,9 @@ def prepare_trial_policy_history(
         Chronological retained trials. Nonempty tables require action, reward,
         cur_trial, and source_cur_block or cur_block. Observations are binary
         delivery indicators, not water volume; actions use 0=Right, 1=Left.
+        Optional trial_outcome labels distinguish choice, manual_reward,
+        invalid_switch and unknown without changing eligibility conventions.
+        Explicit invalid switches require no choice and zero reward/manual flag.
     session_id : str
         Full source-session ID, checked against any session_ID/source_session_id.
 
@@ -141,12 +144,36 @@ def prepare_trial_policy_history(
     no_choice = np.isnan(actions)
     manual = flags == 1
     unknown_flag = np.isnan(flags)
+    # Outcome labels add provenance; existing action/flag masks still determine
+    # eligibility. Legacy missing outcomes are never inferred to be switches.
+    outcomes = np.full(n_trials, "unknown", dtype=object)
+    outcomes[~no_choice & (flags == 0)] = "choice"
+    outcomes[manual] = "manual_reward"
+    if "trial_outcome" in trial_df:
+        outcomes = trial_df["trial_outcome"].fillna("unknown").astype(str).to_numpy()
+        outcomes[np.isin(outcomes, list(MISSING_STRINGS))] = "unknown"
+        unsupported = ~np.isin(outcomes, ["unknown", "choice", "manual_reward", "invalid_switch"])
+        if unsupported.any():
+            raise ValueError(f"Session {session_id}: unsupported trial_outcome {outcomes[unsupported][0]!r}")
+    invalid_switch = outcomes == "invalid_switch"
+    inconsistent_switch = invalid_switch & (~no_choice | (flags != 0) | (rewards != 0))
+    if inconsistent_switch.any():
+        position = np.flatnonzero(inconsistent_switch)[0]
+        raise ValueError(f"Session {session_id}, trial {trial_ids[position]}: invalid_switch requires no choice and zero reward/manual flag")
     skip = no_choice | manual | unknown_flag
     missing_reward = np.isnan(rewards)
     comparison_valid = ~skip
     history_update_valid = comparison_valid & ~missing_reward
     comparison_reasons = _exclusion_reasons(no_choice, manual, unknown_flag)
     update_reasons = _exclusion_reasons(no_choice, manual, unknown_flag, missing_reward)
+    comparison_reasons = np.array([
+        f"invalid_switch;{reason}" if invalid else reason
+        for reason, invalid in zip(comparison_reasons, invalid_switch)
+    ], dtype=str)
+    update_reasons = np.array([
+        f"invalid_switch;{reason}" if invalid else reason
+        for reason, invalid in zip(update_reasons, invalid_switch)
+    ], dtype=str)
     positions = np.arange(n_trials, dtype=np.int64)
 
     # Include the original aliases, before normalization: equal histories from
@@ -160,6 +187,8 @@ def prepare_trial_policy_history(
         "trial_id": trial_ids.tolist(), "block_id": block_ids.tolist(),
         "row_position": positions.tolist(), "initialization": "first_retained_row",
         "source_flag_columns": source_flag_columns,
+        "trial_outcome": outcomes.tolist(),
+        "source_outcome_column": "trial_outcome" in trial_df,
     }
     metadata = {
         "input_digest": hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest(),
@@ -169,6 +198,13 @@ def prepare_trial_policy_history(
         "retained_trial_range": [trial_ids[0], trial_ids[-1]] if n_trials else [],
         "missing_reward_count": int((comparison_valid & missing_reward).sum()),
         "unknown_manual_flag_count": int(unknown_flag.sum()),
+        "trial_outcome_counts": {
+            "recorded_attempts": n_trials,
+            "valid_animal_choices": int(comparison_valid.sum()),
+            "invalid_switch": int(invalid_switch.sum()),
+            "manual_reward": int(manual.sum()),
+            "unknown": int((outcomes == "unknown").sum()),
+        },
     }
     return PreparedTrialHistory(
         session_id, actions, rewards, flags, skip, comparison_valid,

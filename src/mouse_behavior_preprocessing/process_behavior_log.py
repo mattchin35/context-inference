@@ -87,6 +87,12 @@ def _assert_supported_missing_value(missing_value: str) -> None:
 
 
 def _new_trial_dict(state: TrialParserState, start_time: float, missing_value: str) -> OrderedDict:
+    """Return one unset attempt mapping from parser state and an epoch-second start.
+
+    state supplies dimensionless block/trial identifiers. missing_value is the
+    CSV sentinel; trial_outcome starts unknown. Time fields remain in seconds
+    and actions retain 0=right/1=left once populated.
+    """
     return OrderedDict(
         state=state.current_state,
         state_int=state.current_state_int,
@@ -97,6 +103,7 @@ def _new_trial_dict(state: TrialParserState, start_time: float, missing_value: s
         correct=missing_value,
         reward=missing_value,
         experimenter_reward_given=missing_value,
+        trial_outcome="unknown",
         active_stimulus=state.current_stimulus,
         block_stimulus=state.block_stimulus,
         start_time=start_time,
@@ -160,9 +167,15 @@ def _handle_choice_event(
     state: TrialParserState,
     missing_value: str,
 ) -> None:
-    """Update the active trial from a choice or experimenter-reward event."""
+    """Set one terminal outcome from scalar event/note strings and epoch seconds.
+
+    state holds the active row; missing_value is its string sentinel. Returns
+    None, retaining action codes 0=right/1=left and timestamps in seconds.
+    """
     trial = _require_active_trial(state, event)
+    _require_unset_outcome(trial)
     action, correct, reward, experimenter_reward_given = choice_event_summary(event, reward_note)
+    trial['trial_outcome'] = 'manual_reward' if experimenter_reward_given == 1 else 'choice'
     if experimenter_reward_given in [1, "1"]:
         trial['choice_time'] = missing_value
     else:
@@ -171,6 +184,28 @@ def _handle_choice_event(
     trial['correct'] = correct
     trial['reward'] = reward
     trial[EXPERIMENTER_REWARD_GIVEN_COLUMN] = experimenter_reward_given
+
+
+def _require_unset_outcome(trial: OrderedDict) -> None:
+    """Validate one active trial mapping; return None or reject a second outcome.
+
+    Trial identifiers and outcome strings are dimensionless; no row is changed.
+    """
+    if trial['trial_outcome'] != 'unknown':
+        raise ValueError(f"Conflicting terminal outcomes on trial {trial['cur_trial']}")
+
+
+def _handle_invalid_switch(state: TrialParserState, missing_value: str) -> None:
+    """Set an explicit no-choice outcome in the active row; return None.
+
+    state is parser state and missing_value is the CSV sentinel. Binary reward
+    indicators are dimensionless; choice time/correctness stay missing.
+    """
+    trial = _require_active_trial(state, 'invalid_switch')
+    _require_unset_outcome(trial)
+    trial.update(trial_outcome='invalid_switch', action=NO_CHOICE_ACTION,
+                 correct=missing_value, reward=0, experimenter_reward_given=0,
+                 choice_time=missing_value)
 
 
 def _handle_reward_event(event: str, current_time: float, state: TrialParserState) -> None:
@@ -313,7 +348,14 @@ def choice_event_summary(event: str, reward_note: str) -> tuple[int, int, int, i
 
 def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: list, reward_events: list,
                    stimulus_events: list, missing_value: str = MISSING_VALUE) -> pd.DataFrame:
-    """Convert a raw event table into one processed row per completed trial."""
+    """Convert raw events (N,C) into trial attempts (T,C), preserving source order.
+
+    raw_data contains Event/Note strings and Time in epoch seconds. Category
+    arguments are lists of event names; missing_value is the CSV sentinel.
+    Returns a DataFrame with 0=right/1=left/no_choice actions, binary reward
+    indicators and explicit trial_outcome strings. Earlier unknown attempts
+    remain; at EOF only a recognized terminal outcome finalizes the last row.
+    """
     _assert_supported_missing_value(missing_value)
     parser_state = TrialParserState(
         current_state=missing_value,
@@ -326,7 +368,9 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
 
         # Stimulus events are checked before context events because
         # collect_events.get_context_events also returns stimulus_* names.
-        if event in choice_events:
+        if event == 'invalid_switch':
+            _handle_invalid_switch(parser_state, missing_value)
+        elif event in choice_events:
             _handle_choice_event(event, raw_data['Note'].values[i], current_time, parser_state, missing_value)
         elif event in reward_events:
             _handle_reward_event(event, current_time, parser_state)
@@ -335,8 +379,11 @@ def iterate_trials(raw_data: pd.DataFrame, context_events: list, choice_events: 
         elif event in context_events:
             _handle_context_event(event, current_time, parser_state, missing_value)
 
-    # The active trial is intentionally not appended at end-of-file. Trials are
-    # saved only when another trial starts, matching the original parser.
+    # Preserve a completed final attempt without inventing an outcome for an
+    # unfinished one. Legacy parsers discarded both at end-of-file.
+    active_trial = parser_state.active_trial
+    if active_trial is not None and active_trial['trial_outcome'] != 'unknown':
+        parser_state.completed_trials.append(active_trial)
     return pd.DataFrame(parser_state.completed_trials)
 
 

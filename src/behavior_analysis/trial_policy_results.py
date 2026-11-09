@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from .trial_policy_models import PreparedTrialHistory, TrialPolicyCandidate
     from .gather_trial_features import TaskParams
 
-ANALYSIS_VERSION = "trial_policy_hmm_v2"
+ANALYSIS_VERSION = "trial_policy_hmm_v3"
 ANALYSIS_SOURCE_FILES = (
     "trial_policy_models.py", "trial_policy_analysis.py", "trial_policy_results.py",
     "trial_features.py", "project_utils.py", "gather_trial_features.py",
@@ -74,6 +74,7 @@ def build_trial_policy_metadata(history: "PreparedTrialHistory", candidates: "Se
         "source_flag_columns": list(history.metadata["source_flag_columns"]),
         "initialization": history.metadata["initialization"],
         "analyzed_trial_range": history.metadata["retained_trial_range"],
+        "trial_outcome_counts": dict(history.metadata["trial_outcome_counts"]),
         "random_seed": None,
         "package_versions": packages,
         "analysis_source_digest": _analysis_source_digest(),
@@ -214,16 +215,23 @@ def clear_trial_policy_outputs(table: pd.DataFrame) -> pd.DataFrame:
 
 
 def trial_policy_warnings(history: "PreparedTrialHistory") -> list[str]:
-    """Format one message per missing-reward/unknown-flag condition.
+    """Format separate diagnostics for invalid attempts and missing observations.
 
     history has aligned T-row arrays and original trial IDs; returns a short
     list of strings with at most five IDs per condition. Data remain unchanged.
     """
     messages = []
+    no_choice = np.isnan(history.actions)
+    invalid_switch = np.array(["invalid_switch" in reason.split(";")
+                               for reason in history.comparison_exclusion_reason], dtype=bool)
     for label, mask, action in (
+        ("invalid switch", invalid_switch,
+         "excluded these attempts from scoring and candidate history updates"),
+        ("unclassified no-choice attempt", no_choice & ~invalid_switch & (history.manual_reward_flags != 1),
+         "excluded these attempts; the log does not establish a switch or manual-reward outcome"),
         ("missing reward", history.comparison_valid & ~np.isfinite(history.rewards),
          "scored available choice predictions and skipped all candidate history updates"),
-        ("unknown manual-reward flag", np.isnan(history.manual_reward_flags),
+        ("unknown manual-reward flag", np.isnan(history.manual_reward_flags) & ~no_choice,
          "excluded these rows from scoring and candidate history updates"),
     ):
         indices = np.flatnonzero(mask)
@@ -328,6 +336,7 @@ def _write_record(directory: Path, metadata: dict) -> None:
         "# Trial-policy comparison\n\n"
         "Goal: compare fixed causal choice policies with independent likelihoods and optional retrospective HMM smoothing.\n\n"
         f"Included sessions: {json.dumps(sessions)}. Status: {metadata.get('status', 'recorded')}.\n\n"
+        f"Trial outcomes: {json.dumps(metadata.get('trial_outcome_counts', {}))}.\n\n"
         "Main and batch orchestration reside in main.py. Numerical arrays remain in their referenced session artifact.\n",
         encoding="utf-8")
     main = Path(__file__).resolve().parents[1] / "main.py"
