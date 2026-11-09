@@ -198,7 +198,8 @@ def build_sequence_view(
         path += " -> L" if initial_side == "left" else " -> R"
     description = f"{family.replace('_', ' ').capitalize()} {path}"
     if repeats is not None:
-        description += f"; x{repeats} incorrect trials"
+        run_label = "initial incorrect trials" if family == "indecisive_transition" else "incorrect trials"
+        description += f"; x{repeats} {run_label}"
     panel["title"] = f"{description}; n={panel['n']}"
     panel["title"] = _coverage_title(panel)
     panel["message"] = _panel_message(panel, "sequences", packet["additional_unavailable_reason"])
