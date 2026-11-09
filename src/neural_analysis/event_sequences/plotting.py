@@ -331,7 +331,10 @@ def matplotlib_figure(view: dict) -> MatplotlibFigure:
             axis.set_xlabel("Local time from each choice (s); gaps are display separators", fontsize=13, color="black")
             for zero, label in zip(view["zero_positions"], view["segment_labels"]):
                 axis.text(zero, 1.02, label, transform=axis.get_xaxis_transform(), ha="center", va="bottom", fontsize=12, color="black")
-    figure.subplots_adjust(left=.13, right=.88, top=.92 if central else .83, bottom=.18 if central else .30, hspace=.65, wspace=.43)
+    # Short sequence canvases still need room for full episode-start row labels
+    # and the vertical axis title. Reserve 2.4 physical inches without shrinking text.
+    left_margin = .13 if central else max(.13, 2.4 / width)
+    figure.subplots_adjust(left=left_margin, right=.88, top=.92 if central else .83, bottom=.18 if central else .30, hspace=.65, wspace=.43)
     if view["color_limits"] is not None:
         mappable = ScalarMappable(norm=Normalize(*view["color_limits"]), cmap="viridis" if _positive_colors(view) else "RdBu_r")
         colorbar = figure.colorbar(mappable, ax=axes, fraction=.025, pad=.035)
