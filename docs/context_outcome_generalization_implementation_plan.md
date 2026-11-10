@@ -1,6 +1,6 @@
 # Context Outcome Generalization: Implementation Plan
 
-Status: implementation authorized by the user, 2026-11-10. C1 RED is starting;
+Status: implementation authorized by the user, 2026-11-10. C1 complete; C2 RED starting;
 experimental computation is not included in this implementation run.
 
 This extends the completed [cross-condition implementation](cross_condition_generalization_implementation_plan.md).
@@ -12,12 +12,12 @@ especially Section 3.1, owns the scientific definitions. Read repository
 
 | Item | Current state |
 | --- | --- |
-| Inspected branch / HEAD | `refactor` / `b7e8a22`; recheck before implementation. |
+| Inspected branch / HEAD | `refactor` / `8e586c4`; recheck on resumption. |
 | Authorization | User explicitly approved implementation on 2026-11-10. C1-C7 authorized; no experimental computation. |
 | Baseline | v1 implementation complete; full regression 1433 passed. Historical evidence remains in the original plan. |
 | User edits | Preserve `src/main.py`, `src/neural_analysis/sync_ephys.py` and unrelated untracked files. The user explicitly authorized preserving ongoing behavior-mouse changes in main.py. |
-| Running work | Sol scientific worker assigned C1 RED only; no experimental jobs. |
-| Next action | Review C1 RED, commit tests, then authorize GREEN. |
+| Running work | `/root/scientific_worker` (Sol, high): C2 RED; no experimental jobs. |
+| Next action | Review C2 RED, commit tests, then authorize GREEN. |
 
 Use a Sol orchestrator (`gpt-6.1-sol`, high), sequential Sol scientific workers
 (`gpt-6.1-sol`, high), and a Luna documentation worker (`gpt-6-luna`, medium).
@@ -34,8 +34,8 @@ updated where the approved registry, report fields or version contract changes.
 | Package | Owner | Initial state | RED / test commit | GREEN / source commit |
 | --- | --- | --- | --- | --- |
 | C0 scientific amendment / plan | Sol orchestrator | Approved | Documentation only | Approved spec revision 10 and this plan |
-| C1 registry / preparation | Sol worker | RED starting | Record command/result/commit | Record review/result/commit |
-| C2 fitting / summaries / counts | Sol worker | Not started | Record here | Record here |
+| C1 registry / preparation | Sol worker | Complete | 6 expected failures / 143 passed; `f9e332a` | 149 passed; `8e586c4` |
+| C2 fitting / summaries / counts | Sol worker | RED starting | Record here | Record here |
 | C3 saved products / runners | Sol worker | Not started | Record here | Record here |
 | C4 summary webapp | Sol worker | Not started | Record here | Record here |
 | C5 synthetic / browser acceptance | Sol orchestrator | Not started | Prior package tests | Record here |
@@ -181,6 +181,10 @@ training diagnostics, select only its own training population. It consumes
 existing saved-summary rows, performs no fit or source I/O, and does not pool
 different models or outcomes. Keep deterministic training-outcome/test/region
 order. Empty populations and unavailable fits/regions retain reasons.
+Retain all original row fields and add `training_population` plus
+`test_population` (the target outcome for complementary tests; None for source
+training diagnostics). Mapping order is correct-rewarded, omission, incorrect;
+test populations follow each mapping entry and regional order is PFC, HPC.
 
 At one window/weighting with two regions, the new test table has 12 rows
 (3 training outcomes * 2 test outcomes * 2 regions). Training diagnostics have
@@ -378,3 +382,36 @@ When new experimental results are requested, recheck current inputs, prepare
 one fresh v2 bundle using the compatible PCA, inspect all three training groups
 and their class counts, then let the user assess scientific results before any
 experimental batch. Do not add an automatic all-session job.
+
+## 8. Execution evidence
+
+### Approval / C1 RED, 2026-11-10
+
+User explicitly requested implementation; approved documents committed as
+`2550e60`. Sol worker changed only config/preparation tests. Independently
+reviewed literal memberships for the original sixteen and both new pools.
+No fixture changes: existing HPC coverage intentionally removes every left
+correct-rewarded source trial, exercising a locally unavailable fit later.
+
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition/test_config.py src/tests/neural_analysis/task_decoding/cross_condition/test_preparation.py src/tests/neural_analysis/task_decoding/test_targets.py src/tests/neural_analysis/task_decoding/test_conditions.py -q`
+returned 6 expected failures, 143 passed (worker 2.10 s; root 2.09 s).
+Test commit `f9e332a`; source-only C1 GREEN assigned. User-owned hashes match
+accepted baselines; no experimental processing or live analysis jobs.
+
+Root prepared fresh synthetic source PCA with existing tested timeline code at
+`/tmp/context_outcome_synthetic_o4n0pmoc/synthetic/neural_session.json` (0.125 s).
+There are 42 choices: 26 correct-rewarded, three omissions and 13 incorrect;
+HPC has shorter trusted coverage excluding a late left-context omission.
+This fixture supports the later count/browser acceptance; no extension decoder
+has been run yet. All randomness uses seed 602 plus existing fixture seeds.
+
+### C1 GREEN / review, 2026-11-10
+
+The same focused C1 command passed all 149 tests in 2.04 s. Reviewed the
+append-only registry and literal cells, recorded-context orientation, canonical
+outcome unions, immutable mapping, original Context grouping and independent
+cross-condition version bump. Only config.py/preparation.py changed; tests,
+public signatures, original sixteen memberships and PCA versions are unchanged.
+Implementation commit `8e586c4`. Sol worker returns to C2 RED. No live analysis
+process or experimental work. Frozen outcome-row annotations and ordering are
+recorded in Section 3.3 before C2 tests.
