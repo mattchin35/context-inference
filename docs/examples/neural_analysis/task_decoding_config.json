@@ -50,7 +50,8 @@
     "forgetting_q_relative_value",
     "hmm_signed_belief",
     "hmm_decay_signed_belief",
-    "relative_doubt"
+    "relative_doubt",
+    "current_reward"
   ],
   "condition_names": [
     "all",
