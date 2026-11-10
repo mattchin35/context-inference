@@ -155,6 +155,7 @@ from src.neural_analysis.webapp.session_inputs import (
     MetadataLFPSiteInputs,
     MetadataViewAvailability,
     PLOT_VIEW_CONDITION_GENERALIZATION,
+    PLOT_VIEW_CROSS_CONDITION_GENERALIZATION,
     PLOT_VIEW_INTERREGIONAL,
     PLOT_VIEW_CONTEXT_ENCODING,
     PLOT_VIEW_SESSION_TIMELINE,
@@ -206,6 +207,7 @@ from src.neural_analysis.webapp.encoding_views import render_encoding_view
 from src.neural_analysis.webapp.condition_generalization_views import (
     render_condition_generalization_view,
 )
+from src.neural_analysis.webapp.cross_condition_view import render_cross_condition_view
 from src.neural_analysis.webapp.task_decoding_views import render_task_decoding_view
 from src.neural_analysis.webapp.timeline_view import render_session_timeline_view
 from src.neural_analysis.webapp.phase_synchrony_view import render_phase_synchrony_view
@@ -681,6 +683,9 @@ def _start_metadata_webapp(session: ResolvedSession) -> str | None:
     if plot_view == PLOT_VIEW_CONDITION_GENERALIZATION:
         render_condition_generalization_view(st, session)
         return None
+    if plot_view == PLOT_VIEW_CROSS_CONDITION_GENERALIZATION:
+        render_cross_condition_view(st, session)
+        return None
     if plot_view == PLOT_VIEW_INTERREGIONAL:
         render_interregional_view(st, session)
         return None
@@ -752,6 +757,9 @@ def main(argv: Sequence[str] = ()) -> None:
         metadata_lfp_sites = metadata_lfp_site_inputs(metadata_session)
     else:
         plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+        if plot_view == PLOT_VIEW_CROSS_CONDITION_GENERALIZATION:
+            st.info("Cross-condition generalization uses session metadata. Launch with --session-metadata <session_root>/neural_session.json.")
+            return
         if plot_view in {PLOT_VIEW_EVENT_SEQUENCE_CENTRAL, PLOT_VIEW_EVENT_SEQUENCE_TRANSITION}:
             st.info(
                 "Event-sequence heatmaps need session metadata. Launch this webapp "
