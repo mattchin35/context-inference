@@ -31,6 +31,7 @@ not a duplicate specification.
 | `pipeline.py` | `plan_task_decoding_session`, `prepare_task_decoding_run`, `run_prepared_task_decoding`, and `inspect_task_decoding_status`; all launch paths share these preparation/execution seams. |
 | `run_session.py` | Standard-library CLI `main` for public `dry-run`, `new`, `resume`, and `status` modes; numerical imports occur only after one-thread environment variables are set. |
 | `run_batch.py` | Standard-library CLI `main` plus `read_config_list`; bounded multi-session `dry-run` and foreground `new`, with evidence-gated cross-session workers. |
+| `cross_condition/` | Separate choice-relative transfer analysis; `run_session.py` and `run_batch.py` prepare self-contained transfer bundles, while `config.py`, `preparation.py`, `modeling.py`, `scoring.py`, and `results.py` own controls, inputs, fits, summaries, and saved products. See the [cross-condition usage guide](cross_condition/README.md). |
 | `slurm.py` | Standard-library one-shot `submit-new`, exact-directory `submit-resume`, and read-only `status` operations; it owns reviewed `standard` and `condition_validation` resource receipts and `sacct` parsing but no scientific computation. |
 | `pooled/` | Separate fixed-regularization pooled-window analysis with overlay configuration, window-target checkpoints, compact native/transfer/gap reporting, and a single-session CLI. |
 | `../psth_webapp.py`, `../webapp/task_decoding_views.py`, and `../webapp/condition_generalization_views.py` | Existing Streamlit entrypoint and separate early-routed **Task-variable decoding results** and **Condition generalization results** views. Discovery and rendering use completed saved runs only. |
@@ -332,6 +333,22 @@ task-decoding and affected webapp suites.
 
 Do not add a generic estimator registry or target plugin mechanism for one new
 variable. A small explicit definition and encoding branch is easier to audit.
+
+## Separate cross-condition generalization analysis
+
+`cross_condition/` implements an all-source/complementary-condition analysis
+with four targets and four directed transfers per target. It uses fixed
+session-wide regional PCs, matched Full/Before/After choice-relative windows,
+and separately saved equal-trial and equal-cell fits. It has its own controls,
+results format, session runner, batch runner, and summary-only webapp view; it
+does not extend the existing task-variable or session-prediction result modes.
+Preparation is explicit. The saved run contains the information required for
+offline summary inspection when paired with its session metadata.
+
+See the [cross-condition usage guide](cross_condition/README.md) for required
+inputs, commands, batch-list syntax, output copying, and interpretation limits.
+See the [scientific specification](../../../docs/cross_condition_generalization_spec_v1.md)
+for transfer cell definitions and data contracts.
 
 ## Separate session prediction analysis
 
