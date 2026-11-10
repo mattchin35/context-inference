@@ -337,16 +337,20 @@ variable. A small explicit definition and encoding branch is easier to audit.
 ## Separate cross-condition generalization analysis
 
 `cross_condition/` implements an all-source/complementary-condition analysis
-with four targets and four directed transfers per target. It uses fixed
+for Context, Choice, Actual reward, and Value (correctness-based). Its v2
+bundle retains four condition transfers per target and adds a Context-only
+outcome-transfer view, reusing the incorrect-trained readout. It uses fixed
 session-wide regional PCs, matched Full/Before/After choice-relative windows,
 and separately saved equal-trial and equal-cell fits. It has its own controls,
 results format, session runner, batch runner, and summary-only webapp view; it
 does not extend the existing task-variable or session-prediction result modes.
-Preparation is explicit. The saved run contains the information required for
-offline summary inspection when paired with its session metadata.
+Preparation is explicit. Pair the self-contained saved run with its session
+metadata for offline summary inspection.
 
 See the [cross-condition usage guide](cross_condition/README.md) for required
-inputs, commands, batch-list syntax, output copying, and interpretation limits.
+inputs, commands, batch-list syntax, v1/v2 saved-run behavior, output copying,
+and interpretation limits. See the [outcome-generalization plan](../../../docs/context_outcome_generalization_implementation_plan.md)
+for the approved extension contract.
 See the [scientific specification](../../../docs/cross_condition_generalization_spec_v1.md)
 for transfer cell definitions and data contracts.
 

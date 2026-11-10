@@ -9,10 +9,12 @@ job or changes the underlying computations.
 The non-destructive whole-session return command is documented under
 [`Copy cluster outputs back to the workstation`](SINGLE_SESSION_SETUP.md#8-copy-cluster-outputs-back-to-the-workstation).
 
-For the separate context/choice/reward/value transfer analysis, see the
-[cross-condition generalization guide](task_decoding/cross_condition/README.md).
-It documents the single-session and session-list commands, the metadata
-prerequisites, and the saved-result view.
+For the separate context/choice/reward/value transfer analysis, including the
+Context outcome-transfer view, see the
+[cross-condition generalization guide](task_decoding/cross_condition/README.md)
+and [approved outcome-generalization plan](../../docs/context_outcome_generalization_implementation_plan.md).
+The guide documents single-session and session-list commands, metadata
+prerequisites, saved-run versions, and interpretation.
 
 Neural-session metadata is a small JSON file that tells the existing analysis
 code where one session's behavior, LFP, synchronization, and spike sources are.

@@ -1,15 +1,24 @@
 # Cross-condition generalization
 
-This separate analysis trains a binary readout on two condition cells and
-evaluates it on the complementary cells. It prepares four targets (Context,
-Choice, Actual reward, and Value (correctness-based)), four directed transfers
-per target, three supervised windows, two training weightings, and PFC/HPC
-separately. At one bin width this is up to 192 fitted models. Outcome choices
-in the viewer summarize the same fitted model; they do not add fits.
+This separate analysis transfers binary readouts across task conditions for
+four targets: Context, Choice, Actual reward, and Value (correctness-based).
+The original four condition transfers remain available for all targets. A new
+Context-only **Outcome transfers** view also compares correct-rewarded,
+correct-omission, and incorrect trials. It has three source models, each
+evaluated on the other two outcomes. The existing incorrect-trained Context
+model is reused in both views; only two source model definitions are added.
+
+The expanded v2 bundle has 18 readout definitions, three supervised windows,
+two training weightings, and separate PFC/HPC models: up to 216 fits per bin
+width. Missing classes or regions can reduce the actual number of fits.
+Outcome evaluations and source diagnostics reuse the same saved models and add
+no fits.
 
 See the [scientific specification](../../../../docs/cross_condition_generalization_spec_v1.md)
-for the exact cell definitions, exclusions, and saved array contracts. This
-guide covers setup, execution, and interpretation.
+for the exact cell definitions, exclusions, and saved array contracts, and the
+[outcome-generalization implementation plan](../../../../docs/context_outcome_generalization_implementation_plan.md)
+for the approved Context outcome extension. This guide covers setup,
+execution, and interpretation.
 
 ## Inputs and controls
 
@@ -36,6 +45,13 @@ same metadata. Without this file, the runner uses the default base-config path
 and 500-ms bins. Supported widths are 500, 100, 50, and 20 ms. The CLI width
 overrides the contained width for that invocation; the app's preparation-width
 selector does the same. Neither changes a previously saved run's settings.
+
+The expanded analysis writes `cross-condition-generalization-v2` results with
+schema 2. Existing v1 decoder bundles are left intact and are not listed by
+the v2 view. Prepare once to create the expanded bundle; there is no v1
+migration or import of old decoder coefficients. This decoder version change
+does not change compatible PCA-v1 sources: preparation reuses them when their
+regional identity and settings match.
 
 ## Prepare one session
 
@@ -107,21 +123,50 @@ parallelizes across sessions and returns reports in list order.
 
 ## Inspect and interpret results
 
-Open the metadata-driven neural-analysis webapp and select **Cross-condition
-generalization**. The view discovers saved runs for that session. **Saved run**,
-**Target**, **Supervised window**, **Weighting**, **Evaluation role**, and
-**Outcome** select cached saved summaries; changing them does not fit or load
-raw/PCA inputs. **Prepare cross-condition results** and **Recompute
-cross-condition results** explicitly create the complete bundle: sixteen
-directions, three windows, two weightings, and two regions. Preparation width
-is separate from the width recorded in an already saved run. If preparation
-fails, the previously selected saved run remains selected.
+Launch the metadata-driven neural-analysis webapp (from the repository root):
 
-Each table shows all four directions separately for PFC and HPC. Accuracy and
-balanced accuracy are percentages displayed to one decimal place; counts and
-availability reasons remain visible. No direction aggregate or statistical
-test is reported. Single-class outcome groups can have ordinary accuracy but
-not balanced accuracy.
+```bash
+uv run --frozen streamlit run src/neural_analysis/psth_webapp.py -- \
+  --session-metadata "$SESSION/neural_session.json"
+```
+
+Select **Cross-condition generalization**. **Saved run**, **Target**,
+**Supervised window**, **Weighting**, and **Evaluation role** select cached
+saved summaries; changing them does not fit or load raw/PCA inputs. For the
+Context target only, **Context analysis** selects **Condition transfers** or
+**Outcome transfers** and defaults to Condition transfers. Choice, Actual
+reward, and Value retain their original condition-transfer view and **Outcome**
+selector. The generic Outcome selector is hidden in Context Outcome transfers
+because both complementary outcomes are shown together.
+
+Condition transfers show the original four directions for the selected target.
+In Context Outcome transfers, **Complementary test** shows six separate
+training-outcome/test-outcome pairs for both regions (12 rows total).
+**Training (in-sample)** shows the three source-model diagnostics (six rows).
+Unavailable regions remain visible with reasons in either role. The model trained on
+incorrect trials is the existing `context_incorrect_to_correct` model. No
+outcomes or directions are averaged together.
+
+The outcome table displays **Training trials**, **Training Left**, and
+**Training Right** as unweighted counts of unique eligible source trials after
+regional coverage. For Context, Left is class 1 and Right is class 0. These
+counts are not bin counts, weight totals, or counts after filtering the test
+outcome; they remain the same under both weightings and both test outcomes.
+Eligible/scored and Right/Left trial counts describe the selected evaluation
+role. A known source count is retained when a fit fails, with the reason shown;
+an unavailable region has unknown counts (displayed as missing), not zero. No
+minimum sample-count threshold is applied.
+
+Accuracy and balanced accuracy are percentages displayed to one decimal place.
+Single-class outcome groups can have ordinary accuracy but not balanced
+accuracy. Availability reasons and class counts remain visible. No direction
+aggregate or statistical test is reported.
+
+**Prepare cross-condition results** and **Recompute cross-condition results**
+explicitly create the complete 18-definition bundle across three windows, two
+weightings, and two regions: up to 216 fits. Preparation width is separate from
+the width recorded in an already saved run. If preparation fails, the
+previously selected saved run remains selected.
 
 The supervised windows and the fixed source-PCA window are:
 
@@ -150,10 +195,11 @@ Actual reward uses the recorded reward flag. Before predicts eventual recorded
 reward; After is post-choice and is not necessarily after reward delivery.
 Context and choice refer to recorded context and actual choice.
 
-Outcome summaries reuse the combined-pool fit. Correct and omission subsets
-are not separately trained models. Summary populations can overlap, so their
-counts should not be added as disjoint categories. Existing manual-reward,
-no-choice, and alignment exclusions apply before context checks. Run details
+In Condition transfers, outcome summaries reuse the combined-pool fit. In
+Context Outcome transfers, each training outcome has its own saved model,
+which supplies both other outcomes' test summaries. Summary populations can
+overlap, so their counts should not be added as disjoint categories. Existing
+manual-reward, no-choice, and alignment exclusions apply before context checks. Run details
 retain the dark-state exclusion count and context/choice/correctness conflict
 audit, including original trial IDs.
 
@@ -172,17 +218,12 @@ the result; raw behavior, augmented trials, features, and PCA archives are not
 needed to inspect a completed self-contained run. A new preparation does
 require the listed session inputs and any missing PCA source.
 
-To open the metadata-driven webapp for that session:
-
-```bash
-uv run --frozen streamlit run src/neural_analysis/psth_webapp.py -- \
-  --session-metadata "$SESSION/neural_session.json"
-```
-
-Synthetic validation prepared 192 models for 48 choices in about 0.214 s and
-reported peak process RSS of 316,366,848 bytes, including imports. Reusing the
-saved synthetic result took about 0.070 s. These are measurements of one small
-synthetic run, not performance guarantees for experimental sessions.
+In one expanded synthetic session with 42 choices (42 PFC-covered and 33
+HPC-covered), preparation completed 216 fits in 0.233 s with peak process RSS
+of 317,730,816 bytes, including imports. Exact saved-result reuse took 0.061 s
+without PCA-array loading or fitting, and the PCA-v1 source hash stayed
+unchanged. These small synthetic measurements are not performance guarantees
+for experimental sessions. No experimental session was processed.
 
 Experimental preparation and inspection on designated sessions remain a
 separate acceptance step; synthetic validation does not establish
