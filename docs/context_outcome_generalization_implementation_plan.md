@@ -1,6 +1,6 @@
 # Context Outcome Generalization: Implementation Plan
 
-Status: implementation authorized by the user, 2026-11-10. C1-C2 complete; C3 GREEN in progress;
+Status: implementation authorized by the user, 2026-11-10. C1-C3 complete; C4 GREEN in progress;
 experimental computation is not included in this implementation run.
 
 This extends the completed [cross-condition implementation](cross_condition_generalization_implementation_plan.md).
@@ -12,12 +12,12 @@ especially Section 3.1, owns the scientific definitions. Read repository
 
 | Item | Current state |
 | --- | --- |
-| Inspected branch / HEAD | `refactor` / `6b55d99`; recheck on resumption. |
+| Inspected branch / HEAD | `refactor` / `4f7f724`; recheck on resumption. |
 | Authorization | User explicitly approved implementation on 2026-11-10. C1-C7 authorized; no experimental computation. |
 | Baseline | v1 implementation complete; full regression 1433 passed. Historical evidence remains in the original plan. |
 | User edits | Preserve `src/main.py`, `src/neural_analysis/sync_ephys.py` and unrelated untracked files. The user explicitly authorized preserving ongoing behavior-mouse changes in main.py. |
-| Running work | `/root/scientific_worker` (Sol, high): C3 GREEN; no experimental jobs. |
-| Next action | Review C3 GREEN, then assign C4 RED. |
+| Running work | `/root/scientific_worker` (Sol, high): C4 GREEN; no experimental jobs. |
+| Next action | Review C4 GREEN, finish browser/full regression acceptance, then sequential Luna docs. |
 
 Use a Sol orchestrator (`gpt-6.1-sol`, high), sequential Sol scientific workers
 (`gpt-6.1-sol`, high), and a Luna documentation worker (`gpt-6-luna`, medium).
@@ -36,9 +36,9 @@ updated where the approved registry, report fields or version contract changes.
 | C0 scientific amendment / plan | Sol orchestrator | Approved | Documentation only | Approved spec revision 10 and this plan |
 | C1 registry / preparation | Sol worker | Complete | 6 expected failures / 143 passed; `f9e332a` | 149 passed; `8e586c4` |
 | C2 fitting / summaries / counts | Sol worker | Complete | 9 expected failures / 89 passed; `ff68b6f` | 98 passed; `4b241c3` |
-| C3 saved products / runners | Sol worker | GREEN in progress | Expected S=16 persistence blockers; `6b55d99` | Record here |
-| C4 summary webapp | Sol worker | Not started | Record here | Record here |
-| C5 synthetic / browser acceptance | Sol orchestrator | Not started | Prior package tests | Record here |
+| C3 saved products / runners | Sol worker | Complete | Expected S=16 persistence blockers; `6b55d99` | 307 passed; `1717f84` |
+| C4 summary webapp | Sol worker | GREEN in progress | 17 expected failures / 2 passed; `4f7f724` | Record here |
+| C5 synthetic / browser acceptance | Sol orchestrator | Computation complete; browser pending | Prior package tests | 216 fits/reconstructions and count audit passed; evidence below |
 | C6 usage documentation | Luna worker | Not started | Documentation only | Record checks/review/commit |
 | C7 final handoff | Sol orchestrator | Not started | Prior package tests | Record final evidence |
 
@@ -239,6 +239,10 @@ accuracy, balanced accuracy and reason. Keep counts plainly visible and formats
 compact. Keep exact IDs/cell names, fit reasons and conflict audit in Fit details;
 filter details to the selected view's model IDs. Display 0 accuracy as 0, and
 single-class ordinary accuracy even when balanced accuracy is unavailable.
+Frozen new table labels: Training outcome, Test outcome, Region, Training trials,
+Training Left, Training Right, Eligible trials, Scored trials, Right trials,
+Left trials, Accuracy (%), Balanced accuracy (%), Reason. Eligible/scored/class
+counts refer to the selected Evaluation role; captions make that explicit.
 
 Use the existing path/stat/scoring-version caches. Switching Context analysis,
 window, weighting or role reads only saved small products. Explicit Prepare /
@@ -455,3 +459,45 @@ and a separate full-coverage 216-fit fixture with unchanged PCA-v1 bytes.
 Corrected a genuine pre-commit test error: discovery returns tuple, not list;
 no public API change. Tests committed as `6b55d99`. Source-only C3 GREEN
 assigned; no experimental work, fixture-framework changes or live test process.
+
+### C3 GREEN / review, 2026-11-10
+
+The same assigned C3 command passed 307 tests in 52.95 s. Reviewed dynamic
+registry-sized validation, fixed ordered outcome metadata/identity, strict v2
+saved products and unchanged source-PCA/reuse code. Logs and run summaries now
+distinguish actual fits from derived maximum capacity, including 108 per region.
+A final prose-only qualifier clarifies that the three outcome models are per
+window/weighting/region. Implementation `1717f84`; tests unchanged and whitespace
+checks passed. C4 RED next; no experimental work.
+
+### C5 early synthetic computation, 2026-11-10
+
+The fresh synthetic session completed all 216 models in 0.233 s, with recorded
+peak process RSS 317,730,816 bytes. Independently reconstructed all 216 model
+trial means directly from PCA scores/coefficients/intercepts: maximum absolute
+probability difference 0.0. Checked all 108 outcome/diagnostic rows across every
+window/weight against source CSV memberships and independently counted coverage.
+
+| Region | Correct-rewarded total / Right / Left | Omission total / Right / Left | Incorrect total / Right / Left |
+| --- | --- | --- | --- |
+| PFC | 26 / 12 / 14 | 3 / 1 / 2 | 13 / 8 / 5 |
+| HPC | 21 / 9 / 12 | 2 / 1 / 1 | 10 / 6 / 4 |
+
+Exact reuse took 0.061 s with fitting and PCA-array loading disabled. The source
+PCA hash remained unchanged. Copied only metadata and the complete v2 run to
+`/tmp/context_outcome_synthetic_o4n0pmoc/saved_only/neural_session.json`;
+loading and all outcome summaries/counts pass without raw/base/PCA inputs.
+Receipt: `/tmp/context_outcome_synthetic_o4n0pmoc/validation_receipt.json`.
+These are small synthetic measurements. Browser/100-ms checks remain pending
+C4; no experimental session was processed.
+
+### C4 RED / test commit, 2026-11-10
+
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/test_cross_condition_webapp.py -q --tb=short`
+returned 17 expected failures, 2 passed in 20.56 s. Root independently verified
+the old UI's six-Context-model/four-label zip failure (one failed, 18 deselected,
+2.80 s). Reviewed original-view filtering, the Context-only selector, all six
+pairs and source diagnostics, visible counts, exact class orientation, cache
+and saved-only behavior, zero/single-class/failed/empty/unavailable counts,
+and full-bundle Prepare/error preservation. Tests `4f7f724`; source-only GREEN
+assigned to the same Sol worker. No experimental processing.
