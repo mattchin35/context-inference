@@ -551,3 +551,60 @@ def test_atomic_npz_publication_and_interrupted_write_are_not_discoverable(metad
         results.save_transfer_result(failed, fitted_transfer_bundle)
     assert not failed.exists() and not list(failed.parent.glob("*.npz"))
     assert [option.result_path for option in results.discover_transfer_runs(root)] == [path]
+
+
+def test_metadata_distinguishes_pca_source_window_from_decoder_intervals(metadata_args):
+    """PCA uses [-2,+2) seconds; each H readout predicts/scores only its supervised interval."""
+    meta = results.build_transfer_metadata(*metadata_args, session_id="synthetic")
+    config = meta["effective_config"]
+    assert "prediction_window_s" not in config
+    assert config["pca_source_window_s"] == [-2., 2.]
+    assert config["window_bounds_s"] == {
+        "full": [-1., 1.], "before": [-1., 0.], "after": [0., 1.],
+    }
+
+
+@pytest.mark.parametrize("defect", ["logistic_C", "window_bounds", "ignore_blocks"])
+def test_saved_fixed_scientific_settings_cannot_contradict_model_contract(saved_transfer_bundle, defect):
+    """Reject false C, second-window bounds or block-policy provenance using only the saved bundle."""
+    path, _ = saved_transfer_bundle
+    with np.load(path, allow_pickle=True) as archive:
+        arrays = {name: archive[name] for name in archive.files}
+    meta = arrays["meta"].item()
+    config = meta["effective_config"]
+    if defect == "logistic_C":
+        config["logistic"]["C"] = 2.
+    elif defect == "window_bounds":
+        config["window_bounds_s"]["full"] = [-2., 2.]
+    else:
+        config["ignore_blocks"] = False
+    arrays["meta"] = np.asarray(meta, dtype=object)
+    np.savez_compressed(path, **arrays)
+    (path.parent / "config.json").write_text(json.dumps(meta), encoding="ascii")
+    with pytest.raises(ValueError):
+        results.load_transfer_result(path)
+
+
+def test_existing_manifest_is_preserved_when_final_archive_is_absent(metadata_args, fitted_transfer_bundle):
+    """A prior/incomplete run's JSON must not be overwritten by a new NPZ publication attempt."""
+    path = metadata_args[1] / "analysis_runs/cross_condition_generalization_manifest_only/results.npz"
+    path.parent.mkdir(parents=True)
+    manifest = path.parent / "config.json"
+    original = b'{"preserve": "existing run manifest"}\n'
+    manifest.write_bytes(original)
+    with pytest.raises(FileExistsError):
+        results.save_transfer_result(path, fitted_transfer_bundle)
+    assert manifest.read_bytes() == original
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("count", [np.asarray(1.7), np.asarray([1])])
+def test_saved_dark_exclusion_count_requires_an_integer_scalar(saved_transfer_bundle, count):
+    """Preserve the integer scalar count contract; do not silently round floats or flatten arrays."""
+    path, _ = saved_transfer_bundle
+    with np.load(path, allow_pickle=True) as archive:
+        arrays = {name: archive[name] for name in archive.files}
+    arrays["dark_state_count"] = count
+    np.savez_compressed(path, **arrays)
+    with pytest.raises(ValueError):
+        results.load_transfer_result(path)
