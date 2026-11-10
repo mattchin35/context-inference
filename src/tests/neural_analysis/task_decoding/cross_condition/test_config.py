@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from src.neural_analysis.task_decoding.cross_condition import config as transfer_config
 from src.neural_analysis.task_decoding.cross_condition.config import (
     TARGET_NAMES, TRANSFERS, load_cross_condition_config,
 )
@@ -125,11 +126,42 @@ def test_version_three_requires_valid_roles(transfer_session):
         load_cross_condition_config(metadata)
 
 
-def test_fixed_registry_has_four_targets_and_sixteen_class_ordered_transfers():
-    """Registry has fixed target order and distinct source/test cell names per split."""
+def test_fixed_registry_preserves_original_targets_and_appends_two_context_models():
+    """Preserve T=4 and the first sixteen target assignments; append only two class-ordered Context models."""
     assert TARGET_NAMES == ("current_state", "current_action", "current_reward", "current_action_is_correct")
-    assert len(TRANSFERS) == len({item.split_id for item in TRANSFERS}) == 16
-    assert tuple(item.target_name for item in TRANSFERS) == tuple(name for name in TARGET_NAMES for _ in range(4))
+    assert len(TRANSFERS) == len({item.split_id for item in TRANSFERS}) == 18
+    assert tuple(item.target_name for item in TRANSFERS[:16]) == tuple(name for name in TARGET_NAMES for _ in range(4))
+    assert tuple((item.split_id, item.target_name) for item in TRANSFERS[16:]) == (
+        ("context_correct_rewarded_to_other_outcomes", "current_state"),
+        ("context_omission_to_other_outcomes", "current_state"),
+    )
     for item in TRANSFERS:
         assert len(item.source_cells) == len(item.test_cells) == 2
         assert len(set(item.source_cells + item.test_cells)) == 4
+
+
+def test_context_outcome_mapping_reuses_existing_incorrect_model_once():
+    """Three ordered outcome models reference eighteen unique fits; incorrect-trained remains the original split."""
+    expected = {
+        "context_correct_rewarded_to_other_outcomes": ("correct_rewarded", ("omission", "incorrect")),
+        "context_omission_to_other_outcomes": ("omission", ("correct_rewarded", "incorrect")),
+        "context_incorrect_to_correct": ("incorrect", ("correct_rewarded", "omission")),
+    }
+    mapping = transfer_config.CONTEXT_OUTCOME_MODELS
+    assert tuple(mapping) == tuple(expected)
+    assert dict(mapping) == expected
+    by_id = {item.split_id: item for item in TRANSFERS}
+    assert all(by_id[split_id].target_name == "current_state" for split_id in mapping)
+    assert sum(item.split_id == "context_incorrect_to_correct" for item in TRANSFERS) == 1
+    assert TRANSFERS[3].split_id == "context_incorrect_to_correct"
+    assert transfer_config.CONTEXT_CONDITION_SPLIT_IDS == (
+        "context_correct_to_incorrect", "context_left_choice_to_right_choice",
+        "context_right_choice_to_left_choice", "context_incorrect_to_correct",
+    )
+    assert set(mapping) & set(transfer_config.CONTEXT_CONDITION_SPLIT_IDS) == {"context_incorrect_to_correct"}
+
+
+def test_expanded_registry_requires_v2_analysis_and_schema_two():
+    """The expanded S=18 bundle has its own version; metadata input remains independently version 3."""
+    assert transfer_config.ANALYSIS_VERSION == "cross-condition-generalization-v2"
+    assert transfer_config.SCHEMA_VERSION == 2

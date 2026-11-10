@@ -31,15 +31,17 @@ EXPECTED_CELLS = {
     "value_left_correct_right_incorrect": ((5, 7, 9), (0, 1, 19), (4, 6), (2, 3)),
     "value_right_correct_left_incorrect": ((4, 6), (2, 3), (5, 7, 9), (0, 1, 19)),
     "value_right_choice_to_left_choice": ((5, 7, 9), (2, 3), (4, 6), (0, 1, 19)),
+    "context_correct_rewarded_to_other_outcomes": ((2,), (0, 19), (3, 4, 6), (1, 5, 7, 9)),
+    "context_omission_to_other_outcomes": ((3,), (1,), (2, 4, 6), (0, 5, 7, 9, 19)),
 }
 
 
-def test_all_sixteen_transfers_match_original_trial_ids_and_actual_class_axis(transfer_data):
-    """Check Boolean cells(N,16,2), last axis actual class, against literal original IDs."""
+def test_all_eighteen_transfers_match_original_trial_ids_and_actual_class_axis(transfer_data):
+    """Preserve the original sixteen literal memberships and check appended cells(N=16,S=18,2)."""
     inputs = prepare_transfer_inputs(*transfer_data)
     assert tuple(item.split_id for item in inputs.transfers) == tuple(EXPECTED_CELLS)
     assert inputs.transfers == TRANSFERS
-    assert inputs.source_cells.shape == inputs.test_cells.shape == (16, 16, 2)
+    assert inputs.source_cells.shape == inputs.test_cells.shape == (16, 18, 2)
     assert inputs.source_cells.dtype == inputs.test_cells.dtype == bool
     ids = inputs.choices.trial_id.to_numpy()
     for split, definition in enumerate(inputs.transfers):
@@ -52,6 +54,50 @@ def test_all_sixteen_transfers_match_original_trial_ids_and_actual_class_axis(tr
                 np.testing.assert_array_equal(inputs.target_values[selected, target], label)
                 assert inputs.target_valid[selected, target].all()
         assert not np.any(inputs.source_cells[:, split].any(axis=1) & inputs.test_cells[:, split].any(axis=1))
+
+
+@pytest.mark.parametrize("split_id,training_population,source_ids,test_outcomes", [
+    ("context_correct_rewarded_to_other_outcomes", "correct_rewarded", (0, 2, 19),
+     (("omission", (1, 3)), ("incorrect", (4, 5, 6, 7, 9)))),
+    ("context_omission_to_other_outcomes", "omission", (1, 3),
+     (("correct_rewarded", (0, 2, 19)), ("incorrect", (4, 5, 6, 7, 9)))),
+    ("context_incorrect_to_correct", "incorrect", (4, 5, 6, 7, 9),
+     (("correct_rewarded", (0, 2, 19)), ("omission", (1, 3)))),
+])
+def test_context_outcome_sources_and_two_test_outcomes_have_independent_literal_memberships(
+    transfer_data, split_id, training_population, source_ids, test_outcomes,
+):
+    """Each Context source uses both recorded contexts; its complementary union retains two separate outcomes.
+
+    Original IDs6/7 are rewarded incorrect, ID9 is incorrect with unknown reward,
+    and ID8 is correct with unknown reward. The former stay incorrect; the latter
+    enters no Context outcome pool. All IDs are dimensionless original trial IDs.
+    """
+    inputs = prepare_transfer_inputs(*transfer_data)
+    split_ids = tuple(item.split_id for item in inputs.transfers)
+    assert split_id in split_ids
+    split = split_ids.index(split_id)
+    assert inputs.transfers[split].target_name == "current_state"
+    ids = inputs.choices.trial_id.to_numpy()
+    source = inputs.source_cells[:, split].any(axis=1)
+    complementary = inputs.test_cells[:, split].any(axis=1)
+    assert tuple(ids[source]) == source_ids
+    training_condition = inputs.condition_masks[:, inputs.condition_names.index(training_population)]
+    np.testing.assert_array_equal(source, training_condition)
+    expected_union = np.zeros(len(ids), dtype=bool)
+    for population, expected_ids in test_outcomes:
+        outcome = inputs.condition_masks[:, inputs.condition_names.index(population)]
+        selected = complementary & outcome
+        assert tuple(ids[selected]) == expected_ids
+        assert not np.any(source & selected)
+        assert not np.any(expected_union & selected)
+        expected_union |= selected
+    np.testing.assert_array_equal(complementary, expected_union)
+    assert not source[ids == 8].any() and not complementary[ids == 8].any()
+    for cells in (inputs.source_cells, inputs.test_cells):
+        for label in (0, 1):
+            members = cells[:, split, label]
+            np.testing.assert_array_equal(inputs.target_values[members, 0], label)
 
 
 def test_prepared_identity_dtypes_labels_and_input_immutability(transfer_data):
