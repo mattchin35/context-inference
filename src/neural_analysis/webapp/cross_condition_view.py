@@ -47,9 +47,13 @@ def render_cross_condition_view(st_module: object, session: ResolvedSession) -> 
     options = discover_transfer_runs(session.session_root)
     st_module.caption("Prepare creates the complete bundle: sixteen directions, three supervised windows and both weightings, "
                       "up to 192 models across PFC/HPC. Compatible saved PCA is reused; any missing PCA may be prepared.")
-    width = st_module.selectbox("Preparation bin width (ms)", options=SUPPORTED_BIN_WIDTH_MS, key=scope + ":prepare_width")
-    prepare = st_module.button("Prepare cross-condition results", key=scope + ":prepare")
-    recompute = st_module.button("Recompute cross-condition results", disabled=not options, key=scope + ":recompute")
+    preparation_columns = st_module.columns(3, vertical_alignment="bottom")
+    with preparation_columns[0]:
+        width = st_module.selectbox("Preparation bin width (ms)", options=SUPPORTED_BIN_WIDTH_MS, key=scope + ":prepare_width")
+    with preparation_columns[1]:
+        prepare = st_module.button("Prepare cross-condition results", key=scope + ":prepare")
+    with preparation_columns[2]:
+        recompute = st_module.button("Recompute cross-condition results", disabled=not options, key=scope + ":recompute")
     if prepare or recompute:
         try:
             with st_module.spinner("Preparing all cross-condition transfers..."):
@@ -77,25 +81,34 @@ def render_cross_condition_view(st_module: object, session: ResolvedSession) -> 
         st_module.error(f"Could not load the selected saved run: {error}")
         return
     saved_width = packet.meta["effective_config"]["bin_width_ms"]
-    st_module.caption(f"Saved session {packet.meta['session_id']}: {path}; {saved_width} ms. "
-                      "Preparation controls do not reinterpret saved settings.")
-    target = st_module.selectbox("Target", options=packet.inputs.target_names, format_func=TARGET_LABELS.get, key=scope + ":target")
-    window = st_module.selectbox("Supervised window", options=packet.inputs.window_names, format_func=_window_label, key=scope + ":window")
-    weighting = st_module.selectbox("Weighting", options=WEIGHTING_NAMES, format_func=WEIGHTING_LABELS.get, key=scope + ":weighting")
-    role = st_module.selectbox("Evaluation role", options=tuple(ROLE_LABELS), format_func=ROLE_LABELS.get, key=scope + ":role")
+    st_module.caption(f"Saved session {packet.meta['session_id']}; {saved_width} ms.")
+    selection_columns = st_module.columns(3)
+    with selection_columns[0]:
+        target = st_module.selectbox("Target", options=packet.inputs.target_names, format_func=TARGET_LABELS.get, key=scope + ":target")
+    with selection_columns[1]:
+        window = st_module.selectbox("Supervised window", options=packet.inputs.window_names, format_func=_window_label, key=scope + ":window")
+    with selection_columns[2]:
+        weighting = st_module.selectbox("Weighting", options=WEIGHTING_NAMES, format_func=WEIGHTING_LABELS.get, key=scope + ":weighting")
     populations = ("all", "actual_rewarded", "actual_unrewarded", "omission", "incorrect_unrewarded") if target == "current_reward" else (
         "all", "correct", "correct_rewarded", "omission", "incorrect")
     outcome_key = scope + ":outcome"
     if st_module.session_state.get(outcome_key) not in populations:
         st_module.session_state[outcome_key] = "all"
-    population = st_module.selectbox("Outcome", options=populations, format_func=POPULATION_LABELS.get, key=outcome_key)
+    evaluation_columns = st_module.columns(2)
+    with evaluation_columns[0]:
+        role = st_module.selectbox("Evaluation role", options=tuple(ROLE_LABELS), format_func=ROLE_LABELS.get, key=scope + ":role")
+    with evaluation_columns[1]:
+        population = st_module.selectbox("Outcome", options=populations, format_func=POPULATION_LABELS.get, key=outcome_key)
     _render_captions(st_module, packet, target, window)
     definitions = [item for item in packet.inputs.transfers if item.target_name == target]
     directions = {item.split_id: label for item, label in zip(definitions, DIRECTION_LABELS[target], strict=True)}
     selected_rows = [row for row in report if row["target_name"] == target and row["window"] == window
                      and row["weighting"] == weighting and row["role"] == role and row["population"] == population]
-    st_module.dataframe(_performance_table(selected_rows, directions), hide_index=True)
+    st_module.dataframe(_performance_table(selected_rows, directions), hide_index=True,
+                        column_config={name: st_module.column_config.NumberColumn(format="%.1f")
+                                       for name in ("Accuracy (%)", "Balanced accuracy (%)")})
     with st_module.expander("Fit details"):
+        st_module.caption(f"Saved result: {path}. Preparation controls do not reinterpret saved settings.")
         st_module.caption("Source/test counts describe eligible data before a fit failure; scored counts require available finite trial means. "
                           "Cell names and split IDs retain the exact directed definitions. Outcome selection does not fit another model.")
         st_module.dataframe(_fit_table(packet, target, window, weighting, directions), hide_index=True)
