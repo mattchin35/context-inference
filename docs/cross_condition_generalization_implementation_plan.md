@@ -2,7 +2,7 @@
 
 Status: revised implementation draft aligned with spec revision 9, 2026-11-10.
 Includes Sol orchestrator / sequential Sol and Luna worker assignments.
-Implementation authorized by the user on 2026-11-10; P1-P4 complete, P5a RED in progress.
+Implementation authorized by the user on 2026-11-10; P1-P4 complete, P5a GREEN in progress.
 
 Read the [scientific spec](cross_condition_generalization_spec_v1.md),
 [SoftwareDesign.md](SoftwareDesign.md), and repository `AGENTS.md`.
@@ -18,16 +18,16 @@ ledger with exact commands/results, commits and any live process/log IDs.
 
 | Field | Current snapshot |
 | --- | --- |
-| Branch / inspected HEAD | `refactor` / `0664d85`; recheck on resumption. |
+| Branch / inspected HEAD | `refactor` / `03ffd66`; recheck on resumption. |
 | Authorization | User approved implementation on 2026-11-10. Synthetic validation is included; experimental preparation remains separately gated. |
 | Existing tracked edits | `src/main.py`, `src/neural_analysis/sync_ephys.py`; preserve both and unrelated untracked files. |
 | Feature documents | Approved spec/plan and P1 evidence tracked in `5e1d49e`; subsequent ledger edits belong to the orchestrator. |
-| Running work / owner | `/root/scientific_worker`: P5a RED single-session runner tests; no experimental processes/jobs. |
+| Running work / owner | `/root/scientific_worker`: P5a GREEN single-session runner; no experimental processes/jobs. |
 | Implementation team | Orchestrator owns review/commits/handoff. Scientific worker `gpt-6.1-sol`, high; at most one worker active. |
 | Confirmed inputs | Version-3 metadata only; ignore blocks; normalize numeric masks locally; validate context after baseline exclusions and exclude dark state 2. |
 | Reuse / availability | Reuse confidently compatible PCA. Report each unavailable region's reason without crashing, including when both are unavailable. |
 | Confirmed preparation | One call prepares all sixteen transfers, three windows and two weightings at one bin width. Explicit Prepare/Recompute controls in the summary view. |
-| Next action | Review P5a RED, commit tests, then authorize worker GREEN. |
+| Next action | Review P5a GREEN, then dispatch sequential Luna P5b RED. |
 
 | Package | Assigned writer / owner | State | RED / test commit | GREEN / review / implementation commit |
 | --- | --- | --- | --- | --- |
@@ -36,7 +36,7 @@ ledger with exact commands/results, commits and any live process/log IDs.
 | P2 controls/cells/alignment | Sol worker | Complete | 2 expected absent-package collection errors; tests `1150ea6`. | Combined 319 passed; post-refactor P2 89 passed; implementation `aa70f22`. |
 | P3 fitting/scoring | Sol worker | Complete | 2 expected absent-modeling collection errors; tests `fc80d35`. | 178 passed; implementation `3ef2862`; all 192 oracle fits and 1920 summary rows checked. |
 | P4 saved products | Sol worker | Complete | Initial RED `256f0e2`; review-regression RED `f31446e` (4 failed, 3 passed). | Final gate 243 passed; implementation commit recorded below. |
-| P5a single-session runner | Sol worker | RED in progress | Record here | Record here |
+| P5a single-session runner | Sol worker | GREEN in progress | Expected missing-runner import error; tests `03ffd66`. | Joint script-copy gate awaits P5b. |
 | P5b batch wrapper | Luna worker | Not started | Record here | Record here |
 | P6 summary webapp | Sol worker | Not started | Record here | Record here |
 | P7a synthetic integration/browser | Sol orchestrator | Not started | Prior package tests | Record here |
@@ -712,3 +712,21 @@ returned 243 passes in 31.15 s. PCA coverage metadata, manifest protection and
 integer-scalar exclusion validation are correct; no tests were changed.
 Implementation commit: `0664d85`. P5a RED-only assigned to the same Sol worker.
 No experimental processing or analysis jobs were launched.
+
+### P5a RED / test commit, 2026-11-10
+
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition/test_scripts.py -q`
+returned one expected missing-runner import error (worker 0.17 s; orchestrator
+0.13 s). Reviewed real seeded PCA fixtures, exact/registered/regional reuse,
+consistent population policies, dry-run isolation, early reuse, source loading
+and failures, rerun and source snapshots. Tests committed as `03ffd66`; same
+Sol worker authorized for source-only GREEN. The actual main/batch copy
+integration case remains an explicit unmet dependency until sequential P5b,
+without a skip.
+
+Frozen report details: session_id, bin_width_ms, probe_roles, choice_count,
+target_names, window_bin_counts, max_model_count, dark_state_count,
+conflict_count/conflict_trial_ids, global pre-coverage cell_counts, and
+source_status mapping region to status/result_path/reason. Details are JSON-safe;
+actual regional counts remain in saved models. Metadata-only dry-run source
+status distinguishes exact_or_registered from compatibility_pending.
