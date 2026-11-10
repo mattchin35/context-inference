@@ -31,13 +31,15 @@ _CATEGORICAL_CLASS_LABELS = {
 }
 
 
-def _required_columns(config: TaskDecodingConfig) -> set[str]:
+def _required_columns(config: TaskDecodingConfig, *, ignore_blocks: bool = False) -> set[str]:
     """Collect required columns for one selected task-decoding run.
 
     Parameters
     ----------
     config : TaskDecodingConfig
         Validated configuration naming one alignment and target subset.
+    ignore_blocks : bool
+        If True, omit the unused shared block column from requirements.
 
     Returns
     -------
@@ -48,7 +50,10 @@ def _required_columns(config: TaskDecodingConfig) -> set[str]:
         TARGET_DEFINITION_BY_IDENTIFIER[target_name].source_column
         for target_name in config.target_names
     }
-    return set(_SHARED_COLUMNS) | {config.alignment} | source_columns
+    shared_columns = set(_SHARED_COLUMNS)
+    if ignore_blocks:
+        shared_columns.remove("cur_block")
+    return shared_columns | {config.alignment} | source_columns
 
 
 def _present_numeric(values: pd.Series) -> tuple[pd.Series, pd.Series]:
@@ -239,6 +244,7 @@ def validate_augmented_trials(
     *,
     allow_missing_blocks: bool = False,
     allow_empty_numerical_targets: bool = False,
+    ignore_blocks: bool = False,
 ) -> None:
     """Validate a selected run's small augmented behavioral input table.
 
@@ -253,6 +259,9 @@ def validate_augmented_trials(
     allow_missing_blocks, allow_empty_numerical_targets : bool
         Explicit prediction-analysis opt-ins. Defaults preserve strict decoder
         validation. Neither option permits malformed present source values.
+    ignore_blocks : bool
+        If True, do not require or validate block labels. All other validation
+        remains active; default False preserves existing decoder behavior.
 
     Returns
     -------
@@ -266,11 +275,12 @@ def validate_augmented_trials(
     """
     if not isinstance(trial_df, pd.DataFrame):
         raise ValueError("trial_df must be a pandas DataFrame.")
-    missing_columns = sorted(_required_columns(config) - set(trial_df.columns))
+    missing_columns = sorted(_required_columns(config, ignore_blocks=ignore_blocks) - set(trial_df.columns))
     if missing_columns:
         raise ValueError(f"Augmented trial table is missing required columns: {missing_columns}")
     _validate_cur_trial(trial_df)
-    _validate_blocks(trial_df["cur_block"], allow_missing_blocks=allow_missing_blocks)
+    if not ignore_blocks:
+        _validate_blocks(trial_df["cur_block"], allow_missing_blocks=allow_missing_blocks)
     _action_values_and_validity(trial_df["action"])
     _manual_reward_mask(trial_df[EXPERIMENTER_REWARD_GIVEN_COLUMN])
     alignment_values = _raise_if_invalid_numeric_column(
@@ -382,6 +392,7 @@ def build_target_table(
     *,
     allow_missing_blocks: bool = False,
     allow_empty_numerical_targets: bool = False,
+    ignore_blocks: bool = False,
 ) -> pd.DataFrame:
     """Build unfiltered chronological encoded targets and target-specific masks.
 
@@ -395,6 +406,9 @@ def build_target_table(
         Validated configuration naming targets and alignment source.
     allow_missing_blocks, allow_empty_numerical_targets : bool
         Forwarded validation opt-ins; defaults retain existing strict behavior.
+    ignore_blocks : bool
+        If True, ignore source block labels and return all-missing block_id.
+        Default False retains block requirements, validation and values.
 
     Returns
     -------
@@ -409,6 +423,7 @@ def build_target_table(
     validate_augmented_trials(
         trial_df, config, allow_missing_blocks=allow_missing_blocks,
         allow_empty_numerical_targets=allow_empty_numerical_targets,
+        ignore_blocks=ignore_blocks,
     )
     working_df = trial_df.reset_index(drop=True).copy(deep=True)
     n_trials = working_df.shape[0]
@@ -436,7 +451,8 @@ def build_target_table(
         {
             "row_position": np.arange(n_trials, dtype=int),
             "trial_id": working_df["cur_trial"].to_numpy(copy=True),
-            "block_id": working_df["cur_block"].to_numpy(copy=True),
+            "block_id": (np.full(n_trials, np.nan) if ignore_blocks
+                         else working_df["cur_block"].to_numpy(copy=True)),
             "baseline_valid": baseline_valid.to_numpy(dtype=bool),
             "baseline_invalid_reason": baseline_reasons,
         }
