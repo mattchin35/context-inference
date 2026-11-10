@@ -1,7 +1,7 @@
 # Context Outcome Generalization: Implementation Plan
 
-Status: implementation authorized by the user, 2026-11-10. C1-C3 complete; C4 GREEN in progress;
-experimental computation is not included in this implementation run.
+Status: C1-C7 implementation and synthetic acceptance complete, 2026-11-10.
+No experimental session was processed in this implementation run.
 
 This extends the completed [cross-condition implementation](cross_condition_generalization_implementation_plan.md).
 The [scientific specification](cross_condition_generalization_spec_v1.md),
@@ -12,12 +12,12 @@ especially Section 3.1, owns the scientific definitions. Read repository
 
 | Item | Current state |
 | --- | --- |
-| Inspected branch / HEAD | `refactor` / `4f7f724`; recheck on resumption. |
+| Inspected branch / HEAD | `refactor` / `0d181ed` before the final documentation-only handoff commit; recheck on resumption. |
 | Authorization | User explicitly approved implementation on 2026-11-10. C1-C7 authorized; no experimental computation. |
 | Baseline | v1 implementation complete; full regression 1433 passed. Historical evidence remains in the original plan. |
 | User edits | Preserve `src/main.py`, `src/neural_analysis/sync_ephys.py` and unrelated untracked files. The user explicitly authorized preserving ongoing behavior-mouse changes in main.py. |
-| Running work | `/root/scientific_worker` (Sol, high): C4 GREEN; no experimental jobs. |
-| Next action | Review C4 GREEN, finish browser/full regression acceptance, then sequential Luna docs. |
+| Running work | None. Both sequential workers are idle; the temporary synthetic server/tab are closed. |
+| Next action | User inspection of the new Context outcome view; experimental computation remains a separate step. |
 
 Use a Sol orchestrator (`gpt-6.1-sol`, high), sequential Sol scientific workers
 (`gpt-6.1-sol`, high), and a Luna documentation worker (`gpt-6-luna`, medium).
@@ -37,10 +37,10 @@ updated where the approved registry, report fields or version contract changes.
 | C1 registry / preparation | Sol worker | Complete | 6 expected failures / 143 passed; `f9e332a` | 149 passed; `8e586c4` |
 | C2 fitting / summaries / counts | Sol worker | Complete | 9 expected failures / 89 passed; `ff68b6f` | 98 passed; `4b241c3` |
 | C3 saved products / runners | Sol worker | Complete | Expected S=16 persistence blockers; `6b55d99` | 307 passed; `1717f84` |
-| C4 summary webapp | Sol worker | GREEN in progress | 17 expected failures / 2 passed; `4f7f724` | Record here |
-| C5 synthetic / browser acceptance | Sol orchestrator | Computation complete; browser pending | Prior package tests | 216 fits/reconstructions and count audit passed; evidence below |
-| C6 usage documentation | Luna worker | Not started | Documentation only | Record checks/review/commit |
-| C7 final handoff | Sol orchestrator | Not started | Prior package tests | Record final evidence |
+| C4 summary webapp | Sol worker | Complete | 17 expected failures / 2 passed; `4f7f724` | 75 webapp tests passed; `aa9d45a` |
+| C5 synthetic / browser acceptance | Sol orchestrator | Complete | Prior package tests | 500/100-ms fits, probability reconstructions, source counts and browser checks passed |
+| C6 usage documentation | Luna worker / orchestrator review | Complete | Documentation only | Three guides reviewed; ASCII/fences/local links passed; `0d181ed` |
+| C7 final handoff | Sol orchestrator | Complete | Prior package tests | 1465 regression tests passed across three disjoint groups; Ruff passed; evidence below |
 
 Update this snapshot at RED, test-commit, GREEN/review and interruption
 boundaries. Include active owner, live command/log IDs, completed commits,
@@ -501,3 +501,80 @@ pairs and source diagnostics, visible counts, exact class orientation, cache
 and saved-only behavior, zero/single-class/failed/empty/unavailable counts,
 and full-bundle Prepare/error preservation. Tests `4f7f724`; source-only GREEN
 assigned to the same Sol worker. No experimental processing.
+
+### C4 GREEN / review, 2026-11-10
+
+The assigned cross-condition and existing webapp regression group passed all
+75 tests in 36.51 s. Reviewed the Context-only selector, explicit original-four
+filter, twelve complementary-test/six training rows, source total/Left/Right
+columns, recorded-context orientation, missing-region reasons, selected-model
+details and percentage/count formatting. All counts are in the main table.
+Caching, preparation controls and other target views retain their behavior.
+Implementation `aa9d45a`; no tests changed during GREEN.
+
+### C5 browser and 100-ms acceptance, 2026-11-10
+
+Browser checks first used the saved-only 500-ms copy without raw data or PCA.
+Confirmed all six directed outcome pairs, twelve regional test rows and the
+independent source counts above. Training role showed six source diagnostics.
+Full/Before selections, both weightings and the absence of the generic Outcome
+selector were checked. The main table exposes counts without Fit details;
+metrics display one decimal place and remain accessible by table scrolling.
+
+Then used the full artificial session, changed preparation width to 100 ms,
+and confirmed that the selected saved run still reported 500 ms until explicit
+Recompute. Recompute created a separate 100-ms PCA and v2 decoder bundle:
+`cross_condition_generalization_20261110_163353_466800_c8a251b46a8b11e8a6ab`.
+It completed 216 fits in 0.366 s (peak process RSS 518,979,584 bytes, including
+the webapp process). Independently checked all 108 outcome/diagnostic rows
+against the same raw-membership/coverage count oracle; counts did not change
+with bin width. Full/Before/After contain 20/10/10 supervised bins.
+
+All 216 saved 100-ms probability vectors were reconstructed directly from
+PCA scores and saved parameters. Maximum absolute difference was
+3.33e-16; all passed 1e-14 absolute/relative tolerance. An initial standalone
+audit incorrectly required bitwise zero error and failed on this floating-point
+roundoff; correcting that audit assumption required no feature or test changes.
+Browser confirmed Before/Equal-cell training and After/Equal-cell complementary
+test views with the expected small omission sources (PFC 3, HPC 2).
+
+Additional receipt and screenshot remain in the temporary fixture directory:
+`validation_100ms_receipt.json` and `context_outcome_summary.png`. Both decoder
+versions here are v2; the two bin widths have separate run directories. The
+500-ms source PCA still matches its recorded SHA-256 after 100-ms preparation.
+temporary localhost server exited cleanly and its browser tab was closed.
+No experimental data or batch was processed.
+
+### C6 documentation / C7 final verification, 2026-11-10
+
+Sequential Luna documentation work and root review updated the cross-condition,
+task-decoding and neural-analysis guides (`0d181ed`). They describe selectors,
+six evaluations from three source models, visible counts, v2 Prepare-once and
+unchanged PCA-v1 reuse. Root corrected wording about unavailable-region rows
+and scoped combined-pool fitting to the original condition view. All three
+guides passed ASCII, code-fence and relative-link checks.
+
+The initial combined final pytest command terminated with SIGTERM (exit 143)
+at approximately 58%, with no reported test failure. It is not counted as a
+passing gate. The same collection was then run as three disjoint groups using
+`uv run --frozen --no-sync --no-cache pytest ... -q`:
+
+1. `src/tests/neural_analysis/task_decoding/cross_condition`,
+   `src/tests/neural_analysis/task_decoding/session_prediction`,
+   `src/tests/neural_analysis/task_decoding/pooled`, and the five webapp files
+   `test_cross_condition_webapp.py`, `test_condition_generalization_webapp.py`,
+   `test_session_prediction_webapp.py`, `test_session_timeline_webapp.py`,
+   `test_webapp_package.py` under `src/tests/neural_analysis`:
+   581 passed in 136.51 s.
+2. `src/tests/neural_analysis/task_decoding`, ignoring the preceding three
+   subdirectories and `test_pipeline.py`: 718 passed in 28.91 s.
+3. `src/tests/neural_analysis/task_decoding/test_pipeline.py`:
+   166 passed in 81.90 s.
+
+Total: 1465 passed. Existing warnings concern short Pynapple intervals, small
+cross-validation classes and a test oracle's empty-slice mean. Ruff passed for
+the cross-condition source/tests and changed webapp source/tests. Whitespace
+checks passed. No source changed after these gates. User-owned main.py and
+sync_ephys.py retain their accepted hashes; unrelated untracked files were
+preserved. All implementation and test work is committed; this handoff changes
+documentation only. Experimental interpretation remains for the user.

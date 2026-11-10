@@ -1,7 +1,7 @@
 # Cross-Condition Generalization of Context, Choice, Actual Reward, and Value
 
 Status: scientific decisions confirmed, revision 10, 2026-11-10. The original
-analysis is implemented; the Context outcome extension in Section 3.1 is planned.
+analysis and the Context outcome extension in Section 3.1 are implemented.
 This specification does not authorize implementation or experimental runs.
 The implementation plans record delivery and validation requirements.
 
