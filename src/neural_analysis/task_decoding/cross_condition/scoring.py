@@ -4,12 +4,12 @@ import numpy as np
 
 from src.neural_analysis.task_decoding.session_prediction.scoring import trial_metrics
 
-from .config import WEIGHTING_NAMES
+from .config import CONTEXT_OUTCOME_MODELS, WEIGHTING_NAMES, WINDOW_NAMES
 from .modeling import RegionTransferResult
 from .preparation import TransferInputs
 
 
-SCORING_VERSION = "cross-condition-summary-v1"
+SCORING_VERSION = "cross-condition-summary-v2"
 
 
 def summarize_transfers(
@@ -26,8 +26,11 @@ def summarize_transfers(
     needed. Return rows with target_name, split_id, window, weighting, region,
     role, population; eligible_trials before finite-output filtering; scored
     n_trials/class_0_trials/class_1_trials; accuracy/balanced_accuracy fractions
-    or None; and reason. Unknown regional eligible_trials is None, scored count
-    zero. Single-class reason leaves ordinary accuracy available. Training means
+    or None; and reason. training_trials/training_class_0_trials/
+    training_class_1_trials are unweighted integer source counts after regional
+    eligibility, identical across test populations and weighting schemes and
+    retained for failed fits. Unknown regional eligibility/training counts are
+    None, scored count zero. Single-class reason leaves ordinary accuracy available. Training means
     are in-sample diagnostics; complementary_test stays distinct. Inputs are
     unchanged, overlapping populations/directions are never aggregated.
     """
@@ -42,6 +45,7 @@ def summarize_transfers(
         model = regions.get(region)
         for split, definition in enumerate(inputs.transfers):
             target = inputs.target_names.index(definition.target_name)
+            training_counts = _training_counts(None if model is None else model.eligible_cell_counts[split, 0])
             populations = _population_masks(definition.target_name, correct_rewarded, omission, incorrect, reward)
             for window, window_name in enumerate(inputs.window_names):
                 for weighting, weighting_name in enumerate(WEIGHTING_NAMES):
@@ -64,8 +68,69 @@ def summarize_transfers(
                                     inputs.target_values[positions, target],
                                     model.trial_probabilities[window, weighting, split], eligible, reason,
                                 )
-                            rows.append({**identity, **metrics})
+                            rows.append({**identity, **training_counts, **metrics})
     return rows
+
+
+def context_outcome_rows(summary_rows: list[dict]) -> list[dict]:
+    """Select Context outcome evaluations and in-sample diagnostics from saved summaries.
+
+    summary_rows is summarize_transfers' list of dimensionless summary dicts,
+    with H/G/model/region/role/population identities and metrics/counts. Return
+    copied dicts retaining every field and adding training_population (str) and
+    test_population (str for complementary tests, None for training diagnostics).
+    Only each fixed model's own training outcome and its two other test outcomes
+    are selected. Order is window, weighting, training model (correct-rewarded,
+    omission, incorrect), role, mapped test outcome, then PFC/HPC. No scoring,
+    fitting, source reads or pooling occurs; input rows stay unchanged.
+    """
+    selected = []
+    for row in summary_rows:
+        split_id = row["split_id"]
+        if split_id not in CONTEXT_OUTCOME_MODELS:
+            continue
+        training_population, test_populations = CONTEXT_OUTCOME_MODELS[split_id]
+        if row["role"] == "training" and row["population"] == training_population:
+            test_population = None
+        elif row["role"] == "complementary_test" and row["population"] in test_populations:
+            test_population = row["population"]
+        else:
+            continue
+        selected.append({**row, "training_population": training_population, "test_population": test_population})
+    return sorted(selected, key=_context_outcome_row_order)
+
+
+def _context_outcome_row_order(row: dict) -> tuple[int, ...]:
+    """Return fixed H/G/model/role/population/region ordering for one selected summary dict.
+
+    row has canonical string identities plus the outcome annotations. The
+    dimensionless integer tuple orders mapped test populations without mixing
+    training diagnostics into test rows; no metrics or counts are transformed.
+    """
+    _, test_populations = CONTEXT_OUTCOME_MODELS[row["split_id"]]
+    population_order = 0 if row["role"] == "training" else test_populations.index(row["test_population"])
+    return (
+        WINDOW_NAMES.index(row["window"]), WEIGHTING_NAMES.index(row["weighting"]),
+        tuple(CONTEXT_OUTCOME_MODELS).index(row["split_id"]),
+        ("training", "complementary_test").index(row["role"]), population_order,
+        ("PFC", "HPC").index(row["region"]),
+    )
+
+
+def _training_counts(source_class_counts: np.ndarray | None) -> dict:
+    """Return three unweighted Python-int source counts, or None for unknown coverage.
+
+    source_class_counts is integer (2,) from saved eligible_cell_counts' source
+    role, ordered actual class 0/1; units are unique trials, never bins or weights.
+    None denotes an unavailable region. Known zero counts and counts from failed
+    fits remain known. Return training_trials and training_class_0/1_trials.
+    """
+    if source_class_counts is None:
+        total = class_0 = class_1 = None
+    else:
+        class_0, class_1 = int(source_class_counts[0]), int(source_class_counts[1])
+        total = class_0 + class_1
+    return {"training_trials": total, "training_class_0_trials": class_0, "training_class_1_trials": class_1}
 
 
 def _population_masks(

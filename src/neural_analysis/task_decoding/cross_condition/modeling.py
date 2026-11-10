@@ -16,7 +16,7 @@ from .preparation import TransferInputs
 class RegionTransferResult:
     """One region's parameters, eligible memberships and matched-window trial means.
 
-    W=regional choices, K=original PCs, H=3 windows, G=2 weightings, S=16 splits.
+    W=regional choices, K=original PCs, H=3 windows, G=2 weightings, S=18 splits.
     choice_positions is integer (W,), indexing shared behavioral choices;
     pc_ids is integer (K,), original one-based ranks. coefficients is float64
     (H,G,S,K) in log-odds per original PC-score unit; intercepts is float64
