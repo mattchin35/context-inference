@@ -59,36 +59,54 @@ def test_every_regional_window_weight_and_split_matches_independent_sklearn_orac
         original_scores = scores.copy()
         model = modeling.fit_region_transfers(scores, positions, inputs)
         component_count = scores.shape[2]
-        assert model.coefficients.shape == (3, 2, 16, component_count)
-        assert model.intercepts.shape == model.fit_status.shape == model.fit_reason.shape == (3, 2, 16)
-        assert model.trial_probabilities.shape == (3, 2, 16, len(positions))
-        assert model.source_mask.shape == model.test_mask.shape == (16, len(positions))
-        assert model.source_trial_weights.shape == (2, 16, len(positions))
-        assert model.eligible_cell_counts.shape == (16, 2, 2)
+        assert model.coefficients.shape == (3, 2, 18, component_count)
+        assert model.intercepts.shape == model.fit_status.shape == model.fit_reason.shape == (3, 2, 18)
+        assert model.trial_probabilities.shape == (3, 2, 18, len(positions))
+        assert model.source_mask.shape == model.test_mask.shape == (18, len(positions))
+        assert model.source_trial_weights.shape == (2, 18, len(positions))
+        assert model.eligible_cell_counts.shape == (18, 2, 2)
         assert model.coefficients.dtype == model.intercepts.dtype == model.trial_probabilities.dtype == np.float64
         assert model.source_mask.dtype == model.test_mask.dtype == bool
         assert np.issubdtype(model.eligible_cell_counts.dtype, np.integer)
         np.testing.assert_array_equal(model.pc_ids, np.arange(1, component_count + 1))
         np.testing.assert_array_equal(model.choice_positions, positions)
-        assert np.all(model.fit_status == "ok") and np.all(model.fit_reason == "")
         assert not hasattr(model, "scores") and not hasattr(model, "fold_ids")
         for split, definition in enumerate(inputs.transfers):
             target = inputs.target_names.index(definition.target_name)
             source_cells = inputs.source_cells[positions, split]
             test_cells = inputs.test_cells[positions, split]
+            ids = inputs.choices.trial_id.to_numpy()[positions]
+            if definition.split_id == "context_correct_rewarded_to_other_outcomes":
+                np.testing.assert_array_equal(source_cells, np.column_stack([ids == 2, np.isin(ids, [0, 19])]))
+            elif definition.split_id == "context_omission_to_other_outcomes":
+                np.testing.assert_array_equal(source_cells, np.column_stack([ids == 3, ids == 1]))
             source = source_cells.any(axis=1)
             test = test_cells.any(axis=1)
             np.testing.assert_array_equal(model.source_mask[split], source)
             np.testing.assert_array_equal(model.test_mask[split], test)
             np.testing.assert_array_equal(model.eligible_cell_counts[split], [source_cells.sum(axis=0), test_cells.sum(axis=0)])
             actual = inputs.target_values[positions, target]
+            both_classes = source_cells.any(axis=0).all()
             for weighting in range(2):
                 trial_weights = np.zeros(len(positions))
                 for label in (0, 1):
                     selected = source_cells[:, label]
-                    trial_weights[selected] = 1 if weighting == 0 else source.sum() / (2 * selected.sum())
+                    if weighting == 0:
+                        trial_weights[selected] = 1
+                    elif both_classes:
+                        trial_weights[selected] = source.sum() / (2 * selected.sum())
                 np.testing.assert_allclose(model.source_trial_weights[weighting, split], trial_weights)
-                assert trial_weights.sum() == pytest.approx(source.sum())
+                assert trial_weights.sum() == pytest.approx(source.sum() if weighting == 0 or both_classes else 0)
+                if not both_classes:
+                    assert definition.split_id == "context_correct_rewarded_to_other_outcomes"
+                    assert np.all(model.fit_status[:, weighting, split] == "unavailable")
+                    assert np.all(model.fit_reason[:, weighting, split] == "single_class_training")
+                    assert np.isnan(model.coefficients[:, weighting, split]).all()
+                    assert np.isnan(model.intercepts[:, weighting, split]).all()
+                    assert np.isnan(model.trial_probabilities[:, weighting, split]).all()
+                    continue
+                assert np.all(model.fit_status[:, weighting, split] == "ok")
+                assert np.all(model.fit_reason[:, weighting, split] == "")
                 for window, bins in enumerate(expected_bins):
                     matrix = np.array([scores[trial, time] for trial in np.flatnonzero(source) for time in bins])
                     labels = np.array([actual[trial] for trial in np.flatnonzero(source) for _ in bins])
@@ -159,7 +177,8 @@ def test_selected_rows_reach_readout_in_trial_major_bin_major_order(regional_tra
 
     monkeypatch.setattr(modeling, "fit_readout", record_readout)
     modeling.fit_region_transfers(scores, positions, inputs)
-    assert len(calls) == 96
+    assert len(calls) == 108
+    assert sum(item.split_id == "context_incorrect_to_correct" for item in inputs.transfers) == 1
     for bins in ((2, 3, 4, 5), (2, 3), (4, 5)):
         expected_matrix = np.array([scores[trial, time] for trial in (0, 1, 2, 3, 15) for time in bins])
         expected_labels = np.repeat([1, 1, 0, 0, 1], len(bins))
@@ -167,6 +186,44 @@ def test_selected_rows_reach_readout_in_trial_major_bin_major_order(regional_tra
             expected_weights = np.repeat(np.array(totals) / len(bins), len(bins))
             assert any(np.array_equal(matrix, expected_matrix) and np.array_equal(labels, expected_labels)
                        and np.allclose(weights, expected_weights) for matrix, labels, weights in calls)
+
+
+def test_new_rewarded_context_model_retains_known_hpc_missing_source_class(regional_transfer_data):
+    """HPC excludes both Left rewarded IDs0/19: source counts(1,0), no borrowing from test."""
+    inputs, regions = regional_transfer_data
+    scores, positions = regions["HPC"]
+    model = modeling.fit_region_transfers(scores, positions, inputs)
+    split = next(i for i, item in enumerate(inputs.transfers)
+                 if item.split_id == "context_correct_rewarded_to_other_outcomes")
+    np.testing.assert_array_equal(model.eligible_cell_counts[split], [[1, 0], [2, 4]])
+    assert model.source_trial_weights[0, split].sum() == 1
+    assert not model.source_trial_weights[1, split].any()
+    assert np.all(model.fit_status[:, :, split] == "unavailable")
+    assert np.all(model.fit_reason[:, :, split] == "single_class_training")
+    assert np.isnan(model.coefficients[:, :, split]).all()
+    assert np.isnan(model.trial_probabilities[:, :, split]).all()
+    assert np.count_nonzero(model.fit_status == "ok") == 102
+
+
+@pytest.mark.parametrize("split_id", [
+    "context_correct_rewarded_to_other_outcomes", "context_omission_to_other_outcomes",
+    "context_incorrect_to_correct",
+])
+def test_complementary_outcome_scores_cannot_change_source_coefficients(regional_transfer_data, split_id):
+    """Perturb only this model's test trials(W,B,K); all H/G source fits stay identical."""
+    inputs, regions = regional_transfer_data
+    scores, positions = regions["PFC"]
+    split = next(i for i, item in enumerate(inputs.transfers) if item.split_id == split_id)
+    baseline = modeling.fit_region_transfers(scores, positions, inputs)
+    changed = scores.copy()
+    changed[baseline.test_mask[split]] += 13
+    actual = modeling.fit_region_transfers(changed, positions, inputs)
+    np.testing.assert_array_equal(actual.coefficients[:, :, split], baseline.coefficients[:, :, split])
+    np.testing.assert_array_equal(actual.intercepts[:, :, split], baseline.intercepts[:, :, split])
+    np.testing.assert_array_equal(actual.eligible_cell_counts[split], baseline.eligible_cell_counts[split])
+    source = baseline.source_mask[split]
+    np.testing.assert_array_equal(actual.trial_probabilities[:, :, split, source],
+                                  baseline.trial_probabilities[:, :, split, source])
 
 
 @pytest.mark.parametrize("pattern", [[-10., 2., 2., 2.], [-.1, -.1, -.1, 10.]])
