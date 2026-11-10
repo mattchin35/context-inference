@@ -6,6 +6,7 @@ import warnings
 import numpy as np
 import pytest
 from sklearn.exceptions import ConvergenceWarning
+from sklearn.linear_model import LogisticRegression
 
 from src.neural_analysis.task_decoding.session_prediction import modeling
 from src.neural_analysis.task_decoding.session_prediction.preparation import prepare_prediction_inputs
@@ -21,6 +22,91 @@ def fit_region(prepared, role="PFC", *, use_training_membership=False):
         **({"training_condition_mask": prepared.training_condition_mask}
            if use_training_membership else {}),
     )
+
+
+def test_public_categorical_readout_matches_nonuniform_weight_sklearn_oracle():
+    """Fit float X(36,3), binary y(36,) and positive dimensionless row weights.
+
+    Return contract is beta(3,) in log-odds/PC units, a log-odds scalar
+    intercept and an empty reason; original PC scales and inputs stay unchanged.
+    """
+    generator = np.random.default_rng(460)
+    matrix = generator.normal(size=(36, 3)) * [0.2, 1.0, 5.0] + [1.5, -0.4, 3.0]
+    labels = np.tile([0.0, 0.0, 1.0], 12)
+    weights = np.tile([0.2, 0.7, 3.0], 12)
+    originals = [array.copy() for array in (matrix, labels, weights)]
+    oracle = LogisticRegression(
+        C=1.0, l1_ratio=0.0, solver="lbfgs", fit_intercept=True,
+        class_weight=None, tol=1e-4, max_iter=5000,
+    ).fit(matrix, labels, sample_weight=weights)
+
+    beta, intercept, reason = modeling.fit_readout(matrix, labels, weights, "categorical")
+
+    assert reason == ""
+    assert beta.shape == (3,)
+    assert isinstance(intercept, float)
+    np.testing.assert_allclose(beta, oracle.coef_[0], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(intercept, oracle.intercept_[0], rtol=1e-12, atol=1e-12)
+    for actual, original in zip((matrix, labels, weights), originals, strict=True):
+        np.testing.assert_array_equal(actual, original)
+
+
+def test_public_numerical_readout_matches_weighted_normal_equation():
+    """Fit float X(20,3), native-unit y(20,) and positive row weights.
+
+    Check beta(3,) in target/PC units and scalar target-unit intercept against
+    an independent alpha=1 ridge oracle whose intercept is exempt from penalty.
+    """
+    generator = np.random.default_rng(191)
+    matrix = generator.normal(size=(20, 3)) * [0.3, 2.0, 4.0] + [2.0, -1.0, 3.0]
+    labels = 4.5 + matrix @ np.array([0.8, -0.2, 1.1]) + generator.normal(0, 0.2, 20)
+    weights = np.linspace(0.1, 2.0, len(matrix))
+    design = np.column_stack([np.ones(len(matrix)), matrix])
+    penalty = np.diag([0.0, 1.0, 1.0, 1.0])
+    oracle = np.linalg.solve(
+        design.T @ (weights[:, None] * design) + penalty,
+        design.T @ (weights * labels),
+    )
+
+    beta, intercept, reason = modeling.fit_readout(matrix, labels, weights, "numerical")
+
+    assert reason == ""
+    assert beta.shape == (3,)
+    assert isinstance(intercept, float)
+    np.testing.assert_allclose(beta, oracle[1:], atol=1e-12)
+    np.testing.assert_allclose(intercept, oracle[0], atol=1e-12)
+
+
+@pytest.mark.parametrize("window, bin_count", [("full", 4), ("before", 2), ("after", 2)])
+def test_regional_categorical_predictions_match_independent_sklearn_fit(prediction_inputs, window, bin_count):
+    """Preserve regional (W,B,2) class-1 probabilities and (2,5,K) affine fits.
+
+    Independently stack selected training bins with total weight one per trial;
+    compare predictions on every held-out bin in original regional PC units.
+    """
+    prepared = prepare_prediction_inputs(*prediction_inputs[1:], prediction_inputs[0], training_window=window)
+    for role, region in prepared.timeline.regions.items():
+        result = fit_region(prepared, role)
+        coverage = np.zeros(len(prepared.fold_ids), dtype=bool)
+        coverage[region.choice_positions] = True
+        for target in range(2):
+            for fold in range(5):
+                training = (coverage & prepared.baseline_valid & prepared.correct_rewarded
+                            & prepared.target_valid[:, target] & (prepared.fold_ids >= 0)
+                            & (prepared.fold_ids != fold))
+                matrix = region.scores[training[region.choice_positions]][:, prepared.training_bin_mask]
+                matrix = matrix.reshape(-1, region.scores.shape[2])
+                labels = np.repeat(prepared.target_values[training, target], bin_count)
+                oracle = LogisticRegression(
+                    C=1.0, l1_ratio=0.0, solver="lbfgs", fit_intercept=True,
+                    class_weight=None, tol=1e-4, max_iter=5000,
+                ).fit(matrix, labels, sample_weight=np.full(len(matrix), 1 / bin_count))
+                np.testing.assert_allclose(result.coefficients[target, fold], oracle.coef_[0], atol=1e-12)
+                np.testing.assert_allclose(result.intercepts[target, fold], oracle.intercept_[0], atol=1e-12)
+                held = prepared.fold_ids[region.choice_positions] == fold
+                held_matrix = region.scores[held].reshape(-1, region.scores.shape[2])
+                expected = oracle.predict_proba(held_matrix)[:, 1].reshape(held.sum(), region.scores.shape[1])
+                np.testing.assert_allclose(result.predictions[held, :, target], expected, atol=1e-12)
 
 
 @pytest.mark.parametrize("window, bin_count", [("full", 4), ("before", 2), ("after", 2)])
