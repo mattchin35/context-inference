@@ -1,6 +1,6 @@
 # Context Outcome Generalization: Implementation Plan
 
-Status: implementation authorized by the user, 2026-11-10. C1 complete; C2 RED starting;
+Status: implementation authorized by the user, 2026-11-10. C1-C2 complete; C3 GREEN in progress;
 experimental computation is not included in this implementation run.
 
 This extends the completed [cross-condition implementation](cross_condition_generalization_implementation_plan.md).
@@ -12,12 +12,12 @@ especially Section 3.1, owns the scientific definitions. Read repository
 
 | Item | Current state |
 | --- | --- |
-| Inspected branch / HEAD | `refactor` / `8e586c4`; recheck on resumption. |
+| Inspected branch / HEAD | `refactor` / `6b55d99`; recheck on resumption. |
 | Authorization | User explicitly approved implementation on 2026-11-10. C1-C7 authorized; no experimental computation. |
 | Baseline | v1 implementation complete; full regression 1433 passed. Historical evidence remains in the original plan. |
 | User edits | Preserve `src/main.py`, `src/neural_analysis/sync_ephys.py` and unrelated untracked files. The user explicitly authorized preserving ongoing behavior-mouse changes in main.py. |
-| Running work | `/root/scientific_worker` (Sol, high): C2 RED; no experimental jobs. |
-| Next action | Review C2 RED, commit tests, then authorize GREEN. |
+| Running work | `/root/scientific_worker` (Sol, high): C3 GREEN; no experimental jobs. |
+| Next action | Review C3 GREEN, then assign C4 RED. |
 
 Use a Sol orchestrator (`gpt-6.1-sol`, high), sequential Sol scientific workers
 (`gpt-6.1-sol`, high), and a Luna documentation worker (`gpt-6-luna`, medium).
@@ -35,8 +35,8 @@ updated where the approved registry, report fields or version contract changes.
 | --- | --- | --- | --- | --- |
 | C0 scientific amendment / plan | Sol orchestrator | Approved | Documentation only | Approved spec revision 10 and this plan |
 | C1 registry / preparation | Sol worker | Complete | 6 expected failures / 143 passed; `f9e332a` | 149 passed; `8e586c4` |
-| C2 fitting / summaries / counts | Sol worker | RED starting | Record here | Record here |
-| C3 saved products / runners | Sol worker | Not started | Record here | Record here |
+| C2 fitting / summaries / counts | Sol worker | Complete | 9 expected failures / 89 passed; `ff68b6f` | 98 passed; `4b241c3` |
+| C3 saved products / runners | Sol worker | GREEN in progress | Expected S=16 persistence blockers; `6b55d99` | Record here |
 | C4 summary webapp | Sol worker | Not started | Record here | Record here |
 | C5 synthetic / browser acceptance | Sol orchestrator | Not started | Prior package tests | Record here |
 | C6 usage documentation | Luna worker | Not started | Documentation only | Record checks/review/commit |
@@ -198,6 +198,9 @@ Use `cross-condition-generalization-v2`, schema 2, and
 array names, expanding only S from 16 to 18. Include the fixed context-outcome
 mapping in effective scientific metadata/identity and validate it on loading.
 Continue saving source/test names, model IDs, masks, counts and probabilities.
+Frozen metadata key `effective_config["context_outcome_models"]` is an ordered
+list of three JSON dictionaries with split_id, training_population and
+test_populations (two strings), in the fixed training-outcome order.
 
 Update fixed-shape validators and registry checks in `results.py`; preserve
 self-contained loading, metadata-only discovery, atomic publication and the
@@ -415,3 +418,40 @@ public signatures, original sixteen memberships and PCA versions are unchanged.
 Implementation commit `8e586c4`. Sol worker returns to C2 RED. No live analysis
 process or experimental work. Frozen outcome-row annotations and ordering are
 recorded in Section 3.3 before C2 tests.
+
+### C2 RED / test commit, 2026-11-10
+
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition/test_modeling.py src/tests/neural_analysis/task_decoding/cross_condition/test_scoring.py src/tests/neural_analysis/task_decoding/session_prediction/test_modeling.py src/tests/neural_analysis/task_decoding/session_prediction/test_scoring.py -q`
+returned 9 expected failures, 89 passed in 12.37 s. Root independently checked
+the new missing helper/version/count cases: 5 expected failures, 10 deselected
+in 1.23 s. Reviewed independent expanded sklearn fits, test-only perturbations,
+six literal outcome pairs/direct metrics, count invariance/coverage/failures,
+pure deterministic row selection and unavailable-region handling.
+
+Tests committed as `ff68b6f`. Existing fit code already passes all S=18 oracles;
+only summary functionality and modeling documentation need C2 source changes.
+HPC's missing rewarded source class is retained: 102 available fits versus
+PFC's 108. No fixture/source edits in RED and no experimental processing.
+
+### C2 GREEN / review, 2026-11-10
+
+The same assigned C2 command passed 98 tests in 12.97 s. Reviewed count
+derivation from saved source eligibility (Python ints / unknown None), preserved
+failed-fit counts, deterministic copy-only outcome selection and cache version.
+Numerical fitting is unchanged; modeling.py received only an S=18 doc update.
+No test edits. Implementation `4b241c3`; C3 RED follows. No live processes or
+experimental work. The metadata mapping contract is frozen in Section 3.4.
+
+### C3 RED / test commit, 2026-11-10
+
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition src/tests/neural_analysis/task_decoding/session_prediction/test_results.py src/tests/neural_analysis/task_decoding/session_prediction/test_scripts.py -q`
+returned 27 failed, 211 passed, 69 errors in 40.15 s. Expected dominant blocker:
+saved-input validation still requires `(N,16,2)` and rejects prepared S=18.
+Root independently verified that blocker (one failed, 80 deselected, 0.22 s).
+
+Reviewed expanded round trips/strict mapping, counterfeit metadata, unsupported
+v1 preservation, saved-only count summaries, 210 actual versus 216 maximum fits,
+and a separate full-coverage 216-fit fixture with unchanged PCA-v1 bytes.
+Corrected a genuine pre-commit test error: discovery returns tuple, not list;
+no public API change. Tests committed as `6b55d99`. Source-only C3 GREEN
+assigned; no experimental work, fixture-framework changes or live test process.
