@@ -4,6 +4,11 @@ Status: P1-P7 implementation and synthetic acceptance complete, 2026-11-10.
 Aligned with spec revision 9; delivered by sequential Sol and Luna workers.
 P8 experimental acceptance remains separately gated on a user-designated session.
 
+Planned follow-up: [Context outcome generalization](context_outcome_generalization_implementation_plan.md)
+adds rewarded-only and omission-only Context fits, reuses the incorrect-trained
+fit, and exposes training counts. That document owns extension work; the
+completed v1 scope and execution evidence below remain historical.
+
 Read the [scientific spec](cross_condition_generalization_spec_v1.md),
 [SoftwareDesign.md](SoftwareDesign.md), and repository `AGENTS.md`.
 The spec owns scientific meaning; this plan owns file scope, contracts,

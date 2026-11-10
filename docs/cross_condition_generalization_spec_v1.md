@@ -1,12 +1,14 @@
 # Cross-Condition Generalization of Context, Choice, Actual Reward, and Value
 
-Status: scientific decisions confirmed, revision 9, 2026-11-10. This specification
-defines the analysis; it does not authorize implementation or experimental runs.
-The implementation plan records delivery and validation requirements.
+Status: scientific decisions confirmed, revision 10, 2026-11-10. The original
+analysis is implemented; the Context outcome extension in Section 3.1 is planned.
+This specification does not authorize implementation or experimental runs.
+The implementation plans record delivery and validation requirements.
 
 References:
 
 - [Implementation plan and live handoff](cross_condition_generalization_implementation_plan.md).
+- [Context outcome extension implementation plan](context_outcome_generalization_implementation_plan.md).
 - [Implemented session-prediction specification](condition_prediction_generalization_spec_v1.md).
 - [Its implementation and validation record](condition_prediction_generalization_implementation_plan.md).
 - [Earlier condition-generalization specification](task_variable_condition_generalization_spec_v1.md).
@@ -16,9 +18,10 @@ References:
 ## 1. Goal and scope
 
 For each binary target, train a neural readout on two condition cells containing
-both target classes. Assess whether that readout transfers to the complementary
-two cells, which also contain both target classes. Keep all four transfer
-directions individually identifiable for each target.
+both target classes. Assess whether that readout transfers to complementary
+conditions containing both target classes. Keep the original four transfer
+directions individually identifiable for each target. Add the three Context
+outcome-training models and six separate evaluations defined in Section 3.1.
 
 Targets are recorded context, actual choice, actual reward, and binary
 correctness-based value. Existing seven-target correct-rewarded generalization
@@ -80,13 +83,15 @@ have context 0/1; missing/invalid context is an input error. Other label validit
 follows the existing target loader. These are eligibility masks: no rows are
 deleted, labels imputed or PCA refitted.
 
-For context/choice/value, correct means the union of canonical correct-rewarded
-and correct-omission trials. For reward, the unrewarded pool combines correct
+For the original context/choice/value transfers, correct means the union of
+canonical correct-rewarded and correct-omission trials. The additional Context
+outcome transfers use separate outcome training pools (Section 3.1).
+For reward, the unrewarded pool combines correct
 omissions and incorrect choices with recorded reward 0; the rewarded pool uses
 the eligible actual-reward-1 trials. These are combined fitting pools, with
-outcome-separated summaries of the same fitted models. Do not prepare
-rewarded-only/omission-only/incorrect-only training variants. Missing values
-never become class 0.
+outcome-separated summaries of the same fitted models. Separate outcome training
+is added only for Context; Choice, Actual reward and Value keep their existing
+definitions. Missing values never become class 0.
 
 ## 3. Context generalization: four directed transfers
 
@@ -105,6 +110,44 @@ In the middle two splits, action is constant within the training pool and
 changes for testing, while both context classes remain represented in each
 pool. In the first and last splits, the relationship between context and action
 reverses between training and testing.
+
+### 3.1 Additional Context outcome transfers
+
+Train on both recorded contexts within one outcome, then evaluate the same
+readout separately on each other outcome:
+
+| Training outcome, Left + Right context | Separate test outcome 1 | Separate test outcome 2 |
+| --- | --- | --- |
+| Correct-rewarded | Correct-omission | Incorrect |
+| Correct-omission | Correct-rewarded | Incorrect |
+| Incorrect | Correct-rewarded | Correct-omission |
+
+These are three source models and six directed evaluations. Each source model
+is fitted once per window/weighting/region; its two test summaries share the
+same coefficients, intercept and source weights. The incorrect-trained model
+is the existing `context_incorrect_to_correct` readout, reused in both Context
+views. Only rewarded-only and omission-only source models are added. Retain the
+original four Context condition transfers alongside this new outcome view.
+
+Use canonical correct-rewarded, omission and incorrect memberships after the
+common exclusions. Incorrect includes otherwise eligible incorrect choices
+regardless of recorded reward; it is not restricted to reward 0. Correct trials
+with unknown reward belong to neither correct-rewarded nor omission. Class 1
+remains Left context and class 0 Right context, including on incorrect choices.
+Never use action to relabel context.
+
+Training and test outcomes are disjoint. Do not pool the two test outcomes into
+the requested individual summaries or refit a model for each test outcome.
+Preserve all eligible training trials and existing weighting/estimator settings.
+
+Display total, Left-context and Right-context training trial counts directly in
+the outcome-results table for each region. Counts are unique eligible source
+trials after behavioral/target exclusions and regional neural coverage, not
+bins or weight sums. They do not change when selecting a test outcome or
+weighting. Keep known eligible counts after a fit failure; unknown regional
+coverage stays unknown. Show test counts and availability reasons separately.
+No automatic small-sample threshold, subsampling or new significance test is
+specified. Source training performance remains an in-sample diagnostic.
 
 ## 4. Choice generalization: four directed transfers
 
@@ -205,7 +248,8 @@ axes. Fit one all-source model per target/split/weight/window/region combination
 
 ### Combined fitting pools and separate outcome summaries
 
-Each fitted model uses the following combined pools:
+The original transfers use the following combined pools; Section 3.1 defines
+the additional outcome-specific Context source pools:
 
 | Target | Combined fitting definition | Outcome separation |
 | --- | --- | --- |
@@ -284,8 +328,11 @@ another fitting pool. Each eligible test trial is counted once within its
 selected target/split/weight/window/region/outcome summary; the same trial can
 appear in overlapping summary populations.
 
-Sixteen splits, two weight schemes and two regions imply up to 192 binary fits
-across all three windows at one bin width. Outcome summaries add no models.
+The original sixteen splits imply up to 192 binary fits across three windows,
+two weighting schemes and two regions. The Context extension adds two unique
+source definitions (24 fits), bringing the complete bundle to at most 216 fits.
+The reused incorrect-trained definition is counted once. The six requested
+outcome evaluations are summaries of three source models, not six source fits.
 Reuse saved PCA scores across fits and retain trial means rather than full-window
 decoder or contribution tensors. Measure runtime and memory during implementation.
 
@@ -301,7 +348,8 @@ classes in the scored pool.
 For unavailable fits, distinguish eligible cell counts from scored trials:
 eligible data may exist even though no valid predictions can be scored.
 Keep the four directed transfers individually visible; an average across them
-is not yet requested.
+is not yet requested. The additional Context outcome view shows all six
+train-outcome/test-outcome pairs separately, with visible training sample sizes.
 
 Store sufficient data to inspect a result without raw neural/behavioral
 sources: original trial identities; actual labels and validity; canonical
@@ -353,8 +401,9 @@ Interpretation limits:
 
 ## 9. Preparation and handoff
 
-One explicit preparation call produces all sixteen transfers, three supervised
-windows and both weightings at the selected bin width. The summary view includes
+One explicit preparation call produces all eighteen unique readout definitions,
+three supervised windows and both weightings at the selected bin width after
+the Context extension is implemented. The summary view includes
 Prepare/Recompute controls alongside the metadata-based CLI. Preparation may
 create missing PCA through the existing runner; inspection never prepares or fits.
 
@@ -362,4 +411,7 @@ Revision 9 incorporates the review decisions: version-3 metadata only, blocks
 ignored, numeric masks normalized locally, context checked after baseline
 exclusions, confident PCA reuse, and per-region unavailability reported without
 crashing. No backward-compatibility, overlap-handling or recovery subsystem is
-requested. See the implementation plan for contracts, tests and approval gates.
+requested. Revision 10 adds Section 3.1's Context outcome fits and visible
+regional training counts. See the Context extension plan for the new result
+version, contracts, tests and approval gates; original implementation evidence
+remains in the completed baseline plan.
