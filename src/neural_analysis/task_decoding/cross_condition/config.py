@@ -3,16 +3,28 @@
 from dataclasses import dataclass
 import json
 from pathlib import Path
+from types import MappingProxyType
 
 from src.neural_analysis.session_metadata import CANONICAL_FILENAME, load_session_metadata
 from src.neural_analysis.task_decoding.config import SUPPORTED_BIN_WIDTH_MS, load_task_decoding_config
 
 
-ANALYSIS_VERSION = "cross-condition-generalization-v1"
-SCHEMA_VERSION = 1
+ANALYSIS_VERSION = "cross-condition-generalization-v2"
+SCHEMA_VERSION = 2
 TARGET_NAMES = ("current_state", "current_action", "current_reward", "current_action_is_correct")
 WINDOW_NAMES = ("full", "before", "after")
 WEIGHTING_NAMES = ("equal_trial", "equal_cell")
+
+# Keep the original condition view separate from the three outcome-trained models.
+CONTEXT_CONDITION_SPLIT_IDS = (
+    "context_correct_to_incorrect", "context_left_choice_to_right_choice",
+    "context_right_choice_to_left_choice", "context_incorrect_to_correct",
+)
+CONTEXT_OUTCOME_MODELS = MappingProxyType({
+    "context_correct_rewarded_to_other_outcomes": ("correct_rewarded", ("omission", "incorrect")),
+    "context_omission_to_other_outcomes": ("omission", ("correct_rewarded", "incorrect")),
+    "context_incorrect_to_correct": ("incorrect", ("correct_rewarded", "omission")),
+})
 
 
 @dataclass(frozen=True)
@@ -21,7 +33,8 @@ class TransferDefinition:
 
     split_id and target_name are stable dimensionless identifiers. source_cells
     and test_cells are tuples of two distinct named cells, class 0 then class 1.
-    The four cells are disjoint within one split; no fold or fitted state exists.
+    A named cell may combine canonical outcomes within one actual class. The
+    four cells are disjoint within one split; no fold or fitted state exists.
     """
 
     split_id: str
@@ -79,6 +92,12 @@ TRANSFERS = (
     TransferDefinition("value_right_choice_to_left_choice", "current_action_is_correct",
                        ("choice_right_incorrect", "choice_right_correct"),
                        ("choice_left_incorrect", "choice_left_correct")),
+    TransferDefinition("context_correct_rewarded_to_other_outcomes", "current_state",
+                       ("context_right_correct_rewarded", "context_left_correct_rewarded"),
+                       ("context_right_omission_or_incorrect", "context_left_omission_or_incorrect")),
+    TransferDefinition("context_omission_to_other_outcomes", "current_state",
+                       ("context_right_omission", "context_left_omission"),
+                       ("context_right_correct_rewarded_or_incorrect", "context_left_correct_rewarded_or_incorrect")),
 )
 
 

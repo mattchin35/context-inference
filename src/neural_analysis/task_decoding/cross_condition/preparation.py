@@ -19,7 +19,7 @@ from .config import TARGET_NAMES, TRANSFERS, WINDOW_NAMES, TransferDefinition
 class TransferInputs:
     """Aligned behavioral arrays and cell definitions; no regional neural scores.
 
-    N=ordinary saved choices, T=4 targets, S=16 splits, H=3 windows, B=bins,
+    N=ordinary saved choices, T=4 targets, S=18 splits, H=3 windows, B=bins,
     C=canonical conditions. choices is a copied (N,column) DataFrame retaining
     original row_position/trial_id and UTC Unix-second choice_time. target_values
     is float64 (N,T), target_valid bool (N,T); labels are dimensionless and retain
@@ -187,6 +187,8 @@ def _named_cells(
     Correct combines canonical correct-rewarded and omission; unrewarded combines
     omission and actual-unrewarded incorrect. Actual reward 1 is independent of
     correctness, including otherwise eligible trials with missing correctness.
+    Context outcome cells and complementary unions use recorded context and
+    canonical outcomes, including rewarded or unknown-reward incorrect trials.
     """
     state, action, reward = values[:, 0], values[:, 1], values[:, 2]
     correct = conditions["correct_rewarded"] | conditions["omission"]
@@ -197,6 +199,12 @@ def _named_cells(
     for side, label in (("right", 0), ("left", 1)):
         cells[f"context_{side}_correct"] = (state == label) & correct
         cells[f"context_{side}_incorrect"] = (state == label) & incorrect
+        cells[f"context_{side}_correct_rewarded"] = (state == label) & conditions["correct_rewarded"]
+        cells[f"context_{side}_omission"] = (state == label) & conditions["omission"]
+        cells[f"context_{side}_omission_or_incorrect"] = (state == label) & (conditions["omission"] | incorrect)
+        cells[f"context_{side}_correct_rewarded_or_incorrect"] = (state == label) & (
+            conditions["correct_rewarded"] | incorrect
+        )
         cells[f"choice_{side}_correct"] = (action == label) & correct
         cells[f"choice_{side}_incorrect"] = (action == label) & incorrect
         cells[f"choice_{side}_rewarded"] = (action == label) & rewarded
@@ -207,7 +215,7 @@ def _named_cells(
 def _transfer_cells(
     cells: dict[str, np.ndarray], values: np.ndarray, valid: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Stack named bool cells(N,) into source/test bool (N,S=16,2) actual-class axes.
+    """Stack named bool cells(N,) into source/test bool (N,S=18,2) actual-class axes.
 
     values/valid are float/bool (N,4) dimensionless targets. Verify each selected
     cell has the registry's actual label and source/test roles are disjoint.
