@@ -2,7 +2,7 @@
 
 Status: revised implementation draft aligned with spec revision 9, 2026-11-10.
 Includes Sol orchestrator / sequential Sol and Luna worker assignments.
-Implementation authorized by the user on 2026-11-10; P1 complete, P2 RED in progress.
+Implementation authorized by the user on 2026-11-10; P1-P4 complete, P5a RED in progress.
 
 Read the [scientific spec](cross_condition_generalization_spec_v1.md),
 [SoftwareDesign.md](SoftwareDesign.md), and repository `AGENTS.md`.
@@ -18,25 +18,25 @@ ledger with exact commands/results, commits and any live process/log IDs.
 
 | Field | Current snapshot |
 | --- | --- |
-| Branch / inspected HEAD | `refactor` / `d8c9b1424f3a5b68a9bd19f48a3bf0e92d1fe5ae`; recheck on resumption. |
+| Branch / inspected HEAD | `refactor` / `0664d85`; recheck on resumption. |
 | Authorization | User approved implementation on 2026-11-10. Synthetic validation is included; experimental preparation remains separately gated. |
 | Existing tracked edits | `src/main.py`, `src/neural_analysis/sync_ephys.py`; preserve both and unrelated untracked files. |
-| Feature documents | Spec and plan are untracked at review; no staging/commits performed. |
-| Running work / owner | `/root/scientific_worker`: P2 RED controls/preparation tests; no experimental processes/jobs. |
+| Feature documents | Approved spec/plan and P1 evidence tracked in `5e1d49e`; subsequent ledger edits belong to the orchestrator. |
+| Running work / owner | `/root/scientific_worker`: P5a RED single-session runner tests; no experimental processes/jobs. |
 | Implementation team | Orchestrator owns review/commits/handoff. Scientific worker `gpt-6.1-sol`, high; at most one worker active. |
 | Confirmed inputs | Version-3 metadata only; ignore blocks; normalize numeric masks locally; validate context after baseline exclusions and exclude dark state 2. |
 | Reuse / availability | Reuse confidently compatible PCA. Report each unavailable region's reason without crashing, including when both are unavailable. |
 | Confirmed preparation | One call prepares all sixteen transfers, three windows and two weightings at one bin width. Explicit Prepare/Recompute controls in the summary view. |
-| Next action | Review/commit P2 RED tests, then dispatch P2 GREEN. |
+| Next action | Review P5a RED, commit tests, then authorize worker GREEN. |
 
 | Package | Assigned writer / owner | State | RED / test commit | GREEN / review / implementation commit |
 | --- | --- | --- | --- | --- |
 | P0 spec/plan | Sol orchestrator | Reviewed draft | Not applicable | Documentation checks only |
 | P1 public fit helper | Sol worker | Complete | RED: 2 expected missing-public-helper failures; 173 passed. Tests: `4e1b478`. | 175 passed; implementation `c08967a`; numerical body unchanged. |
-| P2 controls/cells/alignment | Sol worker | RED in progress | Record here | Record here |
-| P3 fitting/scoring | Sol worker | Not started | Record here | Record here |
-| P4 saved products | Sol worker | Not started | Record here | Record here |
-| P5a single-session runner | Sol worker | Not started | Record here | Record here |
+| P2 controls/cells/alignment | Sol worker | Complete | 2 expected absent-package collection errors; tests `1150ea6`. | Combined 319 passed; post-refactor P2 89 passed; implementation `aa70f22`. |
+| P3 fitting/scoring | Sol worker | Complete | 2 expected absent-modeling collection errors; tests `fc80d35`. | 178 passed; implementation `3ef2862`; all 192 oracle fits and 1920 summary rows checked. |
+| P4 saved products | Sol worker | Complete | Initial RED `256f0e2`; review-regression RED `f31446e` (4 failed, 3 passed). | Final gate 243 passed; implementation commit recorded below. |
+| P5a single-session runner | Sol worker | RED in progress | Record here | Record here |
 | P5b batch wrapper | Luna worker | Not started | Record here | Record here |
 | P6 summary webapp | Sol worker | Not started | Record here | Record here |
 | P7a synthetic integration/browser | Sol orchestrator | Not started | Prior package tests | Record here |
@@ -267,6 +267,10 @@ trial probabilities `(H,G,S,W)`, exact source/test masks `(S,W)`,
 source trial weights `(G,S,W)`, eligible cell counts
 `(S,2,2)` (source/test role, then actual class 0/1), and original one-based
 PC IDs `(K,)`.
+Frozen field names: `choice_positions`, `pc_ids`, `coefficients`, `intercepts`,
+`fit_status`, `fit_reason`, `trial_probabilities`, `source_mask`, `test_mask`,
+`source_trial_weights`, `eligible_cell_counts`. `training_trial_weights` takes
+bool source cells `(W,2)` and one weighting ID, returning float64 totals `(W,)`.
 Weights are zero off source; probabilities are NaN off eligible source/test
 or for unavailable fits. Complete PCA coverage makes membership identical
 across supervised windows. No fold axis or neural-score copies are saved.
@@ -305,6 +309,11 @@ accuracy but no balanced accuracy. Preserve below-chance results. Do not
 aggregate directions or add statistics for overlapping populations.
 `unavailable_regions` maps region names to reasons; show those regions with
 unavailable metrics rather than omitting them or inventing coverage counts.
+Frozen row keys: `target_name`, `split_id`, `window`, `weighting`, `region`,
+`role`, `population`, `eligible_trials`, `n_trials`, `class_0_trials`,
+`class_1_trials`, `accuracy`, `balanced_accuracy`, `reason`. Class counts are
+scored counts. `single_class` explains unavailable balanced accuracy without
+suppressing ordinary accuracy; unknown regional coverage has `eligible_trials=None`.
 
 ## 4. Saved products and provenance
 
@@ -317,6 +326,15 @@ revision/status and `randomness_used=False`, `random_seed=None`.
 
 `CrossConditionResult` holds prepared inputs, regional results, unavailable-region
 reasons, source references and metadata; it contains no neural-score copies.
+Frozen constructor: `(inputs, regions, unavailable_regions, meta)`.
+`build_transfer_metadata(inputs, session_root, source_pcas, target_sources,
+effective_config, *, session_id)` reads only small source-PCA metadata plus file
+identities. `meta["source_pcas"]` keys distinct relative archive paths;
+`meta["region_sources"]` maps regions to those paths. Raw metadata provenance is
+separate from fitted identity. `save_transfer_result(path, result)` and
+`load_transfer_result(path)` publish/load the self-contained packet;
+`discover_transfer_runs(session_root)` and `find_saved_transfer(session_root, identity)`
+support selection and exact reuse.
 
 Fitting identity covers regional PCA hashes/configuration IDs, augmented/base inputs,
 roles/bin width, split/target/window/weight/conflict/source-test definitions and
@@ -617,3 +635,80 @@ Orchestrator reviewed the diff: only public rename/caller/docstring changed;
 estimator body/settings and failures are unchanged. Implementation commit:
 `c08967a`. `git diff --check` passed; user-owned hashes unchanged. P2 RED-only
 tests assigned to the same Sol worker; no live analysis/job remains.
+
+### P2 RED / test commit, 2026-11-10
+
+Sol worker wrote self-contained controls/preparation fixtures and all sixteen
+literal cell-ID expectations. Orchestrator reviewed the cells and corrected one
+test-contract error before implementation: dark state excludes common analysis
+eligibility, retaining recorded target values/validity.
+
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition/test_config.py src/tests/neural_analysis/task_decoding/cross_condition/test_preparation.py -q`
+returned 2 expected absent-package collection errors (worker 0.13 s;
+orchestrator 0.18 s). Existing shared targets/conditions baseline: 55 passed.
+Test-only commit: `1150ea6`. P2 GREEN assigned to the same Sol worker;
+no experimental processing, commits of unrelated paths or live analysis jobs.
+
+### P2 GREEN / review, 2026-11-10
+
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition/test_config.py src/tests/neural_analysis/task_decoding/cross_condition/test_preparation.py src/tests/neural_analysis/task_decoding/test_targets.py src/tests/neural_analysis/task_decoding/test_conditions.py src/tests/neural_analysis/task_decoding/session_prediction -q`
+returned 319 passes in 14.97 s. Reviewed all sixteen registry/cell definitions,
+numeric-mask semantics, context/baseline ordering, raw audits and default-off
+shared block opt-in. Narrowed a helper to its four actual data inputs during
+REFACTOR; the P2-only command then passed 89 tests in 1.59 s. No test changes
+after commit. Implementation: `aa70f22`; whitespace and user hashes unchanged.
+P3 RED-only assigned to the same Sol worker; no live analysis/job remains.
+
+### P3 RED / test commit, 2026-11-10
+
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition/test_modeling.py src/tests/neural_analysis/task_decoding/cross_condition/test_scoring.py -q`
+returned 2 expected missing-modeling collection errors (worker 0.16 s;
+orchestrator 0.13 s). Reviewed independent all-192 fit oracles, explicit
+row/bin weights, role/outcome metrics, probability averaging, controlled
+reversals, unavailable fits/regions and retained eligible versus scored counts.
+Test-only commit: `fc80d35`. Frozen field contracts are recorded in Sections
+3.2-3.3. P3 GREEN assigned to the same Sol worker; no experimental processing.
+
+### P3 GREEN / review, 2026-11-10
+
+New numerical/scoring tests: 39 passed in 6.22 s. Full assigned gate:
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition src/tests/neural_analysis/task_decoding/session_prediction/test_modeling.py src/tests/neural_analysis/task_decoding/session_prediction/test_scoring.py -q`
+returned 178 passes in 11.40 s. Orchestrator reviewed weighting/coverage,
+trial-major stacking, selected-bin mean-expit outputs, local fit failures and
+role/outcome metrics; clarified only a docstring's off-source missing-label
+contract. No test changes. Implementation: `3ef2862`; whitespace/user hashes
+unchanged. P4 RED-only assigned to the same Sol worker; no live analysis/job.
+
+### P4 RED / test commit, 2026-11-10
+
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition/test_results.py -q`
+returned 1 expected absent-results import error (worker 0.16 s; orchestrator
+0.14 s). Reviewed real-fit round trips, shared/separate PCA references,
+metadata-only identities, saved-only relocation with original sources removed,
+normal saved-contract violations, interrupted publication and no-overwrite tests.
+Frozen APIs are recorded in Section 4. Tests: `256f0e2`. P4 GREEN assigned
+to the same Sol worker; no experimental processing or live analysis/job.
+
+### P4 review regressions, 2026-11-10
+
+Initial GREEN: persistence-only 63 passed in 19.71 s; cross-condition plus
+old prediction-result tests 236 passed in 29.82 s. Review found mislabeled
+PCA-source interval metadata, existing-manifest overwrite and silent coercion
+of a noninteger/nonscalar dark-exclusion count. Fixed-setting validation was
+already strengthened during worker self-review.
+
+Orchestrator added tests before fixes:
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition/test_results.py -q -k 'distinguishes_pca or fixed_scientific or existing_manifest or integer_scalar'`
+returned 4 expected failures, 3 passes, 63 deselected in 2.50 s. Test-only
+commit: `f31446e`. Same Sol worker resumes source-only fixes and final gate.
+
+### P4 GREEN / resumed review, 2026-11-10
+
+After interruption, the orchestrator verified existing user-file hashes and
+HEAD, reviewed the preserved fixes, and confirmed no prior test process remained.
+The final gate was rerun because its completion receipt was lost:
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/task_decoding/cross_condition src/tests/neural_analysis/task_decoding/session_prediction/test_results.py -q`
+returned 243 passes in 31.15 s. PCA coverage metadata, manifest protection and
+integer-scalar exclusion validation are correct; no tests were changed.
+Implementation commit: `0664d85`. P5a RED-only assigned to the same Sol worker.
+No experimental processing or analysis jobs were launched.
