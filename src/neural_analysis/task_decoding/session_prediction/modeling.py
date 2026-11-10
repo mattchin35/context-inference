@@ -108,7 +108,7 @@ def fit_region_prediction_models(
                 continue
             tensor = values[mask[positions]][:, training_bin_mask, :]
             matrix, labels, weights = stack_training_window(tensor, targets[mask, target])
-            beta, intercept, reason = _fit_one_model(matrix, labels, weights, family)
+            beta, intercept, reason = fit_readout(matrix, labels, weights, family)
             if reason:
                 reasons[target, fold] = reason
                 continue
@@ -208,14 +208,22 @@ def build_pc_contributions(
     return output
 
 
-# Validation and estimator helpers. Public computations above retain array axes.
-def _fit_one_model(
+# Shared readout fitting and input validation.
+def fit_readout(
     matrix: np.ndarray, labels: np.ndarray, weights: np.ndarray, family: str,
 ) -> tuple[np.ndarray | None, float, str]:
-    """Fit finite X(M,K), y/weights(M,); return beta(K,), intercept, or failure reason.
+    """Fit an affine readout with an unpenalized intercept and supplied row weights.
 
-    Intercepts are unpenalized; each trial's total row weight is one. Continuous
-    labels use native units; binary labels must be 0/1 with positive class left.
+    matrix is finite float (M,K) in original PC-score units. labels is finite
+    float (M,): dimensionless 0/1 for family="categorical", with generic class 1
+    positive, or native target units for family="numerical". weights is positive
+    finite float (M,) in dimensionless units; arbitrary row weights are used
+    directly without normalization or additional class weighting.
+
+    Return float coefficients (K,) and a scalar float intercept in log-odds per
+    PC-score unit / log-odds for categorical labels, or target units per PC-score
+    unit / target units for numerical labels, plus an empty reason string.
+    Unavailable fits return (None, NaN, nonempty reason). Inputs are unchanged.
     """
     if family == "categorical" and np.unique(labels).size < 2:
         return None, np.nan, "single_class_training"
