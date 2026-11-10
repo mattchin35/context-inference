@@ -1,8 +1,8 @@
 # Cross-Condition Generalization: Implementation Plan and Handoff
 
-Status: revised implementation draft aligned with spec revision 9, 2026-11-10.
-Includes Sol orchestrator / sequential Sol and Luna worker assignments.
-Implementation authorized by the user on 2026-11-10; P1-P5 complete, P6 GREEN in progress.
+Status: P1-P7 implementation and synthetic acceptance complete, 2026-11-10.
+Aligned with spec revision 9; delivered by sequential Sol and Luna workers.
+P8 experimental acceptance remains separately gated on a user-designated session.
 
 Read the [scientific spec](cross_condition_generalization_spec_v1.md),
 [SoftwareDesign.md](SoftwareDesign.md), and repository `AGENTS.md`.
@@ -18,30 +18,30 @@ ledger with exact commands/results, commits and any live process/log IDs.
 
 | Field | Current snapshot |
 | --- | --- |
-| Branch / inspected HEAD | `refactor` / `b5ff99c`; recheck on resumption. |
+| Branch / inspected HEAD | `refactor` / `c9dc469` (feature and usage docs); this final handoff is committed afterward. |
 | Authorization | User approved implementation on 2026-11-10. Synthetic validation is included; experimental preparation remains separately gated. |
 | Existing tracked edits | `src/main.py`, `src/neural_analysis/sync_ephys.py`; preserve both and unrelated untracked files. |
 | Feature documents | Approved spec/plan and P1 evidence tracked in `5e1d49e`; subsequent ledger edits belong to the orchestrator. |
-| Running work / owner | `/root/scientific_worker`: P6 GREEN summary view; Luna worker idle. No experimental jobs. |
+| Running work / owner | None. Workers idle, final regression finished, local browser test server stopped. No experimental jobs. |
 | Implementation team | Orchestrator owns review/commits/handoff. Scientific worker `gpt-6.1-sol`, high; at most one worker active. |
 | Confirmed inputs | Version-3 metadata only; ignore blocks; normalize numeric masks locally; validate context after baseline exclusions and exclude dark state 2. |
 | Reuse / availability | Reuse confidently compatible PCA. Report each unavailable region's reason without crashing, including when both are unavailable. |
 | Confirmed preparation | One call prepares all sixteen transfers, three windows and two weightings at one bin width. Explicit Prepare/Recompute controls in the summary view. |
-| Next action | Review P6 GREEN, then complete root P7 browser/full regression checks and sequential Luna docs. |
+| Next action | Await a separately authorized user-designated experimental session for P8. Preserve existing user edits. |
 
 | Package | Assigned writer / owner | State | RED / test commit | GREEN / review / implementation commit |
 | --- | --- | --- | --- | --- |
-| P0 spec/plan | Sol orchestrator | Reviewed draft | Not applicable | Documentation checks only |
+| P0 spec/plan | Sol orchestrator | Approved and implemented | Not applicable | Documentation checks and final evidence below |
 | P1 public fit helper | Sol worker | Complete | RED: 2 expected missing-public-helper failures; 173 passed. Tests: `4e1b478`. | 175 passed; implementation `c08967a`; numerical body unchanged. |
 | P2 controls/cells/alignment | Sol worker | Complete | 2 expected absent-package collection errors; tests `1150ea6`. | Combined 319 passed; post-refactor P2 89 passed; implementation `aa70f22`. |
 | P3 fitting/scoring | Sol worker | Complete | 2 expected absent-modeling collection errors; tests `fc80d35`. | 178 passed; implementation `3ef2862`; all 192 oracle fits and 1920 summary rows checked. |
-| P4 saved products | Sol worker | Complete | Initial RED `256f0e2`; review-regression RED `f31446e` (4 failed, 3 passed). | Final gate 243 passed; implementation commit recorded below. |
+| P4 saved products | Sol worker | Complete | Initial RED `256f0e2`; review-regression RED `f31446e` (4 failed, 3 passed). | Final gate 243 passed; implementation `0664d85`. |
 | P5a single-session runner | Sol worker | Complete | Expected missing-runner import error; tests `03ffd66`. | Focused 31 passed; implementation `16bf71f`; joint P5 gate 38 passed. |
 | P5b batch wrapper | Luna worker | Complete | Expected missing-module import error; tests `2abbcd0`. | Joint P5 gate 38 passed; implementation `edab3bb`. |
-| P6 summary webapp | Sol worker | GREEN in progress | Expected missing-view import error; tests `b5ff99c`. | Record here |
-| P7a synthetic integration/browser | Sol orchestrator | Not started | Prior package tests | Record here |
-| P7b usage documentation | Luna worker | Not started | Not applicable | Document checks / review |
-| P7c final acceptance/handoff | Sol orchestrator | Not started | Prior package tests | Record here |
+| P6 summary webapp | Sol worker | Complete | Expected missing-view import error; tests `b5ff99c`. | 69 passed; implementation `d8458c3`. |
+| P7a synthetic integration/browser | Sol orchestrator | Complete | Prior package tests | Final full gate 1433 passed; real synthetic and saved-only browser checks complete. |
+| P7b usage documentation | Luna worker | Complete | Not applicable | ASCII/fences/new links/whitespace checked; `c9dc469`. |
+| P7c final acceptance/handoff | Sol orchestrator | Complete | Prior package tests | Final checks/evidence below; no live processes. |
 | P8 experimental acceptance | Sol orchestrator + user | Separately gated | Not applicable | Record only after authorization |
 
 Before resuming, compare HEAD/owned-file diffs and inspect any recorded live
@@ -796,3 +796,88 @@ eligible counts/conflicts, explicit full-bundle preparation/error preservation,
 and cache invalidation by result/manifest stats and scoring version.
 Tests committed as `b5ff99c`; same Sol worker authorized for GREEN in only
 the new view plus minimal app/session-input changes. No live analysis jobs.
+
+### P6 GREEN / P7 acceptance review, 2026-11-10
+
+New AppTests: 13 passed in 15.62 s. Assigned new/old webapp gate: 69 passed
+in 27.49 s. Reviewed cache keys, saved metadata authority, all-direction tables,
+positive labels, region/failure reasons and early metadata/manual routing.
+Implementation `d8458c3`; no test changes. Available Ruff checks passed.
+
+Full planned command (Section 7 P7a, with `--no-sync --no-cache`) returned
+1,432 passed, one failed in 243.87 s. The sole failure was the existing pooled
+config test: its advertised complete example omitted `current_reward` even
+though the pre-feature registry already included it (verified from
+`4e1b478^`). Added that existing target to the example only; all 14
+`pooled/test_config.py` tests now pass in 0.07 s. No scientific defaults changed.
+
+Actual browser on the saved-only copy verified all targets, Full/Before/After,
+both weights, training/test roles and omission summaries (Reward class 0,
+Value class 1). A real missing-input Prepare error kept the previous result
+visible. Browser review requested a localized layout refinement: grouped
+controls, concise saved caption/path in details, and one-decimal display of
+percentage metrics. Existing tests precede this behavior-preserving refactor.
+Sol owns only the new view for this refinement; full suite finished before edits.
+
+Layout refinement `809dab7`: all 13 AppTests passed in 20.39 s; Ruff/whitespace
+clean. No test/data/role/cache changes. Existing complete-target example corrected
+in `c7c8dbb`. Root started the final full regression command (process 52055);
+Luna owns only usage docs while Sol is idle. Browser server is being restarted
+against the full temporary synthetic session for explicit button checks.
+
+### P7 browser completion / authorized resumption, 2026-11-10
+
+Actual browser Prepare reused the existing 500-ms synthetic bundle. Changing
+preparation width to 100 ms left the saved 500-ms display authoritative until
+explicit Recompute created a new full 192-model bundle with 20/10/10 selected
+bins. Both original and new results remain intact, with one PCA archive at each
+width. Inspected the compact table: all four directions and both regions are
+readable, percentages displayed to one decimal while saved values are unchanged.
+Screenshot: `/tmp/cross_condition_synthetic_e8jauuqt/cross_condition_summary.png`.
+The 100-ms run recorded 0.392 s before publication (small synthetic workload).
+
+An additional `src/main.py` edit triggered the repository's stop rule. Root
+interrupted the second final test process 52055 at about 55% (exit 130), stopped
+the local browser server and held Luna docs. The user confirmed this was their
+behavior-mouse selection, with feature code unchanged, and explicitly instructed
+continuation while preserving it. Accepted main.py hash:
+`0b15b80d08d5ab0779959c0145630c4484ee0742ec8f9f0e3df6044641b5c8f6`.
+The sync_ephys.py user edit remains unchanged. Luna resumed docs only; root
+restarted the full final regression command as process 81111. No feature code
+changed during the interruption and no experimental neural analyses were run.
+
+### P7b documentation / P7c final acceptance, 2026-11-10
+
+Luna completed the new cross-condition usage guide and localized links in both
+neural-analysis/task-decoding READMEs. Sol reviewed required input controls,
+actual CLI/UI labels, PCA reuse, saved-only copying, exact weight normalization,
+source/test interpretation and experimental-acceptance limits. Documentation
+commit `c9dc469`. ASCII/fenced-block checks passed for all three guides; all four
+new local links resolve. `git diff --check` passed.
+
+Final complete regression command:
+
+```bash
+uv run --frozen --no-sync --no-cache pytest \
+  src/tests/neural_analysis/task_decoding \
+  src/tests/neural_analysis/test_cross_condition_webapp.py \
+  src/tests/neural_analysis/test_condition_generalization_webapp.py \
+  src/tests/neural_analysis/test_session_prediction_webapp.py \
+  src/tests/neural_analysis/test_session_timeline_webapp.py \
+  src/tests/neural_analysis/test_webapp_package.py -q
+```
+
+Result: **1433 passed, 27 warnings in 220.04 s**, process 81111 exited 0.
+Warnings came from existing synthetic interval boundaries, sparse old CV groups
+and an expected empty-slice calculation; no dependency code was changed.
+Ruff passed for the cross-condition modules/tests, new view/test and changed
+shared target/readout code. No feature changes followed these checks.
+
+All P1-P7 requirements are complete: test-first commits, independent numerical
+oracles, portable bundles, confident regional PCA reuse, both runners, summary
+view, real synthetic execution/reconstruction and actual browser inspection.
+Only one worker was active at a time. No dependencies or cluster resources were
+added. Local test servers and test processes have finished; both workers idle.
+User-owned main.py and sync_ephys.py hashes match the accepted values above.
+Experimental neural preparation, scientific acceptance and experimental batching
+remain P8 and require a user-designated session and separate authorization.
