@@ -20,7 +20,10 @@ from src.neural_analysis.task_decoding.session_prediction.preparation import tra
 from src.neural_analysis.task_decoding.session_prediction.results import file_identity
 from src.neural_analysis.task_decoding.targets import _CATEGORICAL_CLASS_LABELS
 
-from .config import ANALYSIS_VERSION, SCHEMA_VERSION, TARGET_NAMES, TRANSFERS, WEIGHTING_NAMES, WINDOW_NAMES
+from .config import (
+    ANALYSIS_VERSION, CONTEXT_OUTCOME_MODELS, SCHEMA_VERSION, TARGET_NAMES,
+    TRANSFERS, WEIGHTING_NAMES, WINDOW_NAMES,
+)
 from .modeling import RegionTransferResult, _regional_cells, training_trial_weights
 from .preparation import TransferInputs, _named_cells, _transfer_cells
 
@@ -296,10 +299,14 @@ def _scientific_config(inputs: TransferInputs, effective_config: dict) -> dict:
 
 
 def _fixed_scientific_config() -> dict:
-    """Return JSON-safe fixed target/split/window/weight/estimator definitions, with bounds in seconds."""
+    """Return JSON-safe fixed target/split/outcome/window/weight/estimator definitions, with bounds in seconds."""
     return {
         "target_names": list(TARGET_NAMES), "window_names": list(WINDOW_NAMES),
         "weighting_names": list(WEIGHTING_NAMES), "transfers": _transfer_definitions(),
+        "context_outcome_models": [
+            {"split_id": split_id, "training_population": training, "test_populations": list(tests)}
+            for split_id, (training, tests) in CONTEXT_OUTCOME_MODELS.items()
+        ],
         "window_bounds_s": {name: list(training_window_bounds(name)) for name in WINDOW_NAMES},
         "pca_source_window_s": [-2., 2.], "source_test_policy": "all_source_to_complementary_conditions",
         "conflict_policy": "exclude_recorded_correctness_conflicts", "ignore_blocks": True,
@@ -310,7 +317,7 @@ def _fixed_scientific_config() -> dict:
 
 
 def _transfer_definitions() -> list[dict]:
-    """Return JSON-safe fixed S=16 split definitions with cell names ordered by actual class 0/1."""
+    """Return JSON-safe fixed S=18 split definitions with cell names ordered by actual class 0/1."""
     return [{**asdict(item), "source_cells": list(item.source_cells), "test_cells": list(item.test_cells)} for item in TRANSFERS]
 
 
@@ -422,11 +429,11 @@ def _validate_inputs(inputs: TransferInputs, width_ms: int) -> None:
     """Validate saved N-choice behavior, bool masks, current-trial cells and exact second grid; return None."""
     if inputs.target_names != TARGET_NAMES or inputs.transfers != TRANSFERS or inputs.window_names != WINDOW_NAMES or inputs.condition_names != CONDITION_IDENTIFIERS:
         raise ValueError("Prepared registry names/order disagree with this analysis")
-    n, bins = len(inputs.choices), len(inputs.bin_edges_s) - 1
+    n, bins, splits = len(inputs.choices), len(inputs.bin_edges_s) - 1, len(TRANSFERS)
     _shape(inputs.target_values, (n, 4), "target labels", "f")
     for name, shape in (("target_valid", (n, 4)), ("baseline_valid", (n,)), ("conflict_mask", (n,)),
-                        ("condition_masks", (n, len(CONDITION_IDENTIFIERS))), ("source_cells", (n, 16, 2)),
-                        ("test_cells", (n, 16, 2)), ("window_bin_masks", (3, bins))):
+                        ("condition_masks", (n, len(CONDITION_IDENTIFIERS))), ("source_cells", (n, splits, 2)),
+                        ("test_cells", (n, splits, 2)), ("window_bin_masks", (len(WINDOW_NAMES), bins))):
         _shape(getattr(inputs, name), shape, name, "b")
     _shape(inputs.bin_edges_s, (bins + 1,), "bin edges", "f")
     if not np.array_equal(inputs.bin_edges_s, choice_bin_edges(width_ms / 1000)):
@@ -506,12 +513,13 @@ def _validate_region(inputs: TransferInputs, model: RegionTransferResult) -> Non
     _shape(model.pc_ids, (k,), "original PC IDs", "iu")
     if not k or not np.array_equal(model.pc_ids, np.arange(1, k + 1)):
         raise ValueError("Original one-based PC identities must remain complete and ordered")
-    shape = (3, 2, 16)
+    splits = len(TRANSFERS)
+    shape = (len(WINDOW_NAMES), len(WEIGHTING_NAMES), splits)
     for name, axes, kind in (("coefficients", (*shape, k), "f"), ("intercepts", shape, "f"),
                              ("fit_status", shape, "U"), ("fit_reason", shape, "U"),
-                             ("trial_probabilities", (*shape, w), "f"), ("source_mask", (16, w), "b"),
-                             ("test_mask", (16, w), "b"), ("source_trial_weights", (2, 16, w), "f"),
-                             ("eligible_cell_counts", (16, 2, 2), "iu")):
+                             ("trial_probabilities", (*shape, w), "f"), ("source_mask", (splits, w), "b"),
+                             ("test_mask", (splits, w), "b"), ("source_trial_weights", (len(WEIGHTING_NAMES), splits, w), "f"),
+                             ("eligible_cell_counts", (splits, 2, 2), "iu")):
         _shape(getattr(model, name), axes, name, kind)
     source, test = _regional_cells(inputs, model.choice_positions)
     if not np.array_equal(model.source_mask, source.any(axis=2)) or not np.array_equal(model.test_mask, test.any(axis=2)):
@@ -519,13 +527,13 @@ def _validate_region(inputs: TransferInputs, model: RegionTransferResult) -> Non
     counts = np.stack([source.sum(axis=1), test.sum(axis=1)], axis=1)
     if not np.array_equal(model.eligible_cell_counts, counts):
         raise ValueError("Regional eligible cell counts disagree with source/test membership")
-    for split in range(16):
+    for split in range(splits):
         for weighting, scheme in enumerate(WEIGHTING_NAMES):
             expected = training_trial_weights(source[split], scheme)
             if not np.allclose(model.source_trial_weights[weighting, split], expected, rtol=1e-12, atol=1e-12):
                 raise ValueError("Regional training weights disagree with post-coverage cell normalization")
-        for window in range(3):
-            for weighting in range(2):
+        for window in range(len(WINDOW_NAMES)):
+            for weighting in range(len(WEIGHTING_NAMES)):
                 index = window, weighting, split
                 beta, intercept, probability = model.coefficients[index], model.intercepts[index], model.trial_probabilities[index]
                 available = model.fit_status[index] == "ok"

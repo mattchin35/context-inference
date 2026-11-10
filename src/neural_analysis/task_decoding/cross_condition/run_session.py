@@ -22,7 +22,7 @@ from src.neural_analysis.population.session_timeline import choice_bin_edges, pr
 from src.neural_analysis.session_metadata import ResolvedSession, load_session_metadata, resolve_session_metadata
 from src.neural_analysis.task_decoding.config import TaskDecodingConfig, load_task_decoding_config
 
-from .config import WEIGHTING_NAMES, WINDOW_NAMES, load_cross_condition_config
+from .config import CONTEXT_OUTCOME_MODELS, WEIGHTING_NAMES, WINDOW_NAMES, load_cross_condition_config
 from .modeling import RegionTransferResult, fit_region_transfers
 from .preparation import TransferInputs, prepare_transfer_inputs
 from .results import (
@@ -57,7 +57,7 @@ def prepare_cross_condition_generalization(
     metadata_path: Path | str, *, config_path: Path | str | None = None,
     bin_width_ms: int | None = None, rerun: bool = False, dry_run: bool = False,
 ) -> TransferRunReport:
-    """Prepare all sixteen transfers/three windows/two weightings or reuse an exact saved bundle.
+    """Prepare all registered transfers/windows/weightings or reuse an exact saved bundle.
 
     metadata_path names version-3 neural_session.json and its PFC/HPC roles.
     Optional contained config_path/explicit integer bin_width_ms select controls.
@@ -121,8 +121,8 @@ def prepare_cross_condition_generalization(
             timings_s={"source_selection": selection_s, "source_loading": loading_s, "fitting": fitting_s},
             execution_sources=_execution_source_identities(repository),
         )
-        logger.info("Source loading %.3f s; fitting %.3f s; %d fitted models; peak RSS %d bytes",
-                    loading_s, fitting_s, meta["fit_count"], meta["peak_process_rss_bytes"])
+        logger.info("Source loading %.3f s; fitting %.3f s; %d fitted models of %d maximum; peak RSS %d bytes",
+                    loading_s, fitting_s, meta["fit_count"], details["max_model_count"], meta["peak_process_rss_bytes"])
         _snapshot_sources(directory)
         _write_summary(directory, prepared, regions, unavailable, meta)
         saving_started = perf_counter()
@@ -320,8 +320,9 @@ def _load_and_fit_sources(
                 logger.warning("%s source unavailable: %s", role, reason)
             else:
                 regions[role] = model
-                logger.info("%s: %d fitted models; eligible cell counts %s", role,
-                            int((model.fit_status == "ok").sum()), model.eligible_cell_counts.tolist())
+                logger.info("%s: %d/%d fitted models; eligible cell counts %s", role,
+                            int((model.fit_status == "ok").sum()), model.fit_status.size,
+                            model.eligible_cell_counts.tolist())
                 for reason in sorted(set(model.fit_reason.ravel()) - {""}):
                     logger.warning("%s model unavailable: %s", role, reason)
             fitting_s += perf_counter() - fit_started
@@ -372,8 +373,11 @@ def _write_summary(
     loaded or metrics refitted. directory is the new run Path; metadata contains
     session identity, source references and measured preparation timing/RSS.
     """
+    maximum_models = len(inputs.transfers) * len(WINDOW_NAMES) * len(WEIGHTING_NAMES) * len(meta["effective_config"]["probe_roles"])
     lines = ["# Cross-condition generalization", "", f"Session: {meta['session_id']}", "",
-             "Goal: fit all sixteen binary transfers in three supervised windows and two weighting schemes.",
+             f"Goal: fit {len(inputs.transfers)} binary readout definitions in {len(WINDOW_NAMES)} supervised windows and {len(WEIGHTING_NAMES)} weighting schemes.",
+             f"Context outcome transfers use {len(CONTEXT_OUTCOME_MODELS)} training models per window/weighting/region, each evaluated on the other two outcomes.",
+             "The incorrect-trained context_incorrect_to_correct model is reused in both Context views; no duplicate fit is added.",
              "Scripts: run_session.py; run_batch.py. Actual computation sources: source_snapshots/.",
              "Training is in-sample performance; complementary-condition tests remain separate.",
              "The fixed session-wide PCA and unit scaling include test-condition neural activity.",
@@ -386,12 +390,12 @@ def _write_summary(
              "Value (correctness-based) means P(correct), not subjective value or expected reward.",
              "Actual reward means P(rewarded); correct omissions have Reward=0 and Value=1.",
              "Before predicts eventual recorded reward; After is post-choice, not necessarily post-delivery.",
-             f"Bin width: {meta['effective_config']['bin_width_ms']} ms; fitted models: {meta['fit_count']}.",
+             f"Bin width: {meta['effective_config']['bin_width_ms']} ms; fitted models: {meta['fit_count']} of {maximum_models} maximum.",
              f"Excluded dark choices: {inputs.dark_state_count}; conflicting recorded labels: {len(inputs.conflicts)}.",
              f"Conflict original trial IDs: {inputs.conflicts.trial_id.tolist()}.",
              f"Timing seconds: {json.dumps(meta['timings_s'])}; total runtime/save timing: run.log.", ""]
     for role, model in regions.items():
-        lines.append(f"- {role}: {int((model.fit_status == 'ok').sum())}/96 fitted models; "
+        lines.append(f"- {role}: {int((model.fit_status == 'ok').sum())}/{model.fit_status.size} fitted models; "
                      f"source PCA {meta['region_sources'][role]}.")
         for reason in sorted(set(model.fit_reason.ravel()) - {""}):
             lines.append(f"  Unavailable model reason: {reason}.")
