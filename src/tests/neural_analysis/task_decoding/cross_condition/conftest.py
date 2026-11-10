@@ -8,6 +8,7 @@ import pytest
 
 from src.neural_analysis.population.session_timeline import prepare_timeline_choices
 from src.neural_analysis.task_decoding.config import load_task_decoding_config
+from src.neural_analysis.task_decoding.cross_condition.preparation import prepare_transfer_inputs
 
 
 @pytest.fixture
@@ -88,3 +89,21 @@ def transfer_data(transfer_session, transfer_trials):
     """
     _, choices = prepare_timeline_choices(transfer_trials)
     return transfer_trials, choices, np.linspace(-2, 2, 9), transfer_session[1]
+
+
+@pytest.fixture
+def regional_transfer_data(transfer_data):
+    """Return prepared N=16 inputs and independent regional (scores, positions) tuples.
+
+    PFC covers all N choices with float64 scores(W=16,B=8,K=3); HPC omits
+    original trial IDs 0,6,19 and has independent scores(W=13,B=8,K=2).
+    Maps index shared choices, not original rows. Scores retain unequal original
+    PC scales/offsets; labels are dimensionless. All randomness uses seed 109.
+    """
+    inputs = prepare_transfer_inputs(*transfer_data)
+    generator = np.random.default_rng(109)
+    pfc_positions = np.arange(len(inputs.choices))
+    hpc_positions = np.flatnonzero(~inputs.choices.trial_id.isin([0, 6, 19]).to_numpy())
+    pfc_scores = generator.normal(size=(len(pfc_positions), 8, 3)) * [0.2, 3.0, 10.0] + [2.0, -1.0, 6.0]
+    hpc_scores = generator.normal(size=(len(hpc_positions), 8, 2)) * [1.7, 0.3] + [1.0, -2.0]
+    return inputs, {"PFC": (pfc_scores, pfc_positions), "HPC": (hpc_scores, hpc_positions)}
