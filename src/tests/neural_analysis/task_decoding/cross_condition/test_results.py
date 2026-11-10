@@ -16,6 +16,16 @@ from src.neural_analysis.task_decoding.cross_condition import modeling, results,
 from src.neural_analysis.task_decoding.cross_condition.preparation import prepare_transfer_inputs
 
 
+EXPECTED_OUTCOME_MODELS = [
+    {"split_id": "context_correct_rewarded_to_other_outcomes", "training_population": "correct_rewarded",
+     "test_populations": ["omission", "incorrect"]},
+    {"split_id": "context_omission_to_other_outcomes", "training_population": "omission",
+     "test_populations": ["correct_rewarded", "incorrect"]},
+    {"split_id": "context_incorrect_to_correct", "training_population": "incorrect",
+     "test_populations": ["correct_rewarded", "omission"]},
+]
+
+
 @pytest.fixture
 def metadata_args(transfer_data, regional_transfer_data, request):
     """Return builder args(inputs, root Path, regional source Paths, target Paths, config dict).
@@ -71,7 +81,7 @@ def fitted_transfer_bundle(metadata_args, regional_transfer_data):
 
 @pytest.fixture
 def saved_transfer_bundle(metadata_args, fitted_transfer_bundle):
-    """Return (result Path, packet) for a complete named-array schema-1 run inside the temporary session."""
+    """Return (result Path, packet) for a complete named-array schema-2 run inside the temporary session."""
     path = metadata_args[1] / "analysis_runs/cross_condition_generalization_20300102_030405_fixture/results.npz"
     assert results.save_transfer_result(path, fitted_transfer_bundle) == path
     return path, fitted_transfer_bundle
@@ -112,18 +122,30 @@ def test_complete_roundtrip_named_arrays_labels_axes_and_raw_types(saved_transfe
                     "split_target_names", "source_cell_names", "test_cell_names", "role_names", "meta"}
         assert required <= set(archive.files)
         assert not any("scores" in key or "fold" in key for key in archive.files)
+        assert not any("training_trials" in key or "training_class_" in key for key in archive.files)
+        assert archive["source_cells"].shape == archive["test_cells"].shape == (16, 18, 2)
+        assert archive["pfc_coefficients"].shape == (3, 2, 18, 3)
+        assert archive["pfc_eligible_cell_counts"].shape == (18, 2, 2)
         assert isinstance(archive["meta"].item(), dict)
         np.testing.assert_array_equal(archive["role_names"], ["training", "complementary_test"])
         np.testing.assert_array_equal(archive["pfc_trial_probabilities"], packet.regions["PFC"].trial_probabilities)
         np.testing.assert_array_equal(archive["pfc_eligible_cell_counts"], packet.regions["PFC"].eligible_cell_counts)
     manifest = json.loads((path.parent / "config.json").read_text())
     assert manifest["identity"] == loaded.meta["identity"]
+    assert manifest["effective_config"]["context_outcome_models"] == EXPECTED_OUTCOME_MODELS
+    outcome_rows = scoring.context_outcome_rows(scoring.summarize_transfers(loaded.inputs, loaded.regions, {}))
+    assert len(outcome_rows) == 3 * 2 * (12 + 6)
+    assert outcome_rows == scoring.context_outcome_rows(scoring.summarize_transfers(packet.inputs, packet.regions, {}))
+    for row in outcome_rows:
+        if row["split_id"] == "context_correct_rewarded_to_other_outcomes":
+            expected = (3, 1, 2) if row["region"] == "PFC" else (1, 1, 0)
+            assert (row["training_trials"], row["training_class_0_trials"], row["training_class_1_trials"]) == expected
 
 
 def test_metadata_records_science_units_versions_and_separate_runtime_provenance(metadata_args):
     """Identity/provenance documents actual computation, all windows/weightings and deterministic fitting."""
     meta = results.build_transfer_metadata(*metadata_args, session_id="synthetic")
-    assert (meta["analysis_version"], meta["schema_version"]) == ("cross-condition-generalization-v1", 1)
+    assert (meta["analysis_version"], meta["schema_version"]) == ("cross-condition-generalization-v2", 2)
     assert meta["session_id"] == "synthetic" and meta["generator"].endswith("cross_condition.run_session")
     assert meta["randomness_used"] is False and meta["random_seed"] is None
     assert {"numpy", "pandas", "scipy", "scikit-learn"} <= set(meta["library_versions"])
@@ -134,7 +156,8 @@ def test_metadata_records_science_units_versions_and_separate_runtime_provenance
     assert config["target_names"] == list(metadata_args[0].target_names)
     assert config["window_names"] == ["full", "before", "after"]
     assert config["weighting_names"] == ["equal_trial", "equal_cell"]
-    assert len(config["transfers"]) == 16
+    assert len(config["transfers"]) == 18
+    assert config["context_outcome_models"] == EXPECTED_OUTCOME_MODELS
     assert meta["axes"]["trial_probabilities"] == ["supervised_window", "weighting", "split", "regional_choice"]
     assert meta["axes"]["eligible_cell_counts"] == ["split", "role", "actual_class"]
     assert meta["units"]["absolute_time"] == "UTC Unix seconds"
@@ -256,7 +279,7 @@ def test_region_source_map_effective_roles_and_computational_code_change_identit
 
 
 def test_contradictory_width_or_registry_cannot_build_new_metadata(metadata_args):
-    """A 500-ms prepared grid cannot claim 100 ms, nor relabel the fixed sixteen split definitions."""
+    """A 500-ms prepared grid cannot claim 100 ms, nor relabel the fixed eighteen split definitions."""
     inputs, root, source_pcas, target_sources, config = metadata_args
     with pytest.raises(ValueError, match="bin|width|grid"):
         results.build_transfer_metadata(inputs, root, source_pcas, target_sources, {**config, "bin_width_ms": 100}, session_id="synthetic")
@@ -299,6 +322,9 @@ def test_copied_run_loads_and_scores_with_all_original_inputs_removed(saved_tran
     before = destination.read_bytes()
     loaded = results.load_transfer_result(destination)
     assert scoring.summarize_transfers(loaded.inputs, loaded.regions, loaded.unavailable_regions) == expected
+    assert scoring.context_outcome_rows(expected) == scoring.context_outcome_rows(
+        scoring.summarize_transfers(loaded.inputs, loaded.regions, loaded.unavailable_regions),
+    )
     assert not (relocated / "processed").exists() and not (relocated / "task_decoding_config.json").exists()
     option, = results.discover_transfer_runs(relocated)
     assert option.result_path == destination and option.identity == packet.meta["identity"]
@@ -364,6 +390,7 @@ def test_roundtrip_local_failures_and_unavailable_regions(metadata_args, fitted_
     "probability", "missing_probability", "off_role_probability", "coefficient_shape", "available_parameter",
     "status", "fit_reason", "source_map", "schema", "analysis", "positive_label", "cell_name", "missing_array", "grid_width",
     "role_name", "weighting_order", "window_order", "split_ids", "conflict_ids", "baseline_cells", "condition_mask", "axis_names",
+    "legacy_cell_axis", "legacy_model_axis", "new_split_probability", "new_split_class_count",
 ])
 def test_loader_rejects_normal_malformed_saved_products(saved_transfer_bundle, defect):
     """Validate saved axes, label/cell/grid identities, counts/weights and model availability without PCA access."""
@@ -416,7 +443,7 @@ def test_loader_rejects_normal_malformed_saved_products(saved_transfer_bundle, d
     elif defect == "source_map":
         meta["region_sources"]["PFC"] = "missing/results.npz"
     elif defect == "schema":
-        meta["schema_version"] = 2
+        meta["schema_version"] = 1
     elif defect == "analysis":
         meta["analysis_version"] = "condition-session-prediction-v3"
     elif defect == "positive_label":
@@ -441,6 +468,14 @@ def test_loader_rejects_normal_malformed_saved_products(saved_transfer_bundle, d
         arrays["baseline_valid"][0] = False
     elif defect == "condition_mask":
         arrays["condition_masks"][1, 2] = False
+    elif defect == "legacy_cell_axis":
+        arrays["source_cells"] = arrays["source_cells"][:, :16]
+    elif defect == "legacy_model_axis":
+        arrays["pfc_coefficients"] = arrays["pfc_coefficients"][:, :, :16]
+    elif defect == "new_split_probability":
+        arrays["pfc_trial_probabilities"][0, 0, 17, 1] = 1.1
+    elif defect == "new_split_class_count":
+        arrays["hpc_eligible_cell_counts"][16, 0, 1] = 1
     else:
         meta["axes"]["trial_probabilities"] = ["split", "weighting", "supervised_window", "regional_choice"]
     arrays["meta"] = np.asarray(meta, dtype=object)
@@ -518,6 +553,61 @@ def test_existing_results_are_never_overwritten(saved_transfer_bundle):
     with pytest.raises(FileExistsError):
         results.save_transfer_result(path, packet)
     assert path.read_bytes() == original and (path.parent / "config.json").read_bytes() == manifest
+
+
+@pytest.mark.parametrize("defect", ["absent", "source_population", "test_populations", "model_order", "duplicate_model"])
+def test_saved_outcome_mapping_is_fixed_even_if_stored_identity_is_unchanged(saved_transfer_bundle, defect):
+    """Reject a counterfeit fixed mapping from saved files alone, without trusting the unchanged identity string."""
+    path, packet = saved_transfer_bundle
+    with np.load(path, allow_pickle=True) as archive:
+        arrays = {name: archive[name] for name in archive.files}
+    meta = arrays["meta"].item()
+    config = meta["effective_config"]
+    if defect == "absent":
+        config.pop("context_outcome_models")
+    elif defect == "source_population":
+        config["context_outcome_models"][0]["training_population"] = "incorrect"
+    elif defect == "test_populations":
+        config["context_outcome_models"][0]["test_populations"] = ["correct_rewarded", "incorrect"]
+    elif defect == "model_order":
+        config["context_outcome_models"].reverse()
+    else:
+        config["context_outcome_models"][2] = config["context_outcome_models"][0]
+    assert meta["identity"] == packet.meta["identity"]
+    arrays["meta"] = np.asarray(meta, dtype=object)
+    np.savez_compressed(path, **arrays)
+    (path.parent / "config.json").write_text(json.dumps(meta), encoding="ascii")
+    with pytest.raises(ValueError, match="context_outcome_models|scientific|configuration"):
+        results.load_transfer_result(path)
+
+
+def test_contradictory_outcome_mapping_cannot_build_new_metadata(metadata_args):
+    """Caller controls cannot reinterpret the fixed three-model mapping used for fitting identity."""
+    inputs, root, sources, targets, config = metadata_args
+    wrong = [{**item, "test_populations": list(item["test_populations"])} for item in EXPECTED_OUTCOME_MODELS]
+    wrong[0]["training_population"] = "incorrect"
+    with pytest.raises(ValueError, match="context_outcome_models|fixed|configuration"):
+        results.build_transfer_metadata(inputs, root, sources, targets,
+                                        {**config, "context_outcome_models": wrong}, session_id="synthetic")
+
+
+def test_v1_decoder_archive_is_rejected_and_not_discovered_or_migrated(saved_transfer_bundle, metadata_args):
+    """Old cross-condition version/schema files stay byte-identical and unsupported; PCA-v1 remains separate."""
+    path, _ = saved_transfer_bundle
+    with np.load(path, allow_pickle=True) as archive:
+        arrays = {name: archive[name] for name in archive.files}
+    meta = arrays["meta"].item()
+    meta["analysis_version"], meta["schema_version"] = "cross-condition-generalization-v1", 1
+    arrays["meta"] = np.asarray(meta, dtype=object)
+    np.savez_compressed(path, **arrays)
+    manifest = path.parent / "config.json"
+    manifest.write_text(json.dumps(meta), encoding="ascii")
+    original_archive, original_manifest = path.read_bytes(), manifest.read_bytes()
+    with pytest.raises(ValueError, match="version|schema|Unsupported"):
+        results.load_transfer_result(path)
+    assert results.discover_transfer_runs(metadata_args[1]) == ()
+    assert results.find_saved_transfer(metadata_args[1], meta["identity"]) is None
+    assert path.read_bytes() == original_archive and manifest.read_bytes() == original_manifest
 
 
 def test_atomic_npz_publication_and_interrupted_write_are_not_discoverable(metadata_args, fitted_transfer_bundle, monkeypatch):

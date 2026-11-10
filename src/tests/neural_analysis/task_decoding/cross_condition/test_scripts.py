@@ -41,13 +41,15 @@ def runner_context(transfer_data, request):
 
     Behavior has J=20 chronological rows, N=16 ordinary choices and no block
     column. Seed932 generates Poisson counts(W,B,U), then real unwhitened PCA;
-    PFC/HPC have independent W=16/13 and K=3/2. Width is 500/100 ms, choices
+    PFC/HPC have independent W=16/13 and K=3/2. The explicit full_coverage
+    variant covers all16 choices in both regions. Width is 500/100 ms, choices
     use UTC Unix seconds. An intentionally missing event file must not be read.
     """
     trials, _, _, base = transfer_data
     trials = trials.drop(columns="cur_block")
     root, metadata = base.session_root, base.session_metadata_path
-    width = getattr(request, "param", 500)
+    variant = getattr(request, "param", 500)
+    width = 500 if variant == "full_coverage" else variant
     if width != 500:
         (root / "cross_condition_config.json").write_text(json.dumps({"bin_width_ms": width}), encoding="ascii")
     trials.to_csv(base.augmented_trial_path, index=False)
@@ -60,7 +62,8 @@ def runner_context(transfer_data, request):
     regions = {}
     for role, probe, positions, units in (
         ("PFC", "ProbeA", np.arange(16), 3),
-        ("HPC", "ProbeB", np.flatnonzero(~choices.trial_id.isin([0, 6, 19]).to_numpy()), 2),
+        ("HPC", "ProbeB", np.arange(16) if variant == "full_coverage"
+         else np.flatnonzero(~choices.trial_id.isin([0, 6, 19]).to_numpy()), 2),
     ):
         counts = generator.poisson(4, size=(len(positions), 4000 // width, units))
         regions[role] = fit_timeline_activity(counts, tuple(f"{probe}:{index}" for index in range(units)),
@@ -174,7 +177,7 @@ def test_dry_run_reports_global_cells_and_pending_verification_without_neural_wo
     report = run_session.prepare_cross_condition_generalization(context.metadata, dry_run=True)
     assert report.status == "dry-run" and report.result_path is None and report.elapsed_s >= 0
     details = report.details
-    assert details["choice_count"] == 16 and details["max_model_count"] == 192
+    assert details["choice_count"] == 16 and details["max_model_count"] == 216
     assert details["window_bin_counts"] == {"full": 4, "before": 2, "after": 2}
     assert details["dark_state_count"] == 1 and details["conflict_count"] == 2
     assert details["conflict_trial_ids"] == [13, 14]
@@ -188,8 +191,8 @@ def test_dry_run_reports_global_cells_and_pending_verification_without_neural_wo
     assert after == before and not services.preparation_calls and not services.load_calls
 
 
-def test_metadata_only_call_prepares_all_192_models_and_loads_shared_source_once(runner_context, science_services, monkeypatch):
-    """One explicit metadata call fits all H/G/S per region, without event reads or PCA recomputation."""
+def test_metadata_only_call_prepares_210_of_216_models_and_loads_shared_source_once(runner_context, science_services, monkeypatch):
+    """HPC lacks both Left rewarded sources: fit108 PFC/102 HPC models, without events/PCA recomputation."""
     calls = []
     original = modeling.fit_readout
 
@@ -202,15 +205,47 @@ def test_metadata_only_call_prepares_all_192_models_and_loads_shared_source_once
     report = run_session.prepare_cross_condition_generalization(runner_context.metadata)
     packet = results.load_transfer_result(report.result_path)
     assert report.status == "prepared" and report.elapsed_s >= 0 and report.identity == packet.meta["identity"]
-    assert len(calls) == packet.meta["fit_count"] == 192
+    assert len(calls) == packet.meta["fit_count"] == 210
+    assert report.details["max_model_count"] == 216
     assert set(packet.regions) == {"PFC", "HPC"} and packet.unavailable_regions == {}
-    assert all(np.all(model.fit_status == "ok") for model in packet.regions.values())
+    assert np.count_nonzero(packet.regions["PFC"].fit_status == "ok") == 108
+    assert np.count_nonzero(packet.regions["HPC"].fit_status == "ok") == 102
+    np.testing.assert_array_equal(packet.regions["HPC"].eligible_cell_counts[16, 0], [1, 0])
+    assert np.all(packet.regions["HPC"].fit_reason[:, :, 16] == "single_class_training")
     assert Counter(science_services.load_calls) == {runner_context.paths["shared"]: 1}
     assert not science_services.compatible_calls and not science_services.preparation_calls
     assert packet.meta["region_sources"]["PFC"] == packet.meta["region_sources"]["HPC"]
     assert packet.meta["runtime_s"] >= 0 and packet.meta["peak_process_rss_bytes"] > 0
     assert re.match(r"cross_condition_generalization_\d{8}_\d{6}", report.result_path.parent.name)
     assert runner_context.root in report.result_path.parents
+
+
+@pytest.mark.parametrize("runner_context", ["full_coverage"], indirect=True)
+def test_full_class_coverage_prepares_216_models_without_recomputing_existing_v1_pca(
+    runner_context, science_services, monkeypatch,
+):
+    """Both regions retain both classes for all18 sources: fit108 each, reusing unchanged PCA-v1 bytes."""
+    calls = []
+    original = modeling.fit_readout
+    source = runner_context.paths["shared"]
+    source_bytes = source.read_bytes()
+    with np.load(source, allow_pickle=True) as archive:
+        assert archive["meta"].item()["analysis_version"] == "session-timeline-pca-v1"
+        assert archive["meta"].item()["schema_version"] == 1
+
+    def count_readout(matrix, labels, weights, family):
+        """Count real categorical fits while preserving the installed estimator and row weights."""
+        calls.append(1)
+        return original(matrix, labels, weights, family)
+
+    monkeypatch.setattr(modeling, "fit_readout", count_readout)
+    report = run_session.prepare_cross_condition_generalization(runner_context.metadata)
+    packet = results.load_transfer_result(report.result_path)
+    assert len(calls) == packet.meta["fit_count"] == report.details["max_model_count"] == 216
+    assert all(model.fit_status.shape == (3, 2, 18) and np.all(model.fit_status == "ok")
+               for model in packet.regions.values())
+    assert Counter(science_services.load_calls) == {source: 1}
+    assert not science_services.preparation_calls and source.read_bytes() == source_bytes
 
 
 def test_exact_saved_bundle_reuse_precedes_all_score_loading_and_fitting(runner_context, science_services, monkeypatch):
@@ -419,4 +454,5 @@ def test_run_documents_copy_real_main_batch_and_all_scientific_sources(runner_co
     assert "Goal:" in summary and packet.meta["session_id"] in summary
     assert "run_session.py" in summary and "run_batch.py" in summary
     assert "in-sample" in summary.lower() and "complementary" in summary.lower() and "session-wide" in summary.lower()
-    assert all(token in log.lower() for token in ("source", "fit", "save", "192"))
+    assert all(token in log.lower() for token in ("source", "fit", "save", "210", "216"))
+    assert "PFC: 108/108" in summary and "HPC: 102/108" in summary
