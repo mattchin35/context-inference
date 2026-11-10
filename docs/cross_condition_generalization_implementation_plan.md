@@ -2,7 +2,7 @@
 
 Status: revised implementation draft aligned with spec revision 9, 2026-11-10.
 Includes Sol orchestrator / sequential Sol and Luna worker assignments.
-Implementation authorized by the user on 2026-11-10; P1-P5 complete, P6 RED in progress.
+Implementation authorized by the user on 2026-11-10; P1-P5 complete, P6 GREEN in progress.
 
 Read the [scientific spec](cross_condition_generalization_spec_v1.md),
 [SoftwareDesign.md](SoftwareDesign.md), and repository `AGENTS.md`.
@@ -18,16 +18,16 @@ ledger with exact commands/results, commits and any live process/log IDs.
 
 | Field | Current snapshot |
 | --- | --- |
-| Branch / inspected HEAD | `refactor` / `edab3bb`; recheck on resumption. |
+| Branch / inspected HEAD | `refactor` / `b5ff99c`; recheck on resumption. |
 | Authorization | User approved implementation on 2026-11-10. Synthetic validation is included; experimental preparation remains separately gated. |
 | Existing tracked edits | `src/main.py`, `src/neural_analysis/sync_ephys.py`; preserve both and unrelated untracked files. |
 | Feature documents | Approved spec/plan and P1 evidence tracked in `5e1d49e`; subsequent ledger edits belong to the orchestrator. |
-| Running work / owner | `/root/scientific_worker`: P6 RED summary-view tests; Luna worker idle. No experimental jobs. |
+| Running work / owner | `/root/scientific_worker`: P6 GREEN summary view; Luna worker idle. No experimental jobs. |
 | Implementation team | Orchestrator owns review/commits/handoff. Scientific worker `gpt-6.1-sol`, high; at most one worker active. |
 | Confirmed inputs | Version-3 metadata only; ignore blocks; normalize numeric masks locally; validate context after baseline exclusions and exclude dark state 2. |
 | Reuse / availability | Reuse confidently compatible PCA. Report each unavailable region's reason without crashing, including when both are unavailable. |
 | Confirmed preparation | One call prepares all sixteen transfers, three windows and two weightings at one bin width. Explicit Prepare/Recompute controls in the summary view. |
-| Next action | Review P6 RED, commit tests, then authorize worker GREEN. |
+| Next action | Review P6 GREEN, then complete root P7 browser/full regression checks and sequential Luna docs. |
 
 | Package | Assigned writer / owner | State | RED / test commit | GREEN / review / implementation commit |
 | --- | --- | --- | --- | --- |
@@ -38,7 +38,7 @@ ledger with exact commands/results, commits and any live process/log IDs.
 | P4 saved products | Sol worker | Complete | Initial RED `256f0e2`; review-regression RED `f31446e` (4 failed, 3 passed). | Final gate 243 passed; implementation commit recorded below. |
 | P5a single-session runner | Sol worker | Complete | Expected missing-runner import error; tests `03ffd66`. | Focused 31 passed; implementation `16bf71f`; joint P5 gate 38 passed. |
 | P5b batch wrapper | Luna worker | Complete | Expected missing-module import error; tests `2abbcd0`. | Joint P5 gate 38 passed; implementation `edab3bb`. |
-| P6 summary webapp | Sol worker | RED in progress | Record here | Record here |
+| P6 summary webapp | Sol worker | GREEN in progress | Expected missing-view import error; tests `b5ff99c`. | Record here |
 | P7a synthetic integration/browser | Sol orchestrator | Not started | Prior package tests | Record here |
 | P7b usage documentation | Luna worker | Not started | Not applicable | Document checks / review |
 | P7c final acceptance/handoff | Sol orchestrator | Not started | Prior package tests | Record here |
@@ -766,3 +766,33 @@ Reviewed the minimal wrapper: shared list/worker APIs, session-only scheduling,
 input-order reports, sequential dry-run, argument forwarding and CLI errors.
 Implementation `edab3bb`; tests unchanged and whitespace clean. Luna idle;
 Sol worker resumed P6 RED only. No experimental or cluster work.
+
+### P7a early synthetic computation evidence, 2026-11-10
+
+The real temporary two-probe session completed all 192 fits in 0.214 s,
+recording peak process RSS 316,366,848 bytes and 1,920 summary rows. A second
+call reused the identical result in 0.070 s. Root independently reconstructed
+all 192 matched-window probability means directly from the source PCA scores,
+saved coefficients/intercepts and selected bins: maximum absolute error 0.0.
+The result was copied with metadata alone to
+`/tmp/cross_condition_synthetic_e8jauuqt/saved_only/neural_session.json`;
+loading and all summaries succeed without raw/base/PCA files. Actual webapp
+inspection remains pending P6. These are measured small synthetic workloads,
+not experimental-session performance guarantees.
+
+Root also exercised the batch CLI through a real one-process executor using
+the temporary synthetic session list; it returned the existing saved result.
+Available Ruff checks on cross-condition modules/tests and changed shared
+targets/readout code passed.
+
+### P6 RED / test commit, 2026-11-10
+
+`uv run --frozen --no-sync --no-cache pytest src/tests/neural_analysis/test_cross_condition_webapp.py -q`
+returned one expected missing-view import error (worker 11.55 s; orchestrator
+1.78 s). Reviewed actual app/manual dispatch, real Streamlit selectors,
+saved-only copies with computation forbidden, all directions and regions,
+saved weight/role/outcome selection, zero/single-class and unavailable metrics,
+eligible counts/conflicts, explicit full-bundle preparation/error preservation,
+and cache invalidation by result/manifest stats and scoring version.
+Tests committed as `b5ff99c`; same Sol worker authorized for GREEN in only
+the new view plus minimal app/session-input changes. No live analysis jobs.
