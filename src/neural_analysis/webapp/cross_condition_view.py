@@ -7,12 +7,16 @@ import streamlit as st
 
 from src.neural_analysis.session_metadata import ResolvedSession
 from src.neural_analysis.task_decoding.config import SUPPORTED_BIN_WIDTH_MS
-from src.neural_analysis.task_decoding.cross_condition.config import WEIGHTING_NAMES
+from src.neural_analysis.task_decoding.cross_condition.config import (
+    CONTEXT_CONDITION_SPLIT_IDS, CONTEXT_OUTCOME_MODELS, TRANSFERS, WEIGHTING_NAMES, WINDOW_NAMES,
+)
 from src.neural_analysis.task_decoding.cross_condition.results import (
     CrossConditionResult, discover_transfer_runs, load_transfer_result,
 )
 from src.neural_analysis.task_decoding.cross_condition.run_session import prepare_cross_condition_generalization
-from src.neural_analysis.task_decoding.cross_condition.scoring import SCORING_VERSION, summarize_transfers
+from src.neural_analysis.task_decoding.cross_condition.scoring import (
+    SCORING_VERSION, context_outcome_rows, summarize_transfers,
+)
 from src.neural_analysis.task_decoding.session_prediction.config import training_window_bounds
 
 
@@ -29,6 +33,8 @@ POPULATION_LABELS = {"all": "All eligible", "correct": "Correct combined", "corr
                      "actual_unrewarded": "Actual unrewarded combined", "incorrect_unrewarded": "Incorrect-unrewarded"}
 ROLE_LABELS = {"complementary_test": "Complementary test", "training": "Training (in-sample)"}
 WEIGHTING_LABELS = {"equal_trial": "Equal trial", "equal_cell": "Equal cell"}
+CONTEXT_ANALYSIS_LABELS = {"condition_transfers": "Condition transfers", "outcome_transfers": "Outcome transfers"}
+REGION_NAMES = ("PFC", "HPC")
 
 
 def render_cross_condition_view(st_module: object, session: ResolvedSession) -> None:
@@ -45,8 +51,10 @@ def render_cross_condition_view(st_module: object, session: ResolvedSession) -> 
     scope = f"cross_condition:{session.metadata_path}"
     selection_key = scope + ":run"
     options = discover_transfer_runs(session.session_root)
-    st_module.caption("Prepare creates the complete bundle: sixteen directions, three supervised windows and both weightings, "
-                      "up to 192 models across PFC/HPC. Compatible saved PCA is reused; any missing PCA may be prepared.")
+    maximum_models = len(TRANSFERS) * len(WINDOW_NAMES) * len(WEIGHTING_NAMES) * len(REGION_NAMES)
+    st_module.caption(f"Prepare creates the complete bundle: {len(TRANSFERS)} readout definitions, "
+                      f"{len(WINDOW_NAMES)} supervised windows and both weightings, up to {maximum_models} models across PFC/HPC. "
+                      "Compatible saved PCA is reused; any missing PCA may be prepared.")
     preparation_columns = st_module.columns(3, vertical_alignment="bottom")
     with preparation_columns[0]:
         width = st_module.selectbox("Preparation bin width (ms)", options=SUPPORTED_BIN_WIDTH_MS, key=scope + ":prepare_width")
@@ -89,24 +97,29 @@ def render_cross_condition_view(st_module: object, session: ResolvedSession) -> 
         window = st_module.selectbox("Supervised window", options=packet.inputs.window_names, format_func=_window_label, key=scope + ":window")
     with selection_columns[2]:
         weighting = st_module.selectbox("Weighting", options=WEIGHTING_NAMES, format_func=WEIGHTING_LABELS.get, key=scope + ":weighting")
-    populations = ("all", "actual_rewarded", "actual_unrewarded", "omission", "incorrect_unrewarded") if target == "current_reward" else (
-        "all", "correct", "correct_rewarded", "omission", "incorrect")
-    outcome_key = scope + ":outcome"
-    if st_module.session_state.get(outcome_key) not in populations:
-        st_module.session_state[outcome_key] = "all"
-    evaluation_columns = st_module.columns(2)
-    with evaluation_columns[0]:
-        role = st_module.selectbox("Evaluation role", options=tuple(ROLE_LABELS), format_func=ROLE_LABELS.get, key=scope + ":role")
-    with evaluation_columns[1]:
-        population = st_module.selectbox("Outcome", options=populations, format_func=POPULATION_LABELS.get, key=outcome_key)
+    analysis, role, population = _evaluation_controls(st_module, scope, target)
     _render_captions(st_module, packet, target, window)
-    definitions = [item for item in packet.inputs.transfers if item.target_name == target]
-    directions = {item.split_id: label for item, label in zip(definitions, DIRECTION_LABELS[target], strict=True)}
-    selected_rows = [row for row in report if row["target_name"] == target and row["window"] == window
-                     and row["weighting"] == weighting and row["role"] == role and row["population"] == population]
-    st_module.dataframe(_performance_table(selected_rows, directions), hide_index=True,
-                        column_config={name: st_module.column_config.NumberColumn(format="%.1f")
-                                       for name in ("Accuracy (%)", "Balanced accuracy (%)")})
+    column_config = {name: st_module.column_config.NumberColumn(format="%.1f")
+                     for name in ("Accuracy (%)", "Balanced accuracy (%)")}
+    if analysis == "outcome_transfers":
+        directions = {split_id: f"Train {POPULATION_LABELS[training]}"
+                      for split_id, (training, _) in CONTEXT_OUTCOME_MODELS.items()}
+        selected_rows = [row for row in context_outcome_rows(report) if row["window"] == window
+                         and row["weighting"] == weighting and row["role"] == role]
+        table = _context_outcome_table(selected_rows)
+        st_module.caption("Training counts are unique eligible source trials after regional coverage. "
+                          "Training Left/Right refer to recorded context: Left is class 1, Right is class 0. "
+                          "Eligible/scored and Left/Right trial counts refer to the selected evaluation role.")
+        for name in ("Training trials", "Training Left", "Training Right", "Eligible trials", "Scored trials", "Right trials", "Left trials"):
+            column_config[name] = st_module.column_config.NumberColumn(format="%d")
+    else:
+        definitions = [item for item in packet.inputs.transfers if item.target_name == target
+                       and (target != "current_state" or item.split_id in CONTEXT_CONDITION_SPLIT_IDS)]
+        directions = {item.split_id: label for item, label in zip(definitions, DIRECTION_LABELS[target], strict=True)}
+        selected_rows = [row for row in report if row["split_id"] in directions and row["window"] == window
+                         and row["weighting"] == weighting and row["role"] == role and row["population"] == population]
+        table = _performance_table(selected_rows, directions)
+    st_module.dataframe(table, hide_index=True, column_config=column_config)
     with st_module.expander("Fit details"):
         st_module.caption(f"Saved result: {path}. Preparation controls do not reinterpret saved settings.")
         st_module.caption("Source/test counts describe eligible data before a fit failure; scored counts require available finite trial means. "
@@ -118,6 +131,36 @@ def render_cross_condition_view(st_module: object, session: ResolvedSession) -> 
             st_module.dataframe(packet.inputs.conflicts, hide_index=True)
     for region, reason in packet.unavailable_regions.items():
         st_module.warning(f"{region} unavailable: {reason}")
+
+
+def _evaluation_controls(st_module: object, scope: str, target: str) -> tuple[str, str, str | None]:
+    """Return analysis/role/population identifiers from small UI controls; no arrays or sources are read.
+
+    st_module is the renderer; scope is the session widget-key string and target
+    is a saved binary target identifier. Context alone offers condition/outcome
+    analysis; other targets retain condition transfers. Return the selected
+    analysis and evaluation role, with population None in outcome mode because
+    all complementary outcome pairs or source diagnostics are displayed together.
+    """
+    columns = st_module.columns(3 if target == "current_state" else 2)
+    analysis = "condition_transfers"
+    if target == "current_state":
+        with columns[0]:
+            analysis = st_module.selectbox("Context analysis", options=tuple(CONTEXT_ANALYSIS_LABELS),
+                                          format_func=CONTEXT_ANALYSIS_LABELS.get, key=scope + ":context_analysis")
+        columns = columns[1:]
+    with columns[0]:
+        role = st_module.selectbox("Evaluation role", options=tuple(ROLE_LABELS), format_func=ROLE_LABELS.get, key=scope + ":role")
+    population = None
+    if analysis == "condition_transfers":
+        populations = ("all", "actual_rewarded", "actual_unrewarded", "omission", "incorrect_unrewarded") if target == "current_reward" else (
+            "all", "correct", "correct_rewarded", "omission", "incorrect")
+        outcome_key = scope + ":outcome"
+        if st_module.session_state.get(outcome_key) not in populations:
+            st_module.session_state[outcome_key] = "all"
+        with columns[1]:
+            population = st_module.selectbox("Outcome", options=populations, format_func=POPULATION_LABELS.get, key=outcome_key)
+    return analysis, role, population
 
 
 def _product_stats(path: Path) -> tuple[int, int, int, int]:
@@ -201,23 +244,46 @@ def _performance_table(rows: list[dict], directions: dict[str, str]) -> pd.DataF
     } for row in rows])
 
 
+def _context_outcome_table(rows: list[dict]) -> pd.DataFrame:
+    """Return separate Context outcome/region rows with visible source and selected-role trial counts.
+
+    rows are context_outcome_rows' selected summary dictionaries; source counts
+    are unweighted integer unique trials, class 0 Right/class 1 Left. Preserve
+    unknown None counts, zero metrics, reasons and individual outcome/model rows.
+    Accuracy fractions become percentages; training diagnostics have no test
+    population. No scoring, source reads or aggregation occurs.
+    """
+    return pd.DataFrame([{
+        "Training outcome": POPULATION_LABELS[row["training_population"]],
+        "Test outcome": POPULATION_LABELS.get(row["test_population"]), "Region": row["region"],
+        "Training trials": row["training_trials"], "Training Left": row["training_class_1_trials"],
+        "Training Right": row["training_class_0_trials"],
+        "Eligible trials": row["eligible_trials"], "Scored trials": row["n_trials"],
+        "Right trials": row["class_0_trials"], "Left trials": row["class_1_trials"],
+        "Accuracy (%)": None if row["accuracy"] is None else 100 * row["accuracy"],
+        "Balanced accuracy (%)": None if row["balanced_accuracy"] is None else 100 * row["balanced_accuracy"],
+        "Reason": row["reason"],
+    } for row in rows])
+
+
 def _fit_table(
     packet: CrossConditionResult, target: str, window: str, weighting: str, directions: dict[str, str],
 ) -> pd.DataFrame:
-    """Return all four directed regional fit records and eligible actual-class counts, independent of outcome selection.
+    """Return visible directed regional fit records and eligible actual-class counts, independent of outcome selection.
 
     packet has independent regional W/K and H/G/S parameter axes. Select one
     target/window/weighting; count axes are source/test, actual class 0/1.
     Unknown regional coverage stays None rather than fabricated zero counts.
-    Exact split IDs and cell names support auditing the visible descriptions.
+    directions selects exact split IDs and labels for the current condition or
+    Context outcome view; cell names support auditing the visible descriptions.
     """
     window_index = packet.inputs.window_names.index(window)
     weighting_index = WEIGHTING_NAMES.index(weighting)
     rows = []
     for split, definition in enumerate(packet.inputs.transfers):
-        if definition.target_name != target:
+        if definition.target_name != target or definition.split_id not in directions:
             continue
-        for region in ("PFC", "HPC"):
+        for region in REGION_NAMES:
             model = packet.regions.get(region)
             if model is None:
                 status, reason = "unavailable", packet.unavailable_regions[region]
