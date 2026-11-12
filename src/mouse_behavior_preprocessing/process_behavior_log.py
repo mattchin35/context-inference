@@ -274,7 +274,30 @@ def calculate_water_delivery(session_df: pd.DataFrame, session_info: dict) -> pd
 
 
 def process_file(save_directory: Path, file_path: str, filter_events: Optional[list[str]] = []) -> pd.DataFrame:
-    df = pd.read_csv(file_path, sep=';', header=None, on_bad_lines='skip', usecols=[1, 3, 4])
+    """Read raw log events after session start and save an events CSV.
+
+    Parameters
+    ----------
+    save_directory : Path
+        Output directory for ``<log_stem>_events.csv``; created if absent.
+    file_path : str or Path
+        Semicolon-delimited log path. Zero-based fields 1, 3, and 4 contain
+        epoch time in seconds, event name, and note, respectively.
+    filter_events : list[str] or None
+        Retained for compatibility; currently unused.
+
+    Returns
+    -------
+    pd.DataFrame
+        Shape (n_events, 3), with columns Time, Event, and Note in log order.
+        Time retains epoch seconds; only times after exit_standby are kept.
+        Empty notes remain missing values. The same table is saved as CSV.
+    """
+    # Infer types together: pandas 3.0.1 can crash merging mixed-type usecols chunks.
+    df = pd.read_csv(
+        file_path, sep=';', header=None, on_bad_lines='skip',
+        usecols=[1, 3, 4], low_memory=False,
+    )
     df.columns = ['Time', 'Event', 'Note']
 
     # Subtract 'exit_standby' time value from every element
