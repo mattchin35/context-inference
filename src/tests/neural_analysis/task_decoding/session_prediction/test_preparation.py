@@ -113,7 +113,7 @@ def test_opt_in_target_validation_preserves_strict_defaults(prediction_inputs):
 
 
 def test_mixed_membership_targets_and_shared_folds(prediction_inputs):
-    """Mixed N-by-3 targets retain canonical outcome unions and full-table folds."""
+    """Mixed N-by-8 targets retain canonical outcome unions and full-table folds."""
     base, trials, timeline = prediction_inputs
     trials.loc[105, "correct"] = 0
     trials.loc[105, "state_int"] = 1 - trials.loc[105, "action"]
@@ -127,10 +127,16 @@ def test_mixed_membership_targets_and_shared_folds(prediction_inputs):
     masks = build_condition_masks(trials, CONDITION_IDENTIFIERS)
     expected = (masks["correct_rewarded"] | masks["omission"] | masks["incorrect"])[positions]
     assert mixed.analysis_mode == "mixed_outcome_decoding"
-    assert mixed.target_names == ("current_state", "current_action", "current_reward")
-    assert mixed.target_families == ("categorical", "categorical", "categorical")
+    assert mixed.target_names == ("current_state", "current_action", "current_reward",
+                                         "qlearning_relative_value", "forgetting_q_relative_value",
+                                         "hmm_signed_belief", "hmm_decay_signed_belief", "relative_doubt")
+    assert mixed.target_families == ("categorical",) * 3 + ("numerical",) * 5
     np.testing.assert_array_equal(mixed.target_values[:, :2], reference.target_values[:, :2])
     np.testing.assert_array_equal(mixed.target_valid[:, :2], reference.target_valid[:, :2])
+    np.testing.assert_array_equal(mixed.target_values[:, 3:], reference.target_values[:, 2:])
+    np.testing.assert_array_equal(mixed.target_valid[:, 3:], reference.target_valid[:, 2:])
+    for name in reference.target_names[2:]:
+        assert mixed.target_metadata[name] == reference.target_metadata[name]
     np.testing.assert_array_equal(mixed.training_condition_mask, expected)
     np.testing.assert_array_equal(mixed.correct_rewarded, reference.correct_rewarded)
     np.testing.assert_array_equal(mixed.fold_ids, reference.fold_ids)
@@ -146,17 +152,16 @@ def test_mixed_membership_targets_and_shared_folds(prediction_inputs):
                                       reference.timeline.regions[role].choice_positions)
 
 
-def test_mixed_does_not_require_continuous_source_columns(prediction_inputs):
-    """Select three targets before shared validation; strict generalization stays intact."""
+def test_mixed_requires_continuous_source_columns(prediction_inputs):
+    """Both modes require the five source columns, rather than inventing labels."""
     base, trials, timeline = prediction_inputs
     trials = trials.drop(columns=[
         "Qlearning_rel_value", "FQlearning_rel_value", "HMM_rel_value_logodds",
         "HMM_rel_value_logodds_decay", "relative_doubt_index",
     ])
-    mixed = prepare_prediction_inputs(trials, timeline, base, analysis_mode="mixed_outcome_decoding")
-    assert mixed.target_values.shape == (len(timeline.choices), 3)
-    with pytest.raises(ValueError, match="missing"):
-        prepare_prediction_inputs(trials, timeline, base)
+    for mode in ("mixed_outcome_decoding", "correct_rewarded_generalization"):
+        with pytest.raises(ValueError, match="missing"):
+            prepare_prediction_inputs(trials, timeline, base, analysis_mode=mode)
 
 
 @pytest.mark.parametrize("width", [500, 100, 50, 20])

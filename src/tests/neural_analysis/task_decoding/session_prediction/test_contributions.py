@@ -60,15 +60,17 @@ def test_color_limit_is_global_and_missing_fold_never_borrows_weights(prediction
 
 
 @pytest.mark.parametrize("role", ["PFC", "HPC"])
-def test_mixed_contributions_reconstruct_own_classifiers(mixed_inputs, role):
-    """All mixed target axes reconstruct logits and retain their own global PC ranks."""
+def test_mixed_contributions_reconstruct_own_readouts(mixed_inputs, role):
+    """Mixed axes reconstruct probabilities/native values with original global PC ranks."""
     source = mixed_inputs.timeline.regions[role]
     model = fit_region(mixed_inputs, role, use_training_membership=True)
     folds = mixed_inputs.fold_ids[source.choice_positions]
-    for target in range(3):
+    assert len(mixed_inputs.target_names) == 8
+    for target, family in enumerate(mixed_inputs.target_families):
         contributions = modeling.build_pc_contributions(source.scores, folds, model, target, (3, 1, 2))
         linear = contributions.sum(axis=2) + model.intercepts[target, folds, None]
-        np.testing.assert_allclose(1 / (1 + np.exp(-linear)), model.predictions[:, :, target])
+        expected = 1 / (1 + np.exp(-linear)) if family == "categorical" else linear
+        np.testing.assert_allclose(expected, model.predictions[:, :, target])
         assert model.contribution_color_limit[target] == np.max(abs(contributions))
         mean = model.contribution_strength[target].mean(axis=0)
         np.testing.assert_array_equal(model.contribution_pc_order[target],

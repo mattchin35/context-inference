@@ -80,7 +80,7 @@ def test_dry_run_writes_and_fits_nothing(runnable_session, monkeypatch):
     assert not (root / "analysis_runs").exists()
 
 
-@pytest.mark.parametrize("mode, target_count", [("correct_rewarded_generalization", 7), ("mixed_outcome_decoding", 3)])
+@pytest.mark.parametrize("mode, target_count", [("correct_rewarded_generalization", 7), ("mixed_outcome_decoding", 8)])
 @pytest.mark.parametrize("window, expected_training_bins", [("full", 4), ("before", 2), ("after", 2)])
 def test_prepare_reuse_rerun_and_source_snapshots(
     runnable_session, monkeypatch, mode, target_count, window, expected_training_bins,
@@ -109,7 +109,7 @@ def test_prepare_reuse_rerun_and_source_snapshots(
     summary_text = (directory / "summary.md").read_text()
     assert f"({window})" in summary_text
     assert mode in (directory / "run.log").read_text()
-    if target_count == 3:
+    if mode == "mixed_outcome_decoding":
         assert "relative to average loss" in (directory / "summary.md").read_text()
         assert "class 1 is rewarded" in summary_text
         assert "eventual recorded reward" in summary_text
@@ -173,7 +173,7 @@ def test_cli_and_batch_dry_run_use_shared_runner(runnable_session, capsys):
 
 
 @pytest.mark.parametrize("width", [500, 100])
-def test_mixed_controls_train_three_targets_and_reuse_exact_pca(runnable_session, width):
+def test_mixed_controls_train_eight_targets_and_reuse_exact_pca(runnable_session, width):
     """A separate mixed product reuses source PCA and never replaces the original run."""
     roles = {"PFC": "A", "HPC": "B"}
     reference = run_session.prepare_session_predictions(runnable_session, probe_roles=roles, bin_width_ms=width)
@@ -183,12 +183,14 @@ def test_mixed_controls_train_three_targets_and_reuse_exact_pca(runnable_session
     controls.write_text(json.dumps({"analysis_mode": "mixed_outcome_decoding", "bin_width_ms": width}))
     mixed = run_session.prepare_session_predictions(runnable_session, probe_roles=roles)
     loaded = load_prediction_result(mixed.result_path)
-    assert loaded.inputs.target_names == ("current_state", "current_action", "current_reward")
+    assert loaded.inputs.target_names == ("current_state", "current_action", "current_reward",
+                                         "qlearning_relative_value", "forgetting_q_relative_value",
+                                         "hmm_signed_belief", "hmm_decay_signed_belief", "relative_doubt")
     assert loaded.meta["source_pca"] == source
     assert mixed.identity != reference.identity
     assert reference.result_path.read_bytes() == original_bytes
-    assert loaded.meta["fit_count"] <= 30
-    assert mixed.details["max_model_count"] == 30
+    assert loaded.meta["fit_count"] <= 80
+    assert mixed.details["max_model_count"] == 80
     explicit = run_session.prepare_session_predictions(
         runnable_session, probe_roles=roles, analysis_mode="correct_rewarded_generalization",
     )
@@ -202,7 +204,7 @@ def test_mixed_cli_batch_forwarding_and_dry_run(runnable_session, capsys):
         "--analysis-mode", "mixed_outcome_decoding", "--dry-run",
     ]) == 0
     output = capsys.readouterr().out
-    assert '"max_model_count": 15' in output
+    assert '"max_model_count": 40' in output
     assert "mixed_outcome_decoding" in output
     reports = run_batch.run_prediction_batch(
         (runnable_session,), probe_roles={"PFC": "A"},

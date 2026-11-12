@@ -230,7 +230,7 @@ def mixed_inputs(prediction_inputs):
     generator = np.random.default_rng(318)
     regions = {}
     for role, source in timeline.regions.items():
-        labels = prepared.target_values[source.choice_positions]
+        labels = prepared.target_values[source.choice_positions, :3]
         scores = generator.normal(0, 0.1, source.scores.shape)
         scores += 3 * (2 * labels[:, None, :] - 1)
         regions[role] = replace(source, scores=scores)
@@ -241,7 +241,7 @@ def test_mixed_training_masks_signal_recovery_and_logistic_objective(mixed_input
     """Three classifiers recover separate labels using every eligible trial once."""
     for role, source in mixed_inputs.timeline.regions.items():
         model = fit_region(mixed_inputs, role, use_training_membership=True)
-        assert model.predictions.shape == (*source.scores.shape[:2], 3)
+        assert model.predictions.shape == (*source.scores.shape[:2], 8)
         assert np.all(model.fit_status == "ok")
         coverage = np.isin(np.arange(len(mixed_inputs.fold_ids)), source.choice_positions)
         for target in range(3):
@@ -312,3 +312,65 @@ def test_unfit_reward_does_not_disable_state_or_action(prediction_inputs, reward
     assert (model.fit_status[2] == "unavailable").all()
     assert np.isnan(model.predictions[:, :, 2]).all()
     assert np.isfinite(model.predictions[:, :, :2]).all()
+
+
+@pytest.mark.parametrize("window, bin_count", [("full", 4), ("before", 2), ("after", 2)])
+def test_mixed_continuous_fits_match_weighted_ridge_oracle(prediction_inputs, window, bin_count):
+    """Compare all five native-unit targets against independent weighted ridge fits.
+
+    Fixture supplies trials(N,C) and regional scores(W,B,3). Check affine
+    parameters and predictions(W,B) with one total weight per training trial,
+    target-specific missingness and whole-block exclusion. Inputs stay intact.
+    """
+    base, trials, timeline = prediction_inputs
+    trials.loc[105, "correct"] = 0
+    trials.loc[105, "state_int"] = 1 - trials.loc[105, "action"]
+    trials.loc[100, "Qlearning_rel_value"] = np.nan
+    prepared = prepare_prediction_inputs(trials, timeline, base,
+                                         analysis_mode="mixed_outcome_decoding", training_window=window)
+    assert len(prepared.target_names) == 8
+    for role, source in timeline.regions.items():
+        model = fit_region(prepared, role, use_training_membership=True)
+        coverage = np.isin(np.arange(len(prepared.fold_ids)), source.choice_positions)
+        for target in range(3, 8):
+            assert (model.fit_status[target] == "ok").all()
+            for fold in range(5):
+                mask = (coverage & prepared.baseline_valid & prepared.training_condition_mask
+                        & prepared.target_valid[:, target] & (prepared.fold_ids >= 0)
+                        & (prepared.fold_ids != fold))
+                np.testing.assert_array_equal(model.training_choice_mask[target, fold], mask)
+                matrix = source.scores[mask[source.choice_positions]][:, prepared.training_bin_mask].reshape(-1, 3)
+                design = np.column_stack([np.ones(len(matrix)), matrix])
+                labels = np.repeat(prepared.target_values[mask, target], bin_count)
+                weights = np.full(len(matrix), 1 / bin_count)
+                oracle = np.linalg.solve(design.T @ (weights[:, None] * design) + np.diag([0., 1., 1., 1.]),
+                                         design.T @ (weights * labels))
+                np.testing.assert_allclose(model.intercepts[target, fold], oracle[0], atol=1e-12)
+                np.testing.assert_allclose(model.coefficients[target, fold], oracle[1:], atol=1e-12)
+                held = prepared.fold_ids[source.choice_positions] == fold
+                np.testing.assert_allclose(model.predictions[held, :, target],
+                                           oracle[0] + source.scores[held] @ oracle[1:], atol=1e-12)
+                assert weights.sum() == mask.sum()
+                assert model.training_row_count[target, fold] == bin_count * mask.sum()
+            # Each nonrewarded outcome participates whenever its block is in training.
+            for condition in ("omission", "incorrect"):
+                members = prepared.condition_masks[:, prepared.condition_names.index(condition)]
+                assert (model.training_choice_mask[target] & members).any()
+        assert not model.training_choice_mask[3, :, 0].any()
+        assert model.training_choice_mask[4, :, 0].any() == coverage[0]
+        # An unknown actual value does not prevent an otherwise held-out prediction.
+        assert np.isfinite(model.predictions[:, :, 3]).all()
+
+
+def test_mixed_empty_numerical_target_does_not_disable_other_targets(prediction_inputs):
+    """An all-missing native-unit column remains an unavailable coordinate, without imputation."""
+    base, trials, timeline = prediction_inputs
+    trials["HMM_rel_value_logodds"] = np.nan
+    prepared = prepare_prediction_inputs(trials, timeline, base, analysis_mode="mixed_outcome_decoding")
+    assert "hmm_signed_belief" in prepared.target_names
+    target = prepared.target_names.index("hmm_signed_belief")
+    model = fit_region(prepared, use_training_membership=True)
+    assert prepared.target_availability["hmm_signed_belief"] == "target_unavailable_no_values"
+    assert (model.fit_reason[target] == "target_unavailable_no_values").all()
+    assert np.isnan(model.predictions[:, :, target]).all()
+    assert (np.delete(model.fit_status, target, axis=0) == "ok").all()

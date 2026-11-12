@@ -52,7 +52,9 @@ def test_mode_controls_override_and_fixed_target_sets(prediction_inputs):
     controls.write_text(json.dumps({"analysis_mode": "mixed_outcome_decoding"}))
     result = config.load_prediction_config(base.session_metadata_path)
     assert result.analysis_mode == "mixed_outcome_decoding"
-    assert config.target_names_for_mode(result.analysis_mode) == ("current_state", "current_action", "current_reward")
+    assert config.target_names_for_mode(result.analysis_mode) == ("current_state", "current_action", "current_reward",
+                                         "qlearning_relative_value", "forgetting_q_relative_value",
+                                         "hmm_signed_belief", "hmm_decay_signed_belief", "relative_doubt")
     result = config.load_prediction_config(
         base.session_metadata_path, analysis_mode="correct_rewarded_generalization",
     )

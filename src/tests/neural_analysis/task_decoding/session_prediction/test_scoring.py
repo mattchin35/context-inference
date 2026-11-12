@@ -173,16 +173,18 @@ def test_scoring_exclusions_and_missing_side_labels_do_not_suppress_other_splits
     assert find_row(target_report["held_out"], region="PFC", population="all")["n_trials"] < find_row(report["held_out"], region="PFC", population="all")["n_trials"]
 
 
-def test_continuous_performance_and_unavailable_fits(prediction_inputs):
+@pytest.mark.parametrize("mode", ["correct_rewarded_generalization", "mixed_outcome_decoding"])
+def test_continuous_performance_and_unavailable_fits(prediction_inputs, mode):
     """Continuous means use target units; failed folds/empty targets never become zero scores."""
     base, trials, timeline = prediction_inputs
     trials["HMM_rel_value_logodds"] = np.nan
-    prepared = prepare_prediction_inputs(trials, timeline, base)
+    prepared = prepare_prediction_inputs(trials, timeline, base, analysis_mode=mode)
     models = {role: fit_region(prepared, role, use_training_membership=True) for role in timeline.regions}
     report = scoring.compute_prediction_performance(prepared, models, "qlearning_relative_value")
     for role, source in timeline.regions.items():
-        actual = prepared.target_values[source.choice_positions, 2]
-        predictions = models[role].predictions[:, prepared.training_bin_mask, 2].mean(axis=1)
+        target = prepared.target_names.index("qlearning_relative_value")
+        actual = prepared.target_values[source.choice_positions, target]
+        predictions = models[role].predictions[:, prepared.training_bin_mask, target].mean(axis=1)
         expected = scoring.trial_metrics(actual, predictions, "numerical")
         row = find_row(report["held_out"], region=role, population="all")
         assert all(row[key] == value for key, value in expected.items())
@@ -198,6 +200,11 @@ def test_continuous_performance_and_unavailable_fits(prediction_inputs):
 @pytest.mark.parametrize("mode,target", [
     ("correct_rewarded_generalization", "qlearning_relative_value"),
     ("mixed_outcome_decoding", "current_reward"),
+    ("mixed_outcome_decoding", "qlearning_relative_value"),
+    ("mixed_outcome_decoding", "forgetting_q_relative_value"),
+    ("mixed_outcome_decoding", "hmm_signed_belief"),
+    ("mixed_outcome_decoding", "hmm_decay_signed_belief"),
+    ("mixed_outcome_decoding", "relative_doubt"),
 ])
 def test_all_split_outcome_and_side_records_match_direct_oracle(prediction_inputs, window, mode, target):
     """Each record intersects exact saved masks; trial means and counts use only selected bins."""

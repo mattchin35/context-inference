@@ -189,7 +189,9 @@ def test_cross_configuration_mode_switch_retains_navigation_and_clear_labels(run
     assert next(widget for widget in at.number_input if widget.label == "Visible duration (s)").value == 40
     assert next(widget for widget in at.number_input if widget.label == "Window start (s)").value == 50
     assert next(widget for widget in at.selectbox if widget.label == "Jump to trial").value == 9
-    assert next(widget for widget in at.selectbox if widget.label == "Prediction target").options == ["State decoding", "Action decoding", "Reward decoding"]
+    target_options = next(widget for widget in at.selectbox if widget.label == "Prediction target").options
+    assert target_options[:3] == ["State decoding", "Action decoding", "Reward decoding"]
+    assert len(target_options) == 8
     assert "Mixed-outcome decoding" in next(widget for widget in at.selectbox if widget.label == "Saved predictions").options[0]
     assert any("State decoding (mixed-outcome training)" in item["text"] for item in updated["layout"]["annotations"])
     assert any("sample size" in item.value and "regularization" in item.value for item in at.caption)
@@ -207,7 +209,7 @@ def test_cross_configuration_mode_switch_retains_navigation_and_clear_labels(run
 
 
 def test_gui_prepare_forwards_selected_mode_and_bounded_caption(runnable_session):
-    """Explicit mixed Prepare yields three-target products and explains bounded resets."""
+    """Explicit mixed Prepare yields eight-target products and explains bounded resets."""
     prepare_session_predictions(runnable_session, probe_roles={"PFC": "A"})
     at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
     next(widget for widget in at.selectbox if widget.label == "PFC probe").select("A").run()
@@ -218,7 +220,9 @@ def test_gui_prepare_forwards_selected_mode_and_bounded_caption(runnable_session
     assert not at.exception
     products = [load_prediction_result(path) for path in runnable_session.parent.glob("analysis_runs/condition_session_prediction_*/results.npz")]
     mixed = next(product for product in products if product.inputs.analysis_mode == "mixed_outcome_decoding")
-    assert mixed.inputs.target_names == ("current_state", "current_action", "current_reward")
+    assert mixed.inputs.target_names == ("current_state", "current_action", "current_reward",
+                                         "qlearning_relative_value", "forgetting_q_relative_value",
+                                         "hmm_signed_belief", "hmm_decay_signed_belief", "relative_doubt")
     assert mixed.meta["effective_config"]["bin_width_ms"] == 20
     assert mixed.inputs.training_window == "before"
     assert next(widget for widget in at.checkbox if widget.label == "Load only visible neural interval").value
@@ -226,9 +230,10 @@ def test_gui_prepare_forwards_selected_mode_and_bounded_caption(runnable_session
     assert any("reset" in item.value.lower() and "loaded" in item.value.lower() for item in at.caption)
 
 
-def test_continuous_details_do_not_describe_values_as_binary_classes(runnable_session):
-    """Continuous generalization targets show training/outcome counts without class labels."""
-    prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"})
+@pytest.mark.parametrize("mode", ["correct_rewarded_generalization", "mixed_outcome_decoding"])
+def test_continuous_details_do_not_describe_values_as_binary_classes(runnable_session, mode):
+    """Continuous targets show training/outcome counts without binary class labels."""
+    prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"}, analysis_mode=mode)
     at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
     next(widget for widget in at.selectbox if widget.label == "Prediction target").select("relative_doubt").run()
     assert not at.exception
@@ -299,9 +304,10 @@ def test_saved_performance_panel_laterality_population_and_cache(runnable_sessio
     assert (copied / report.result_path.relative_to(runnable_session.parent)).exists()
 
 
-def test_continuous_performance_panel_has_native_errors_and_no_class_accuracy(runnable_session):
+@pytest.mark.parametrize("mode", ["correct_rewarded_generalization", "mixed_outcome_decoding"])
+def test_continuous_performance_panel_has_native_errors_and_no_class_accuracy(runnable_session, mode):
     """Continuous target changes expose R2/RMSE and meaningful side-error differences."""
-    prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"})
+    prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"}, analysis_mode=mode)
     at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
     next(widget for widget in at.selectbox if widget.label == "Prediction target").select("relative_doubt").run()
     assert not at.exception
@@ -384,19 +390,55 @@ def test_performance_split_fold_controls_filter_cached_records(runnable_session,
     assert compute.call_count == 1
 
 
-def test_legacy_mixed_view_keeps_two_targets_and_explains_reward_preparation(runnable_session):
-    """A genuine v2 mixed product stays inspectable without presenting reward as prepared."""
+@pytest.mark.parametrize("version", [2, 3])
+def test_legacy_mixed_view_keeps_saved_targets_and_explains_preparation(runnable_session, version):
+    """Historical products stay inspectable without presenting additional targets as prepared."""
     from src.tests.neural_analysis.task_decoding.session_prediction.test_results import write_legacy_product
 
     report = prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"},
                                         analysis_mode="mixed_outcome_decoding")
     saved = load_prediction_result(report.result_path)
     write_legacy_product((runnable_session.parent, report.result_path, saved.inputs, saved.regions, saved.meta),
-                         2, "mixed_outcome_decoding")
+                         version, "mixed_outcome_decoding")
     before = report.result_path.read_bytes()
     at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
     assert not at.exception
-    assert next(widget for widget in at.selectbox if widget.label == "Prediction target").options == ["State decoding", "Action decoding"]
-    assert any("legacy" in item.value.lower() and "reward" in item.value.lower() for item in at.caption)
+    expected = ["State decoding", "Action decoding"] + (["Reward decoding"] if version == 3 else [])
+    assert next(widget for widget in at.selectbox if widget.label == "Prediction target").options == expected
+    assert any("legacy" in item.value.lower() and "qlearning_relative_value" in item.value for item in at.caption)
     assert next(widget for widget in at.selectbox if widget.label == "Training/scoring window").value == "full"
+    assert report.result_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("window", ["full", "before", "after"])
+def test_mixed_continuous_target_switches_use_saved_predictions(runnable_session, monkeypatch, window):
+    """All five numerical displays reuse saved W,B,T products and preserve navigation.
+
+    Inputs are a synthetic metadata path and a fixed choice-relative window ID;
+    no return. Assert native-unit scoring and weighted-PC display across target
+    changes, with fitting forbidden and saved archive bytes unchanged.
+    """
+    from src.neural_analysis.webapp import session_prediction_view
+
+    report = prepare_session_predictions(runnable_session, probe_roles={"PFC": "A", "HPC": "B"},
+                                         analysis_mode="mixed_outcome_decoding", training_window=window)
+    before = report.result_path.read_bytes()
+    forbidden = Mock(side_effect=AssertionError("Display must not fit"))
+    monkeypatch.setattr(session_prediction_view, "prepare_session_predictions", forbidden)
+    at = AppTest.from_function(render_prediction_test_app, args=(str(runnable_session),)).run()
+    assert not at.exception
+    revision = figure_spec(at)["layout"]["uirevision"]
+    next(widget for widget in at.selectbox if widget.label == "Prediction PC view").select("weighted").run()
+    for target in ("qlearning_relative_value", "forgetting_q_relative_value", "hmm_signed_belief",
+                   "hmm_decay_signed_belief", "relative_doubt"):
+        next(widget for widget in at.selectbox if widget.label == "Prediction target").select(target).run()
+        assert not at.exception
+        assert figure_spec(at)["layout"]["uirevision"] == revision
+        assert any(trace.get("name") == "PFC prediction" for trace in figure_spec(at)["data"])
+        assert any(trace.get("type") == "heatmap" for trace in figure_spec(at)["data"])
+        overall = next(item.value for item in at.dataframe if "Population" in item.value.columns
+                       and "Grouping" not in item.value.columns and "Fold" not in item.value.columns)
+        assert "R2" in overall.columns and "RMSE" in overall.columns
+        assert "Accuracy (%)" not in overall.columns
+    forbidden.assert_not_called()
     assert report.result_path.read_bytes() == before

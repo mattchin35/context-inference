@@ -140,10 +140,10 @@ def test_discovery_reads_small_metadata_and_ignores_partial_runs(saved_predictio
 
 
 @pytest.mark.parametrize("saved_prediction", ["mixed_outcome_decoding", "correct_rewarded_generalization"], indirect=True)
-def test_v3_mode_roundtrip_and_cross_mode_identity(saved_prediction):
+def test_v4_mode_roundtrip_and_cross_mode_identity(saved_prediction):
     """New products persist selected membership and fixed mode metadata with correct T."""
     root, path, prepared, regions, meta = saved_prediction
-    assert (meta["analysis_version"], meta["schema_version"]) == ("condition-session-prediction-v3", 3)
+    assert (meta["analysis_version"], meta["schema_version"]) == ("condition-session-prediction-v4", 3)
     config = meta["effective_config"]
     assert config["analysis_mode"] == prepared.analysis_mode
     assert config["target_names"] == list(prepared.target_names)
@@ -157,7 +157,7 @@ def test_v3_mode_roundtrip_and_cross_mode_identity(saved_prediction):
     assert option.analysis_mode == prepared.analysis_mode
     with np.load(path, allow_pickle=True) as archive:
         np.testing.assert_array_equal(archive["training_condition_mask"], prepared.training_condition_mask)
-    if len(prepared.target_names) == 3:
+    if prepared.analysis_mode == "mixed_outcome_decoding":
         np.testing.assert_array_equal(loaded.regions["PFC"].predictions, regions["PFC"].predictions)
         original = replace(prepared, analysis_mode="correct_rewarded_generalization")
         # Different scientific modes cannot share identity even on the same PCA/target source bytes.
@@ -167,7 +167,7 @@ def test_v3_mode_roundtrip_and_cross_mode_identity(saved_prediction):
 
 
 @pytest.mark.parametrize("defect", ["mode", "target_set", "conditions", "mask", "missing_mode", "missing_mask", "version"])
-def test_v3_rejects_mode_and_mask_contradictions(saved_prediction, defect):
+def test_v4_rejects_mode_and_mask_contradictions(saved_prediction, defect):
     """New-schema products require explicit consistent mode, target, and mask contracts."""
     root, path, _, _, _ = saved_prediction
     with np.load(path, allow_pickle=True) as archive:
@@ -244,7 +244,7 @@ def test_publication_rejects_effective_mode_mismatch(saved_prediction):
     (mode, window) for mode in ("correct_rewarded_generalization", "mixed_outcome_decoding")
     for window in ("full", "before", "after")
 ], indirect=True)
-def test_v3_window_roundtrip_and_identity(saved_prediction):
+def test_v4_window_roundtrip_and_identity(saved_prediction):
     """Every mode/window persists exact fitting/scoring bounds, mask and class metadata."""
     root, path, prepared, _, meta = saved_prediction
     bounds = {"full": [-1., 1.], "before": [-1., 0.], "after": [0., 1.]}
@@ -267,7 +267,9 @@ def test_v3_window_roundtrip_and_identity(saved_prediction):
     other_meta = results.build_prediction_metadata(other_inputs, root, root / meta["source_pca"]["path"], sources, effective)
     assert other_meta["identity"] != meta["identity"]
     if prepared.analysis_mode == "mixed_outcome_decoding":
-        assert loaded.inputs.target_names == ("current_state", "current_action", "current_reward")
+        assert loaded.inputs.target_names == ("current_state", "current_action", "current_reward",
+                                         "qlearning_relative_value", "forgetting_q_relative_value",
+                                         "hmm_signed_belief", "hmm_decay_signed_belief", "relative_doubt")
         assert meta["target_metadata"]["current_reward"]["positive_label"] == "rewarded"
         assert "left" not in meta["units"]["categorical_prediction"]
 
@@ -276,7 +278,7 @@ def test_v3_window_roundtrip_and_identity(saved_prediction):
     "missing_window", "missing_scoring", "bounds", "scoring", "mask", "width", "extent", "reward_label", "binary_values",
 ])
 @pytest.mark.parametrize("saved_prediction", [("mixed_outcome_decoding", "before")], indirect=True)
-def test_v3_rejects_window_and_reward_contract_corruption(saved_prediction, defect):
+def test_v4_rejects_window_and_reward_contract_corruption(saved_prediction, defect):
     """Correct array length cannot disguise the wrong supervised interval or class meaning."""
     root, path, _, _, _ = saved_prediction
     with np.load(path, allow_pickle=True) as archive:
@@ -308,14 +310,14 @@ def test_v3_rejects_window_and_reward_contract_corruption(saved_prediction, defe
 
 
 def write_legacy_product(saved_prediction, version, mode):
-    """Write a faithful old Full product and return its original identity; synthetic files only.
+    """Write a faithful old product and return its original identity; synthetic files only.
 
     Fixture tuple supplies root/path, N-choice inputs and T/F/K models. Version
-    is 1 or 2; mode selects seven generalization or two legacy mixed targets.
-    No new window/scoring fields or reward target exist in the resulting NPZ.
+    is 1, 2 or 3; mode selects seven generalization or two/three mixed targets.
+    Versions 1/2 retain Full only; version 3 preserves the source window.
     """
     root, path, prepared, _, original = saved_prediction
-    count = 7 if mode == "correct_rewarded_generalization" else 2
+    count = 7 if mode == "correct_rewarded_generalization" else (3 if version == 3 else 2)
     prepared = replace(prepared, target_names=prepared.target_names[:count],
                        target_families=prepared.target_families[:count],
                        target_values=prepared.target_values[:, :count], target_valid=prepared.target_valid[:, :count],
@@ -323,8 +325,9 @@ def write_legacy_product(saved_prediction, version, mode):
                        target_availability={name: prepared.target_availability[name] for name in prepared.target_names[:count]})
     models = {role: fit_region(prepared, role, use_training_membership=True) for role in prepared.timeline.regions}
     config = dict(original["effective_config"], target_names=list(prepared.target_names))
-    for key in ("training_window", "scoring_window_s"):
-        config.pop(key, None)
+    if version < 3:
+        for key in ("training_window", "scoring_window_s"):
+            config.pop(key, None)
     if version == 1:
         config.pop("analysis_mode", None)
         config.pop("training_condition_names", None)
@@ -334,7 +337,7 @@ def write_legacy_product(saved_prediction, version, mode):
     shared = ("target_values", "target_valid", "baseline_valid", "correct_rewarded", "fold_ids",
               "block_values_json", "condition_masks", "training_bin_mask", "bin_edges_s")
     arrays = {name: getattr(prepared, name) for name in shared}
-    if version == 2:
+    if version >= 2:
         arrays["training_condition_mask"] = prepared.training_condition_mask
     arrays.update(choices=prepared.timeline.choices.to_records(index=False),
                   target_names=np.asarray(prepared.target_names), target_families=np.asarray(prepared.target_families),
@@ -349,6 +352,9 @@ def write_legacy_product(saved_prediction, version, mode):
 
 @pytest.mark.parametrize("version, saved_prediction", [
     (1, "correct_rewarded_generalization"), (2, "correct_rewarded_generalization"), (2, "mixed_outcome_decoding"),
+    (3, "correct_rewarded_generalization"),
+    (3, "mixed_outcome_decoding"), (3, ("mixed_outcome_decoding", "before")),
+    (3, ("mixed_outcome_decoding", "after")),
 ], indirect=["saved_prediction"])
 def test_original_version_contracts_load_relocate_and_score(saved_prediction, version, tmp_path):
     """Old schemas retain Full meaning and original bytes without raw sources or invented reward models."""
@@ -361,14 +367,39 @@ def test_original_version_contracts_load_relocate_and_score(saved_prediction, ve
     before = destination.read_bytes()
     loaded = results.load_prediction_result(destination, session_root=relocated)
     assert loaded.meta["identity"] == identity
-    assert loaded.inputs.training_window == "full"
-    assert loaded.meta["effective_config"]["scoring_window_s"] == [-1., 1.]
-    assert len(loaded.inputs.target_names) == (7 if version == 1 or prepared.analysis_mode.endswith("generalization") else 2)
-    assert "current_reward" not in loaded.inputs.target_names
+    expected_window = prepared.training_window if version == 3 else "full"
+    bounds = {"full": [-1., 1.], "before": [-1., 0.], "after": [0., 1.]}
+    assert loaded.inputs.training_window == expected_window
+    assert loaded.meta["effective_config"]["scoring_window_s"] == bounds[expected_window]
+    expected_count = 7 if prepared.analysis_mode.endswith("generalization") else (3 if version == 3 else 2)
+    assert len(loaded.inputs.target_names) == expected_count
+    assert ("current_reward" in loaded.inputs.target_names) == (expected_count == 3)
     assert compute_prediction_performance(loaded.inputs, loaded.regions, "current_action")["held_out"]
-    assert results.discover_prediction_runs(relocated)[0].training_window == "full"
+    assert results.discover_prediction_runs(relocated)[0].training_window == expected_window
     assert results.find_saved_prediction(relocated, identity) == destination
     assert destination.read_bytes() == before
+
+
+@pytest.mark.parametrize("saved_prediction", ["mixed_outcome_decoding"], indirect=True)
+@pytest.mark.parametrize("defect", ["old_label_new_targets", "new_label_old_targets", "schema"])
+def test_v4_rejects_version_target_set_mismatches(saved_prediction, defect):
+    """Version labels cannot authorize a different mixed target axis or storage layout."""
+    root, path, _, _, _ = saved_prediction
+    if defect == "new_label_old_targets":
+        write_legacy_product(saved_prediction, 3, "mixed_outcome_decoding")
+    with np.load(path, allow_pickle=True) as archive:
+        arrays = {name: archive[name] for name in archive.files}
+    meta = arrays["meta"].item()
+    meta["analysis_version"] = ("condition-session-prediction-v3" if defect == "old_label_new_targets"
+                                else "condition-session-prediction-v4")
+    if defect == "schema":
+        meta["schema_version"] = 4
+    arrays["meta"] = np.asarray(meta, dtype=object)
+    np.savez_compressed(path, **arrays)
+    (path.parent / "config.json").write_text(json.dumps(meta))
+    with pytest.raises(ValueError):
+        results.load_prediction_result(path, session_root=root)
+    assert not results.discover_prediction_runs(root)
 
 
 @pytest.mark.parametrize("defect", ["half_window", "reward_target", "unknown_pair", "new_schema_two_targets"])
