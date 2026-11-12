@@ -127,6 +127,22 @@ def test_persistence_has_a_distinct_labeled_seventh_row(tmp_path, capture_figure
     assert np.asarray(figure.axes[2].images[0].get_array()).shape == (7, 5, 4)
 
 
+def test_caption_distinguishes_logistic_temperatures_from_discrete_errors(tmp_path, capture_figure):
+    """Path/Figure fixtures show effective graded settings without a shared 90/10 claim."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+    from src.behavior_analysis.trial_policy_models import (
+        effective_trial_policy_choice_parameters, resolve_trial_policy_candidates,
+    )
+
+    result, metadata = diagnostic_result(models=7)
+    metadata["candidate_choice_parameters"] = effective_trial_policy_choice_parameters(resolve_trial_policy_candidates())
+    plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "graded.png")
+    caption = " ".join(" ".join(text.get_text() for text in capture_figure[-1].texts).lower().split())
+    assert "logistic" in caption and "temperature" in caption and "0.14" in caption and "0.4" in caption
+    assert "discrete" in caption and "0.1" in caption
+    assert "shared opposite-action error probability" not in caption
+
+
 def test_model_colors_are_stable_under_candidate_reordering(tmp_path, capture_figure):
     """Stable model IDs determine trace colors independently of selected order."""
     from src.behavior_analysis import trial_policy_plotting as plotting

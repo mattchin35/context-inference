@@ -44,6 +44,8 @@ def test_default_single_runner_saves_aligned_outputs_and_reuses_only_arrays(tmp_
     assert result.p_right.shape == (6, 7) and path.exists()
     assert tuple(result.model_ids) == ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
                                        "q_learning", "reward_decay_hmm", "ideal_observer", "immediate_persistence")
+    ql = list(result.model_ids).index("q_learning")
+    assert result.p_right[1, ql] == pytest.approx(1 / (1 + np.exp(-.3 / .14)))
     assert attached["inherited_block_model"].tolist() == ["fixed"] * 6
     assert len(list(source.session.figure_path.glob("trial_policy_hmm/*/*.png"))) == 1
     before = path.read_bytes()
@@ -76,6 +78,26 @@ def test_smoothing_disabled_refresh_clears_saved_hmm_fields(tmp_path):
     assert result.hmm_smoothed_probs is None
     assert not any(column.startswith("trial_policy_hmm_") for column in current)
     assert "trial_policy_independent_model" in current
+
+
+def test_single_temperature_override_changes_cache_and_saves_effective_rule(tmp_path):
+    """Path fixture produces explicit graded choices and distinct immutable caches."""
+    import src.main as main
+    from src.behavior_analysis.trial_policy_results import load_trial_policy_results
+
+    config = main.SingleSessionAnalysisConfig(trial_policy_temperatures={"q_learning": .3})
+    source = source_session(tmp_path)
+    _, default, first = main.run_dynamax_trial_analysis(
+        source.augmented_trial_df, source.session, feature_params=TaskParams(), plot=False)
+    _, changed, second = main.run_dynamax_trial_analysis(
+        source.augmented_trial_df, source.session, feature_params=TaskParams(), plot=False,
+        choice_temperatures=config.trial_policy_temperatures)
+    assert first != second and first.exists()
+    column = list(changed.model_ids).index("q_learning")
+    assert changed.p_right[1, column] == pytest.approx(1 / (1 + np.exp(-1)))
+    assert changed.p_right[1, column] != default.p_right[1, column]
+    _, metadata = load_trial_policy_results(second)
+    assert metadata["candidate_choice_parameters"]["q_learning"] == {"rule": "logistic", "temperature": .3}
 
 
 @pytest.mark.parametrize("ids", [("immediate_persistence",), ("ideal_observer", "q_learning"),
@@ -125,7 +147,8 @@ def test_joint_results_equal_separate_sources_with_mixed_schemas_and_parameters(
     references, source_csvs = [], {}
     for source in sources:
         _, reference, _ = main.run_dynamax_trial_analysis(source.augmented_trial_df, source.session,
-                                                         feature_params=parameters[source.session.sess_id_full], plot=False)
+                                                         feature_params=parameters[source.session.sess_id_full], plot=False,
+                                                         choice_temperatures={"q_learning": .3})
         references.append(reference)
         csv = source.session.processed_data_path / f"{source.session.sess_id_full}_augmented_trials.csv"
         source_csvs[csv] = csv.read_bytes()
@@ -150,12 +173,14 @@ def test_joint_results_equal_separate_sources_with_mixed_schemas_and_parameters(
     monkeypatch.setattr(persistence, "save_trial_policy_results", parent_save)
     serial = main.run_multisession_analysis(combined, joint, source_sessions=sources,
                                             trial_feature_params_by_session=parameters,
+                                            trial_policy_temperatures={"q_learning": .3},
                                             trial_policy_n_jobs=1, rerun_trial_policy_analysis=True)
     assert len(serial) == 4 and serial[:2] == (None, None)
     serial_calls = calls.copy()
     calls.clear()
     parallel = main.run_multisession_analysis(combined, joint, source_sessions=sources,
                                               trial_feature_params_by_session=parameters,
+                                              trial_policy_temperatures={"q_learning": .3},
                                               trial_policy_n_jobs=2, rerun_trial_policy_analysis=True)
     assert all(name == threading.main_thread().name for name in serial_calls)
     assert calls and all(name != threading.main_thread().name for name in calls)

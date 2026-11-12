@@ -29,7 +29,9 @@ def prepared_result(table, model_ids=None, smoothing=True, params=None):
     history = models.prepare_trial_policy_history(table, session_id="source")
     candidates = models.resolve_trial_policy_candidates(models.DEFAULT_MODEL_IDS if model_ids is None else model_ids)
     scores, valid = models.replay_trial_policy_candidates(history, candidates, params)
-    result = analysis.compute_trial_policy_comparison(history, scores, valid, tuple(c.model_id for c in candidates))
+    result = analysis.compute_trial_policy_comparison(
+        history, scores, valid, tuple(c.model_id for c in candidates),
+        choice_parameters=models.effective_trial_policy_choice_parameters(candidates))
     if smoothing:
         result = analysis.smooth_trial_policy_comparison(result)
     return history, candidates, params, result

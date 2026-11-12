@@ -144,7 +144,7 @@ def test_seven_state_roundtrip_and_missing_reward_provenance(choices, tmp_path):
     assert "choice/outcome" in meta["history_update_valid_definition"]
     assert "persistence" in " ".join(results.trial_policy_warnings(history)).lower()
     assert "skipped all candidate history updates" not in " ".join(results.trial_policy_warnings(history))
-    assert meta["analysis_version"] == "trial_policy_hmm_v4"
+    assert meta["analysis_version"] == results.ANALYSIS_VERSION
     path = results.save_trial_policy_results(smoothed, processed_data_path=tmp_path, metadata=meta)
     restored, saved_meta = results.load_trial_policy_results(path)
     np.testing.assert_array_equal(restored.p_right, smoothed.p_right)
