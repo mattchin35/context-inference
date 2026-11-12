@@ -276,9 +276,12 @@ def test_saved_performance_panel_laterality_population_and_cache(runnable_sessio
                    and "Grouping" not in item.value.columns and "Fold" not in item.value.columns)
     assert set(overall["Population"]) >= {"All eligible choices", "Training outcomes", "Correct-rewarded", "Incorrect"}
     assert overall["Accuracy (%)"].dropna().between(0, 100).all()
+    assert overall["Brier score"].dropna().between(0, 1).all()
     folds = next(item.value for item in at.dataframe if "Split" in item.value.columns and "Grouping" not in item.value.columns)
     assert set(folds["Split"]) == {"Training", "Held-out"}
     assert set(folds["Fold"]) == set(range(5))
+    assert folds["Brier score"].dropna().between(0, 1).all()
+    assert any("Brier" in item.value and "lower" in item.value for item in at.caption)
     assert any("[-1,+1)" in item.value and "trial" in item.value for item in at.caption)
     before_path, before_revision = component_path(at.main), figure_spec(at)["layout"]["uirevision"]
     next(widget for widget in at.selectbox if widget.label == "Laterality scoring population").select("incorrect").run()
@@ -289,8 +292,10 @@ def test_saved_performance_panel_laterality_population_and_cache(runnable_sessio
     assert set(sides["Region"]) == {"PFC", "HPC"}
     assert sides.groupby(["Region", "Grouping"])["Trials"].sum().eq(1).all()
     assert sides.loc[sides["Trials"] == 0, "Accuracy (%)"].isna().all()
+    assert sides.loc[sides["Trials"] == 0, "Brier score"].isna().all()
     gaps = next(item.value for item in at.dataframe if "Accuracy difference (pp)" in item.value.columns)
     assert gaps["Accuracy difference (pp)"].isna().all()  # One side is absent in each one-trial group.
+    assert gaps["Brier score difference"].isna().all()
     assert compute.call_count == 1
     next(widget for widget in at.selectbox if widget.label == "Prediction PC view").select("weighted").run()
     assert compute.call_count == 1
@@ -315,12 +320,25 @@ def test_continuous_performance_panel_has_native_errors_and_no_class_accuracy(ru
                    and "Grouping" not in item.value.columns and "Fold" not in item.value.columns)
     assert "R2" in overall.columns and "RMSE" in overall.columns
     assert "Accuracy (%)" not in overall.columns
+    assert "Brier score" not in overall.columns
     assert overall["RMSE"].dropna().ge(0).all()
     assert any("target units" in item.value and "RMSE" in item.value for item in at.caption)
     assert not any("0.5 left/right threshold" in item.value for item in at.caption)
     assert not any("Single-class groups" in item.value for item in at.caption)
     gaps = next(item.value for item in at.dataframe if "RMSE difference" in item.value.columns)
     assert "R2 difference" in gaps.columns
+
+
+def test_performance_table_keeps_brier_scores_in_probability_squared_units():
+    """Format dimensionless scores without percent scaling; return new table dictionaries."""
+    from src.neural_analysis.webapp.session_prediction_view import _performance_rows
+
+    records = [{"accuracy": 0.75, "brier_score": 0.125}]
+    assert _performance_rows(records, {}) == [{"Accuracy (%)": 75., "Brier score": 0.125}]
+    assert _performance_rows(records, {}, differences=True) == [
+        {"Accuracy difference (pp)": 75., "Brier score difference": 0.125},
+    ]
+    assert records == [{"accuracy": 0.75, "brier_score": 0.125}]
 
 
 def test_saved_window_pair_initialization_and_unprepared_switch_keep_anchor(runnable_session, tmp_path, monkeypatch):

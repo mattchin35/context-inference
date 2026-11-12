@@ -19,9 +19,25 @@ def test_known_binary_accuracy_and_balanced_accuracy():
     assert metrics["n_trials"] == 4
     assert metrics["accuracy"] == 0.75
     assert metrics["balanced_accuracy"] == pytest.approx(5 / 6)
+    assert metrics["brier_score"] == pytest.approx(0.21)
     always_left = scoring.trial_metrics(actual, np.ones(4), "categorical")
     assert always_left["accuracy"] == 0.25
     assert always_left["balanced_accuracy"] == 0.5
+    assert always_left["brier_score"] == 0.75
+
+
+@pytest.mark.parametrize("probabilities, expected", [
+    ([0., 1.], 0.), ([1., 0.], 1.), ([0.5, 0.5], 0.25),
+    ([0.1, 0.9], 0.01), ([0.4, 0.6], 0.16),
+])
+def test_binary_brier_score_uses_probabilities_not_classified_labels(probabilities, expected):
+    """Score two dimensionless probabilities against labels(2,); preserve uncertainty.
+
+    Correct thresholded predictions can still have different probability errors.
+    The returned dictionary includes binary Brier score in [0,1], not percent.
+    """
+    metrics = scoring.trial_metrics(np.array([0., 1.]), np.array(probabilities), "categorical")
+    assert metrics["brier_score"] == pytest.approx(expected)
 
 
 def test_known_regression_scores_keep_negative_r2_and_native_rmse():
@@ -33,8 +49,8 @@ def test_known_regression_scores_keep_negative_r2_and_native_rmse():
 
 
 @pytest.mark.parametrize("actual, predicted, family, expected", [
-    ([1, 1], [0.5, 0.1], "categorical", {"accuracy": 0.5, "balanced_accuracy": None}),
-    ([], [], "categorical", {"accuracy": None, "balanced_accuracy": None}),
+    ([1, 1], [0.5, 0.1], "categorical", {"accuracy": 0.5, "balanced_accuracy": None, "brier_score": 0.53}),
+    ([], [], "categorical", {"accuracy": None, "balanced_accuracy": None, "brier_score": None}),
     ([4, 4], [3, 5], "numerical", {"r2": None, "rmse": 1}),
     ([4], [6], "numerical", {"r2": None, "rmse": 2}),
     ([], [], "numerical", {"r2": None, "rmse": None}),
@@ -199,6 +215,7 @@ def test_continuous_performance_and_unavailable_fits(prediction_inputs, mode):
 @pytest.mark.parametrize("window", ["full", "before", "after"])
 @pytest.mark.parametrize("mode,target", [
     ("correct_rewarded_generalization", "qlearning_relative_value"),
+    ("correct_rewarded_generalization", "current_action"),
     ("mixed_outcome_decoding", "current_reward"),
     ("mixed_outcome_decoding", "qlearning_relative_value"),
     ("mixed_outcome_decoding", "forgetting_q_relative_value"),
@@ -240,6 +257,9 @@ def test_all_split_outcome_and_side_records_match_direct_oracle(prediction_input
                     for name, value in expected.items():
                         assert row[name] == (None if value is None else pytest.approx(value))
                     if family == "categorical":
+                        expected_brier = (np.mean((predictions[selected] - actual[selected]) ** 2)
+                                          if selected.any() else None)
+                        assert row["brier_score"] == (None if expected_brier is None else pytest.approx(expected_brier))
                         assert row["class_0_trials"] == int((actual[selected] == 0).sum())
                         assert row["class_1_trials"] == int((actual[selected] == 1).sum())
                     for grouping, side_index in (("choice", 1), ("state", 0)):
@@ -258,7 +278,7 @@ def test_all_split_outcome_and_side_records_match_direct_oracle(prediction_input
             assert pooled["n_trials"] == fold_total
     for row in report["gaps"]:
         assert "class_0_trials" not in row and "class_1_trials" not in row
-        metric_names = ("accuracy", "balanced_accuracy") if family == "categorical" else ("r2", "rmse")
+        metric_names = ("accuracy", "balanced_accuracy", "brier_score") if family == "categorical" else ("r2", "rmse")
         selectors = {key: row[key] for key in ("region", "population", "split", "fold", "grouping")}
         left = find_row(report["laterality"], **selectors, side="left")
         right = find_row(report["laterality"], **selectors, side="right")
@@ -299,6 +319,9 @@ def test_matched_scoring_ignores_opposite_and_outer_bins(prediction_inputs, wind
     row = find_row(report["held_out"], region="PFC", population="correct_rewarded")
     assert row["accuracy"] == 1 and row["balanced_accuracy"] is None
     assert row["class_1_trials"] == row["n_trials"] and row["class_0_trials"] == 0
+    mean_probability = expit(np.asarray(logits)).mean()
+    assert row["brier_score"] == pytest.approx((mean_probability - 1) ** 2)
     omission = find_row(report["held_out"], region="PFC", population="omission")
     assert omission["accuracy"] == 0 and omission["balanced_accuracy"] is None
     assert omission["class_0_trials"] == omission["n_trials"]
+    assert omission["brier_score"] == pytest.approx(mean_probability ** 2)
