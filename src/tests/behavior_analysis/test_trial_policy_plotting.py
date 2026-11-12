@@ -43,7 +43,7 @@ def diagnostic_result(models=3, smoothing=True, session_id="source"):
 
 
 @pytest.mark.parametrize("smoothing,panels", [(True, 5), (False, 3)])
-@pytest.mark.parametrize("models", [1, 3, 4, 6])
+@pytest.mark.parametrize("models", [1, 3, 4, 6, 7])
 def test_saved_result_plot_panels_tied_winners_and_excluded_rows(tmp_path, capture_figure, monkeypatch, smoothing, panels, models):
     """Numerical artifacts yield opaque PNG panels without any inference call."""
     from src.behavior_analysis import trial_policy_plotting as plotting
@@ -112,6 +112,19 @@ def test_membership_grid_has_model_rows_for_every_tie_combination(tmp_path, capt
             np.testing.assert_allclose(cells[model], expected)
     caption = " ".join(text.get_text() for text in figure.texts).lower()
     assert "filled" in caption and "column" in caption
+
+
+def test_persistence_has_a_distinct_labeled_seventh_row(tmp_path, capture_figure):
+    """Path/Figure fixtures preserve a distinct persistence color and seven rows."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+
+    result, metadata = diagnostic_result(models=7)
+    plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "seven.png")
+    figure = capture_figure[-1]
+    assert len({plotting._model_color(str(model_id)) for model_id in result.model_ids}) == 7
+    assert "Persistence" in [label.get_text() for label in figure.axes[2].get_yticklabels()]
+    assert len(figure.axes[2].get_yticks()) == len(figure.axes[4].get_yticks()) == 7
+    assert np.asarray(figure.axes[2].images[0].get_array()).shape == (7, 5, 4)
 
 
 def test_model_colors_are_stable_under_candidate_reordering(tmp_path, capture_figure):

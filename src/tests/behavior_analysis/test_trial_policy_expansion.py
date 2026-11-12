@@ -36,10 +36,10 @@ def replay(table, ids=ALL_IDS, params=None):
     return history, scores, valid
 
 
-def test_all_six_are_default_in_original_then_appended_order():
+def test_default_order_preserves_six_candidates_before_persistence():
     """No inputs; verify stable default identities and selectable subsets."""
-    assert models.DEFAULT_MODEL_IDS == ALL_IDS
-    assert tuple(candidate.model_id for candidate in models.resolve_trial_policy_candidates()) == ALL_IDS
+    assert models.DEFAULT_MODEL_IDS == ALL_IDS + ("immediate_persistence",)
+    assert tuple(candidate.model_id for candidate in models.resolve_trial_policy_candidates()) == models.DEFAULT_MODEL_IDS
     assert tuple(candidate.model_id for candidate in models.resolve_trial_policy_candidates(NEW_IDS[::-1])) == NEW_IDS[::-1]
 
 
@@ -179,9 +179,9 @@ def test_six_state_probabilities_permutation_and_npz_provenance(history_table, t
     permuted = analysis.smooth_trial_policy_comparison(analysis.compute_trial_policy_comparison(
         history, scores[:, ::-1], valid[:, ::-1], ALL_IDS[::-1]))
     np.testing.assert_allclose(permuted.hmm_smoothed_probs[:, ::-1], smoothed.hmm_smoothed_probs, atol=2e-6)
-    candidates = models.resolve_trial_policy_candidates()
+    candidates = models.resolve_trial_policy_candidates(ALL_IDS)
     meta = results.build_trial_policy_metadata(history, candidates, TaskParams(), parameter_source="test")
-    assert meta["analysis_version"] == "trial_policy_hmm_v2"
+    assert meta["analysis_version"] == results.ANALYSIS_VERSION
     assert meta["candidate_parameters"]["q_learning"] == {"learning_rate": .3, "n_actions": 2}
     assert meta["candidate_parameters"]["reward_decay_hmm"]["lambda_decay"] == .1
     assert meta["candidate_parameters"]["ideal_observer"]["omission_lam"] == .5
