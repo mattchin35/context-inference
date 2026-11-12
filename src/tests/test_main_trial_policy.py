@@ -41,9 +41,10 @@ def test_default_single_runner_saves_aligned_outputs_and_reuses_only_arrays(tmp_
     source = source_session(tmp_path)
     trials = source.augmented_trial_df.assign(inherited_block_model="fixed")
     attached, result, path = main.run_dynamax_trial_analysis(trials, source.session, feature_params=TaskParams(), plot=True)
-    assert result.p_right.shape == (6, 7) and path.exists()
+    assert result.p_right.shape == (6, 9) and path.exists()
     assert tuple(result.model_ids) == ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
-                                       "q_learning", "reward_decay_hmm", "ideal_observer", "immediate_persistence")
+                                       "q_learning", "reward_decay_hmm", "ideal_observer", "immediate_persistence",
+                                       "probe_persistence_doubt", "home_referenced_expectancy_doubt")
     ql = list(result.model_ids).index("q_learning")
     assert result.p_right[1, ql] == pytest.approx(1 / (1 + np.exp(-.3 / .14)))
     assert attached["inherited_block_model"].tolist() == ["fixed"] * 6
@@ -101,6 +102,7 @@ def test_single_temperature_override_changes_cache_and_saves_effective_rule(tmp_
 
 
 @pytest.mark.parametrize("ids", [("immediate_persistence",), ("ideal_observer", "q_learning"),
+                                   ("home_referenced_expectancy_doubt", "probe_persistence_doubt"),
                                    ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch")])
 def test_single_runner_retains_explicit_ordered_subsets(tmp_path, ids):
     """Path/IDs[K] yield only the selected ordered policy outputs and metadata."""
@@ -255,7 +257,7 @@ def test_joint_saved_parameters_overrides_and_empty_sources(tmp_path):
     assert "trial_feature_params.json" in first_meta["parameter_source"]
     empty_artifact = next(sources[1].session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
     empty_result, empty_meta = load_trial_policy_results(empty_artifact)
-    assert empty_result.status == "empty" and empty_result.p_right.shape == (0, 7)
+    assert empty_result.status == "empty" and empty_result.p_right.shape == (0, 9)
     before = set(sources[0].session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
     main.run_multisession_analysis(combined, joint, source_sessions=sources, trial_policy_n_jobs=1,
                                    trial_feature_params_by_session={"first": TaskParams(FQL_decay=.6)})

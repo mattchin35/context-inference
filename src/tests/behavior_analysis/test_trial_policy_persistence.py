@@ -29,8 +29,7 @@ def replay(table, ids=("immediate_persistence",)):
 
 def test_seventh_default_is_parameter_free_and_left_positive(choices):
     """Table[T,C] yields actual previous-choice scores in {-1,0,+1}, unitless."""
-    assert len(models.DEFAULT_MODEL_IDS) == 7
-    assert models.DEFAULT_MODEL_IDS[-1] == "immediate_persistence"
+    assert models.DEFAULT_MODEL_IDS[6] == "immediate_persistence"
     _, scores, available = replay(choices)
     np.testing.assert_array_equal(scores[:, 0], [0, 1, 1, -1, 1, -1])
     assert available.all()
@@ -130,8 +129,9 @@ def test_seven_state_roundtrip_and_missing_reward_provenance(choices, tmp_path):
     """Table/Path fixtures preserve [T,7] posteriors and explicit choice-only rules."""
     table = choices.astype({"reward": float})
     table.iloc[2, table.columns.get_loc("reward")] = np.nan
-    history, scores, available = replay(table, models.DEFAULT_MODEL_IDS)
-    comparison = analysis.compute_trial_policy_comparison(history, scores, available, models.DEFAULT_MODEL_IDS)
+    seven_ids = models.DEFAULT_MODEL_IDS[:7]
+    history, scores, available = replay(table, seven_ids)
+    comparison = analysis.compute_trial_policy_comparison(history, scores, available, seven_ids)
     assert comparison.p_right[:, -1].tolist() == [.5, .1, .1, .9, .1, .9]
     smoothed = analysis.smooth_trial_policy_comparison(comparison)
     assert smoothed.hmm_smoothed_probs.shape == (6, 7)

@@ -50,8 +50,8 @@ def test_mixed_choice_probabilities_and_bernoulli_likelihoods(trials):
     _, settings, comparison = compare(trials)
     for column, model_id in enumerate(comparison.model_ids):
         score = comparison.policy_scores[:, column]
-        if model_id in TEMPERATURES:
-            drive = score / TEMPERATURES[model_id]
+        if settings[model_id]["rule"] == "logistic":
+            drive = score / settings[model_id]["temperature"]
             expected_right = expit(-drive)
             expected_ll = np.where(trials.action.to_numpy() == 1, log_expit(drive), log_expit(-drive))
         else:
@@ -152,7 +152,7 @@ def test_graded_scores_settings_cache_identity_and_legacy_loading(trials, tmp_pa
     history, settings, comparison = compare(trials)
     candidates = models.resolve_trial_policy_candidates()
     metadata = results.build_trial_policy_metadata(history, candidates, TaskParams(), parameter_source="test")
-    assert metadata["analysis_version"] == "trial_policy_hmm_v5"
+    assert metadata["analysis_version"] == results.ANALYSIS_VERSION
     assert metadata["candidate_choice_parameters"] == settings
     changed = results.build_trial_policy_metadata(history, candidates, TaskParams(), parameter_source="test",
                                                   choice_temperatures={"q_learning": .3})

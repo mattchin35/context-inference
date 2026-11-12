@@ -43,7 +43,7 @@ def diagnostic_result(models=3, smoothing=True, session_id="source"):
 
 
 @pytest.mark.parametrize("smoothing,panels", [(True, 5), (False, 3)])
-@pytest.mark.parametrize("models", [1, 3, 4, 6, 7])
+@pytest.mark.parametrize("models", [1, 3, 4, 6, 7, 9])
 def test_saved_result_plot_panels_tied_winners_and_excluded_rows(tmp_path, capture_figure, monkeypatch, smoothing, panels, models):
     """Numerical artifacts yield opaque PNG panels without any inference call."""
     from src.behavior_analysis import trial_policy_plotting as plotting
@@ -141,6 +141,25 @@ def test_caption_distinguishes_logistic_temperatures_from_discrete_errors(tmp_pa
     assert "logistic" in caption and "temperature" in caption and "0.14" in caption and "0.4" in caption
     assert "discrete" in caption and "0.1" in caption
     assert "shared opposite-action error probability" not in caption
+
+
+def test_probe_models_have_distinct_labeled_rows(tmp_path, capture_figure):
+    """Path/Figure fixtures label nine candidate rows with stable distinct colors."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+    from src.behavior_analysis.trial_policy_models import (
+        effective_trial_policy_choice_parameters, resolve_trial_policy_candidates,
+    )
+
+    result, metadata = diagnostic_result(models=9)
+    metadata["candidate_choice_parameters"] = effective_trial_policy_choice_parameters(resolve_trial_policy_candidates())
+    plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "nine.png")
+    figure = capture_figure[-1]
+    assert len({plotting._model_color(str(model_id)) for model_id in result.model_ids}) == 9
+    assert [label.get_text() for label in figure.axes[2].get_yticklabels()][-2:] == ["Probe doubt", "Home expectancy"]
+    assert len(figure.axes[2].get_yticks()) == len(figure.axes[4].get_yticks()) == 9
+    assert np.asarray(figure.axes[2].images[0].get_array()).shape == (9, 5, 4)
+    caption = " ".join(" ".join(text.get_text() for text in figure.texts).lower().split())
+    assert "0.5" in caption and "probe doubt" in caption and "home expectancy" in caption
 
 
 def test_model_colors_are_stable_under_candidate_reordering(tmp_path, capture_figure):

@@ -1,6 +1,7 @@
 """Contracts for candidate expectant-switching models used on real sessions."""
 
 import numpy as np
+import pytest
 
 from src.behavior_modeling.benchmark_models import (
     ObservableHistory,
@@ -11,6 +12,8 @@ from src.behavior_modeling.expectant_switching import (
     HomeReferencedExpectancyDoubtParams,
     ProbePersistenceDoubtParams,
     replay_candidate_expectant_switching,
+    replay_home_referenced_expectancy_doubt,
+    replay_probe_persistence_doubt,
 )
 
 
@@ -93,4 +96,35 @@ def test_candidate_replay_is_causal_and_skips_invalid_rows() -> None:
             changed[column_name][2],
             equal_nan=True,
         )
+
+
+@pytest.mark.parametrize("replay,params,prefix", [
+    (replay_probe_persistence_doubt, ProbePersistenceDoubtParams(), "probe_persistence_doubt"),
+    (replay_home_referenced_expectancy_doubt, HomeReferencedExpectancyDoubtParams(),
+     "home_referenced_expectancy_doubt"),
+])
+def test_optional_update_mask_predicts_missing_reward_without_updating(replay, params, prefix):
+    """Replay/params/ID inputs separate prediction bool[T] from update bool[T]."""
+    actions = np.array([1, 0, 0, 1])
+    rewards = np.array([1., np.nan, 0., 1.])
+    valid = np.ones(4, bool)
+    update = np.array([True, False, True, True])
+    actual = replay(actions, rewards, valid, params, update_mask=update)
+    compressed = replay(actions[update], rewards[update], valid[update], params)
+    np.testing.assert_array_equal(actual[f"{prefix}_drive"][update], compressed[f"{prefix}_drive"])
+    assert np.isfinite(actual[f"{prefix}_prob_left"]).all()
+    assert actual[f"{prefix}_drive"][1] == actual[f"{prefix}_drive"][2]
+    for name in actual:
+        np.testing.assert_array_equal(actual[name][1], actual[name][2])
+    with pytest.raises(ValueError, match="reward"):
+        replay(actions, rewards, valid, params)  # Legacy default still requires complete outcomes.
+
+
+@pytest.mark.parametrize("update", [np.ones(2, bool), np.array([True, True, True])])
+def test_update_mask_must_be_aligned_and_subset_of_prediction_rows(update):
+    """Invalid bool[N] updates reject shape mismatches and updating excluded rows."""
+    with pytest.raises(ValueError, match="update_mask"):
+        replay_probe_persistence_doubt(
+            np.array([1, 0, 1]), np.array([1., 0., 1.]), np.array([True, False, True]),
+            ProbePersistenceDoubtParams(), update_mask=update)
 

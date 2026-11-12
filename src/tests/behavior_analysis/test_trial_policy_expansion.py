@@ -38,7 +38,7 @@ def replay(table, ids=ALL_IDS, params=None):
 
 def test_default_order_preserves_six_candidates_before_persistence():
     """No inputs; verify stable default identities and selectable subsets."""
-    assert models.DEFAULT_MODEL_IDS == ALL_IDS + ("immediate_persistence",)
+    assert models.DEFAULT_MODEL_IDS[:7] == ALL_IDS + ("immediate_persistence",)
     assert tuple(candidate.model_id for candidate in models.resolve_trial_policy_candidates()) == models.DEFAULT_MODEL_IDS
     assert tuple(candidate.model_id for candidate in models.resolve_trial_policy_candidates(NEW_IDS[::-1])) == NEW_IDS[::-1]
 
