@@ -6,7 +6,7 @@ locally so legacy feature behavior is unchanged.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import hashlib
 import json
 import re
@@ -22,6 +22,7 @@ from src.behavior_modeling.counterfactual_doubt import (
     counterfactual_doubt_raw_value,
     update_counterfactual_doubt,
 )
+from src.behavior_modeling import expectant_switching
 
 if TYPE_CHECKING:
     from src.behavior_analysis.gather_trial_features import TaskParams
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 DEFAULT_MODEL_IDS = (
     "forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
     "q_learning", "reward_decay_hmm", "ideal_observer",
-    "immediate_persistence",
+    "immediate_persistence", "probe_persistence_doubt", "home_referenced_expectancy_doubt",
 )
 FLAG_COLUMN_NAMES = ("give_reward", "experimenter_reward_given")
 _BELIEF_PARAMETER_NAMES = (
@@ -255,6 +256,15 @@ def resolve_trial_policy_candidates(
                              choice_rule="logistic", choice_temperature=.40),
         TrialPolicyCandidate("immediate_persistence", "Immediate persistence", _replay_immediate_persistence,
                              history_update_rule="observed_choice"),
+        TrialPolicyCandidate("probe_persistence_doubt", "Probe persistence doubt", _replay_probe_doubt,
+                             ("probe_doubt_persistence_weight", "probe_doubt_probe_weight",
+                              "probe_doubt_doubt_weight", "probe_doubt_lambda"),
+                             choice_rule="logistic", choice_temperature=.5),
+        TrialPolicyCandidate("home_referenced_expectancy_doubt", "Home-referenced expectancy doubt",
+                             _replay_home_expectancy_doubt,
+                             ("home_expectancy_threshold", "home_expectancy_scale", "home_expectancy_weight",
+                              "home_doubt_weight", "home_doubt_lambda"),
+                             choice_rule="logistic", choice_temperature=.5),
     )
     by_id = {definition.model_id: definition for definition in definitions}
     unknown = [model_id for model_id in model_ids if model_id not in by_id]
@@ -269,8 +279,9 @@ def effective_trial_policy_parameters(
     """Return validated plain parameters for each selected policy in order.
 
     candidates is a sequence of K definitions; feature_params is explicit
-    TaskParams. Returns dict[model_id,dict[str,scalar]], dimensionless policy
-    probabilities/scales and binary reward-indicator units. Unrelated fields
+    TaskParams. Returns dict[model_id,dict] with scalar parameters and a nested
+    home-expectancy curve. Weights/probabilities are dimensionless; home curves
+    use rewarded trials and doubt rates use inverse trials. Unrelated fields
     are excluded. Synthetic adapters may declare numeric parameter_names.
     """
     effective = {}
@@ -299,6 +310,10 @@ def effective_trial_policy_parameters(
                 parameters["omission_lam"] = _finite_parameter(feature_params, "omission_lam", 0, np.inf)
                 if parameters["omission_lam"] == 0:
                     raise ValueError("omission_lam must be strictly positive")
+        elif candidate.model_id == "probe_persistence_doubt":
+            parameters = asdict(_probe_doubt_parameters(feature_params))
+        elif candidate.model_id == "home_referenced_expectancy_doubt":
+            parameters = asdict(_home_expectancy_parameters(feature_params))
         else:
             parameters = {name: _finite_parameter(feature_params, name, -np.inf, np.inf)
                           for name in candidate.parameter_names}
@@ -382,6 +397,27 @@ def replay_trial_policy_candidates(
 
 
 # Private input and adapter helpers.
+def _probe_doubt_parameters(params: "TaskParams") -> expectant_switching.ProbePersistenceDoubtParams:
+    """Map scalar TaskParams fields to validated unitless weights and inverse-trial doubt rate."""
+    return expectant_switching.ProbePersistenceDoubtParams(
+        persistence_weight=params.probe_doubt_persistence_weight,
+        probe_weight=params.probe_doubt_probe_weight,
+        doubt_weight=params.probe_doubt_doubt_weight,
+        doubt_lambda=params.probe_doubt_lambda,
+    )
+
+
+def _home_expectancy_parameters(params: "TaskParams") -> expectant_switching.HomeReferencedExpectancyDoubtParams:
+    """Map TaskParams to home curve in rewarded trials, weights, and inverse-trial doubt rate."""
+    return expectant_switching.HomeReferencedExpectancyDoubtParams(
+        curve=expectant_switching.ExpectancyCurveParams(
+            threshold=params.home_expectancy_threshold, scale=params.home_expectancy_scale),
+        expectancy_weight=params.home_expectancy_weight,
+        doubt_weight=params.home_doubt_weight,
+        doubt_lambda=params.home_doubt_lambda,
+    )
+
+
 def _choice_temperature(value: Any, model_id: str) -> float:
     """Validate scalar temperature in model-score units; return positive finite float."""
     try:
@@ -539,3 +575,31 @@ def _replay_ideal_observer(history: PreparedTrialHistory, params: "TaskParams") 
             doubt_state = update_counterfactual_doubt(
                 doubt_state, int(history.actions[row]), float(history.rewards[row]))
     return scores, available
+
+
+def _replay_probe_doubt(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
+    """Replay history[T]/TaskParams; return unitless left-positive drive and bool availability[T].
+
+    The existing tanh readout equals logistic(drive / .5), so return the raw
+    decision drive rather than passing the bounded signed value through again.
+    Missing rewards preserve predictions but freeze all outcome-based history.
+    """
+    outputs = expectant_switching.replay_probe_persistence_doubt(
+        history.actions, history.rewards, history.comparison_valid, _probe_doubt_parameters(params),
+        update_mask=history.history_update_valid,
+    )
+    return _feature_arrays(outputs["probe_persistence_doubt_drive"], history.adapter_skip_flags)
+
+
+def _replay_home_expectancy_doubt(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
+    """Replay history[T]/TaskParams; return unitless left-positive drive and bool availability[T].
+
+    Logistic temperature .5 preserves the existing native probability readout.
+    Missing rewards freeze rewarded-home counts and doubt without suppressing
+    predictions. Each retained session starts with no rewarded home.
+    """
+    outputs = expectant_switching.replay_home_referenced_expectancy_doubt(
+        history.actions, history.rewards, history.comparison_valid, _home_expectancy_parameters(params),
+        update_mask=history.history_update_valid,
+    )
+    return _feature_arrays(outputs["home_referenced_expectancy_doubt_drive"], history.adapter_skip_flags)

@@ -4,6 +4,66 @@ Status: implemented and validated on 2026-11-08 after user approval. This extend
 first round in `trial_dynamax_hmm_implementation_plan.md` and follows the causal
 history and probability contracts in `trial_dynamax_hmm_spec.md`.
 
+2026-11-11 probe extension (v6): the user approved `probe_persistence_doubt` and
+`home_referenced_expectancy_doubt` as the eighth and ninth default candidates,
+using existing TaskParams defaults and native probabilities. Ordered subsets
+remain selectable. Thin trial-policy adapters reuse the existing model replays;
+they return raw decision drives with logistic temperature .5, which equals the
+native `(1+tanh(drive))/2` left-choice readout. Earlier candidates retain their
+replay and choice rules. Adding candidates changes normalized model probabilities
+and the destinations sharing the outer HMM's off-diagonal transition mass.
+
+The shared replay functions now accept an optional keyword-only `update_mask`.
+`valid_mask` controls prediction eligibility; `update_mask` is its observed-outcome
+subset and defaults to `valid_mask`, preserving existing feature/benchmark callers.
+Missing-reward animal choices receive predictions while freezing all probe-model
+state. Manual/no-choice/unknown-flag attempts emit no prediction and freeze state.
+No reward is fabricated. Home counts survive omissions and reset on an opposite
+reward, with initialization at the first retained row of each source session.
+
+Metadata v6 saves each selected probe's weights, curve/rate, readout temperature,
+and history rule, and includes the reused replay module in the source digest.
+Plots use the existing general membership grids with nine distinct labeled rows.
+No dependencies, fitting, HMM equations, or session worker changes are introduced.
+The two additional replays are linear in trial count; no optimization is needed.
+
+Tests were written, confirmed failing, and committed first as `98ceb9a`:
+native replay/readout parity with default and nondefault parameters, hand-calculated
+reward probes and omission returns, home-count persistence/reset, causal prefixes,
+fresh session/crop initialization, missing-reward predictions with frozen state,
+all ordinary exclusions, selected-parameter validation/cache identity, nine-state
+round trips, nine-row plots, and single/multisession ordered-subset integration.
+
+The final affected checks passed in isolated pytest processes: 313 trial-policy,
+replay, feature, benchmark-model, and plotting tests; 16 main trial-workflow tests;
+92 existing main-workflow tests; and 41 expectant/benchmark integration and report
+tests (462 total). Existing warnings remain the JAX/TFP deprecation and the
+intentional invalid-input Bayesian tests. No new dependency or library API is used.
+
+Synthetic validation passed with 140 deterministic trials, 137 eligible choices,
+and 136 complete outcome updates, including explicit home rewards, omitted probes,
+returns, ordinary exclusions, and a missing reward. The nine-row PNG was inspected.
+The approved CT026 2026-08-28 validation then passed with 699 retained trials and
+696 eligible choices/updates. All posterior rows are finite and normalized; the
+NPZ round trip and non-policy table columns match. Eight previous numerical
+artifacts, the prior current CSV, block CSV, and parameter file were preserved.
+Direct comparison with the preceding v5 artifact confirms that the original
+seven scores, choice probabilities, log likelihoods, and prediction masks are
+exactly unchanged on the same input history.
+
+The inspected v6 CT026 figure, report, driver, main/batch snapshots, and log are
+in (UTC timestamp, November 11 local date):
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/figures/trial_policy_hmm/2026-11-12_04-42-00_531635_UTC/`
+
+Independent maxima are unique on 602 of 696 scored choices, with all tied maxima
+retained on the other 94. Smoothed marginal maxima are unique on all 699 rows;
+this does not establish strong posterior certainty. The new probe and home
+models have the largest smoothed marginal on 16 and 36 rows respectively.
+These are descriptive conditional assignments without a statistical test or
+out-of-sample validation. No upstream analysis or experimental batch was run;
+user inspection remains the next step before any broader experimental run.
+
 2026-11-11 graded-choice extension (v5): the user approved ordinary logistic
 choices for the five graded candidates, with fixed temperatures QL=.14,
 FQL=.14, HMM=.40, decay HMM=.40, and observer=.40. These are explicit first-pass

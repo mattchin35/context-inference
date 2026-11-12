@@ -133,7 +133,8 @@ def test_validation_failure_records_parent_error_without_success_artifact(tmp_pa
     record = json.loads((logs[0].parent / "metadata.json").read_text())
     assert record["requested_options"]["error_prob"] == .1
     assert record["requested_options"]["model_ids"] == ["forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
-                                                         "q_learning", "reward_decay_hmm", "ideal_observer", "immediate_persistence"]
+                                                         "q_learning", "reward_decay_hmm", "ideal_observer", "immediate_persistence",
+                                                         "probe_persistence_doubt", "home_referenced_expectancy_doubt"]
     assert not list(source.session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
 
 

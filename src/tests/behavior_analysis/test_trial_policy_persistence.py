@@ -137,7 +137,7 @@ def test_seven_state_roundtrip_and_missing_reward_provenance(choices, tmp_path):
     assert smoothed.hmm_smoothed_probs.shape == (6, 7)
     np.testing.assert_allclose(smoothed.hmm_smoothed_probs.sum(axis=1), 1, atol=2e-6)
     np.testing.assert_allclose(smoothed.transition_matrix[0], [.9] + [.1 / 6] * 6)
-    candidates = models.resolve_trial_policy_candidates()
+    candidates = models.resolve_trial_policy_candidates(seven_ids)
     meta = results.build_trial_policy_metadata(history, candidates, TaskParams(), parameter_source="test")
     assert meta["candidate_history_update_rules"]["immediate_persistence"] == "observed_choice"
     assert meta["candidate_history_update_rules"]["win_stay_lose_switch"] == "observed_choice_and_reward"

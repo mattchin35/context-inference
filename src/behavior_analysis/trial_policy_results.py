@@ -27,11 +27,12 @@ if TYPE_CHECKING:
     from .trial_policy_models import PreparedTrialHistory, TrialPolicyCandidate
     from .gather_trial_features import TaskParams
 
-ANALYSIS_VERSION = "trial_policy_hmm_v5"
+ANALYSIS_VERSION = "trial_policy_hmm_v6"
 ANALYSIS_SOURCE_FILES = (
     "trial_policy_models.py", "trial_policy_analysis.py", "trial_policy_results.py",
     "trial_features.py", "project_utils.py", "gather_trial_features.py",
     "exemplar_hmm_modeling.py", "main.py", "../behavior_modeling/counterfactual_doubt.py",
+    "../behavior_modeling/expectant_switching.py",
 )
 
 

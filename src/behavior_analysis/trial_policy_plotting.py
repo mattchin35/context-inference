@@ -23,6 +23,8 @@ _KNOWN_COLORS = {
     "reward_decay_hmm": "#9467bd",
     "ideal_observer": "#8c564b",
     "immediate_persistence": "#17becf",
+    "probe_persistence_doubt": "#e377c2",
+    "home_referenced_expectancy_doubt": "#7f7f7f",
     "synthetic_fourth": "#9467bd",
 }
 _MODEL_LABELS = {
@@ -33,6 +35,8 @@ _MODEL_LABELS = {
     "reward_decay_hmm": "Decay HMM",
     "ideal_observer": "Observer",
     "immediate_persistence": "Persistence",
+    "probe_persistence_doubt": "Probe doubt",
+    "home_referenced_expectancy_doubt": "Home expectancy",
 }
 
 

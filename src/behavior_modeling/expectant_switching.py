@@ -417,7 +417,8 @@ def _validated_replay_arrays(
     actions: np.ndarray,
     rewards: np.ndarray,
     valid_mask: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    update_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return validated aligned arrays for one causal model replay.
 
     Parameters
@@ -427,13 +428,16 @@ def _validated_replay_arrays(
     rewards : ndarray, shape (n_trials,)
         Reward amounts in task units; positive means rewarded.
     valid_mask : ndarray of bool, shape (n_trials,)
-        Rows that emit a pre-trial value and update model state afterward.
+        Rows that emit a pre-trial value, with a valid binary action.
+    update_mask : ndarray of bool, shape (n_trials,), optional
+        Subset of valid_mask with observed outcomes that update history.
+        Defaults to valid_mask. Rewards need only be finite on update rows.
 
     Returns
     -------
     tuple of ndarray
-        Action, reward, and boolean validity arrays, each with shape
-        ``(n_trials,)``. Invalid-row action and reward values are not read.
+        Action, reward, prediction-valid, and update-valid arrays, each with
+        shape ``(n_trials,)``. Excluded-row observations are not read.
     """
     action_array = np.asarray(actions)
     reward_array = np.asarray(rewards, dtype=float)
@@ -442,12 +446,18 @@ def _validated_replay_arrays(
         raise ValueError("actions, rewards, and valid_mask must be one-dimensional.")
     if not (action_array.shape == reward_array.shape == validity.shape):
         raise ValueError("actions, rewards, and valid_mask must have matching shapes.")
+    updates = validity if update_mask is None else np.asarray(update_mask, dtype=bool)
+    if updates.shape != validity.shape:
+        raise ValueError("update_mask must have the same one-dimensional shape as valid_mask.")
+    if np.any(updates & ~validity):
+        raise ValueError("update_mask must be a subset of valid_mask.")
     for trial_index in np.flatnonzero(validity):
-        _validate_valid_observation(
-            int(action_array[trial_index]),
-            float(reward_array[trial_index]),
-        )
-    return action_array, reward_array, validity
+        action = int(action_array[trial_index])
+        if action not in (0, 1):
+            raise ValueError("action must be 0 (right) or 1 (left).")
+        if updates[trial_index]:
+            _validate_valid_observation(action, float(reward_array[trial_index]))
+    return action_array, reward_array, validity, updates
 
 
 def replay_probe_persistence_doubt(
@@ -455,6 +465,8 @@ def replay_probe_persistence_doubt(
     rewards: np.ndarray,
     valid_mask: np.ndarray,
     params: ProbePersistenceDoubtParams,
+    *,
+    update_mask: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Replay persistence, reward-probe, and omission-doubt signals.
 
@@ -465,10 +477,14 @@ def replay_probe_persistence_doubt(
     rewards : ndarray, shape (n_trials,)
         Reward amounts in task units; positive means rewarded.
     valid_mask : ndarray of bool, shape (n_trials,)
-        Valid completed choice/outcome rows. False rows neither emit values nor
-        update model history.
+        Prediction-eligible choice rows. False rows neither emit values nor
+        update model history. Defaults require complete outcomes on True rows.
     params : ProbePersistenceDoubtParams
         Fixed nonnegative component weights and positive doubt rate.
+    update_mask : ndarray of bool, shape (n_trials,), optional
+        Subset of valid_mask with observed rewards. Defaults to valid_mask.
+        False rows freeze both previous-outcome and doubt history, even when
+        valid_mask is True and a prediction is emitted.
 
     Returns
     -------
@@ -477,8 +493,8 @@ def replay_probe_persistence_doubt(
         arrays. Every array has shape ``(n_trials,)``; invalid rows are NaN and
         signed values are left-positive.
     """
-    action_array, reward_array, validity = _validated_replay_arrays(
-        actions, rewards, valid_mask
+    action_array, reward_array, validity, updates = _validated_replay_arrays(
+        actions, rewards, valid_mask, update_mask
     )
     column_names = (
         "probe_persistence_doubt_previous_choice",
@@ -521,10 +537,11 @@ def replay_probe_persistence_doubt(
         outputs["probe_persistence_doubt_value"][trial_index] = readout.signed_value
         outputs["probe_persistence_doubt_prob_left"][trial_index] = readout.p_left
 
-        action = int(action_array[trial_index])
-        reward = float(reward_array[trial_index])
-        previous_state = update_previous_outcome(previous_state, action, reward)
-        doubt_state = update_counterfactual_doubt(doubt_state, action, reward)
+        if updates[trial_index]:
+            action = int(action_array[trial_index])
+            reward = float(reward_array[trial_index])
+            previous_state = update_previous_outcome(previous_state, action, reward)
+            doubt_state = update_counterfactual_doubt(doubt_state, action, reward)
 
     return outputs
 
@@ -534,6 +551,8 @@ def replay_home_referenced_expectancy_doubt(
     rewards: np.ndarray,
     valid_mask: np.ndarray,
     params: HomeReferencedExpectancyDoubtParams,
+    *,
+    update_mask: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Replay reward-confirmed home expectancy plus omission doubt.
 
@@ -544,10 +563,14 @@ def replay_home_referenced_expectancy_doubt(
     rewards : ndarray, shape (n_trials,)
         Reward amounts in task units; positive means rewarded.
     valid_mask : ndarray of bool, shape (n_trials,)
-        Valid completed choice/outcome rows. False rows neither emit values nor
-        update model history.
+        Prediction-eligible choice rows. False rows neither emit values nor
+        update model history. Defaults require complete outcomes on True rows.
     params : HomeReferencedExpectancyDoubtParams
         Fixed expectancy curve, component weights, and doubt rate.
+    update_mask : ndarray of bool, shape (n_trials,), optional
+        Subset of valid_mask with observed rewards. Defaults to valid_mask.
+        False rows freeze both reward-confirmed home and doubt history, even
+        when valid_mask is True and a prediction is emitted.
 
     Returns
     -------
@@ -556,8 +579,8 @@ def replay_home_referenced_expectancy_doubt(
         arrays. Every array has shape ``(n_trials,)``; invalid rows are NaN and
         signed values are left-positive.
     """
-    action_array, reward_array, validity = _validated_replay_arrays(
-        actions, rewards, valid_mask
+    action_array, reward_array, validity, updates = _validated_replay_arrays(
+        actions, rewards, valid_mask, update_mask
     )
     column_names = (
         "home_referenced_expectancy_doubt_confirmed_side",
@@ -614,12 +637,13 @@ def replay_home_referenced_expectancy_doubt(
         outputs["home_referenced_expectancy_doubt_value"][trial_index] = readout.signed_value
         outputs["home_referenced_expectancy_doubt_prob_left"][trial_index] = readout.p_left
 
-        action = int(action_array[trial_index])
-        reward = float(reward_array[trial_index])
-        expectancy_state = update_reward_confirmed_expectancy(
-            expectancy_state, action, reward
-        )
-        doubt_state = update_counterfactual_doubt(doubt_state, action, reward)
+        if updates[trial_index]:
+            action = int(action_array[trial_index])
+            reward = float(reward_array[trial_index])
+            expectancy_state = update_reward_confirmed_expectancy(
+                expectancy_state, action, reward
+            )
+            doubt_state = update_counterfactual_doubt(doubt_state, action, reward)
 
     return outputs
 

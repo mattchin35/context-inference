@@ -48,6 +48,24 @@ WSLS and immediate persistence retain the discrete opposite-action error .10.
 There is no probability floor, 0.1-0.9 cap, fitted temperature, or neutral band for
 graded choices. Learning/decay rules and the outer HMM transition rule are unchanged.
 
+**Probe extension (2026-11-11, v6):** append `probe_persistence_doubt` and
+`home_referenced_expectancy_doubt` as the eighth and ninth defaults, retaining
+ordered subsets. Both reuse `behavior_modeling.expectant_switching` replays and
+the existing TaskParams defaults. The first combines previous-choice persistence,
+a reward-triggered probe, and omission doubt (weights 1, 2, 1.4; doubt rate .5).
+The second combines rewarded-home expectancy and omission doubt (threshold 2.5,
+scale .5 rewarded trials; weights 1 and 1; doubt rate .5). Omissions preserve its
+rewarded-home count; a reward on the other side starts a new home episode.
+
+For these two adapters, the score is the unbounded pre-choice decision drive.
+Temperature .5 gives `P(Left)=expit(2*drive)=(1+tanh(drive))/2`, preserving their
+native probabilities. Do not apply the logistic readout to their bounded signed
+values. Missing rewards retain predictions while freezing all probe-model state;
+no choice, reward, or omission is imputed. The existing replay APIs accept an
+optional keyword-only update mask; omitted masks preserve all previous callers.
+The seven earlier candidates retain their scores and choice rules. Normalized
+model probabilities and HMM assignments may change with the expanded candidate set.
+
 Those future adapters must use the raw causal policy values. Session-wide residualized columns such as `HMM_decay_res` and `rel_hazard_res` can depend on later observations and are not substitutes for these policies.
 
 Use a small ordered collection of candidate definitions and ordinary adapter functions. Each adapter receives one chronological session's observed history and explicit parameters, and returns aligned left-positive pre-choice scores and prediction availability, each with shape `(n_trials,)`. Its definition records its stable ID, parameter provenance, and indifference rule. Common stages operate on `(n_trials, n_models)` arrays and model labels; they must not assume exactly three models. Avoid a new agent class hierarchy or plugin framework.
@@ -131,11 +149,13 @@ P(Left)  = expit(s / temperature_m)
 P(Right) = expit(-s / temperature_m)
 ```
 
-The fixed defaults are QL=.14, FQL=.14, HMM=.40, decay HMM=.40, and observer=.40.
-These scales were chosen to approximate 90% preference after one reward from
+The fixed defaults are QL=.14, FQL=.14, HMM=.40, decay HMM=.40, observer=.40,
+and both probe models=.50 on their raw decision drives.
+The original five scales were chosen to approximate 90% preference after one reward from
 neutral initialization with default learning parameters; they are assumptions,
 not fitted animal parameters. Use the existing transformed belief scores for
-the HMMs and existing belief-minus-doubt score for the observer. Do not reinterpret
+the HMMs and existing belief-minus-doubt score for the observer. Probe-model .50
+instead reproduces each existing native readout. Do not reinterpret
 those scores as context probabilities, or normalize them using session data.
 
 Zero score gives exact 50/50; a shrinking nonzero score approaches 50/50 smoothly.
