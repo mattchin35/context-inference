@@ -5,7 +5,7 @@ pre-choice feature implementations, with common history exclusions normalized
 locally so legacy feature behavior is unchanged.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -77,6 +77,8 @@ class TrialPolicyCandidate:
     and indifference_rule are strings for plain saved provenance. The default
     history_update_rule requires an observed choice/outcome pair; choice-only
     persistence records observed_choice instead and does not require reward.
+    choice_rule is fixed_error or logistic; choice_temperature is a positive
+    fixed scale in this adapter's score units for logistic choices, else None.
     """
 
     model_id: str
@@ -85,6 +87,8 @@ class TrialPolicyCandidate:
     parameter_names: tuple[str, ...] = ()
     indifference_rule: str = "exact_zero"
     history_update_rule: str = "observed_choice_and_reward"
+    choice_rule: str = "fixed_error"
+    choice_temperature: float | None = None
 
 
 # Public computational functions.
@@ -234,16 +238,21 @@ def resolve_trial_policy_candidates(
     if len(set(model_ids)) != len(model_ids):
         raise ValueError("model_ids contains duplicate policy IDs")
     definitions = (
-        TrialPolicyCandidate("forgetting_q_learning", "Forgetting Q-learning", _replay_fql, ("FQL_decay", "n_actions")),
-        TrialPolicyCandidate("bayesian_hmm", "Bayesian HMM", _replay_bayesian, _BELIEF_PARAMETER_NAMES),
+        TrialPolicyCandidate("forgetting_q_learning", "Forgetting Q-learning", _replay_fql, ("FQL_decay", "n_actions"),
+                             choice_rule="logistic", choice_temperature=.14),
+        TrialPolicyCandidate("bayesian_hmm", "Bayesian HMM", _replay_bayesian, _BELIEF_PARAMETER_NAMES,
+                             choice_rule="logistic", choice_temperature=.40),
         TrialPolicyCandidate("win_stay_lose_switch", "Win-stay lose-switch", _replay_wsls),
-        TrialPolicyCandidate("q_learning", "Q-learning", _replay_q_learning, ("QL_learning_rate", "n_actions")),
+        TrialPolicyCandidate("q_learning", "Q-learning", _replay_q_learning, ("QL_learning_rate", "n_actions"),
+                             choice_rule="logistic", choice_temperature=.14),
         TrialPolicyCandidate("reward_decay_hmm", "Reward-decay HMM", _replay_reward_decay_hmm,
                              _BELIEF_PARAMETER_NAMES + ("hmm_reward_decay_lambda",),
-                             "exact_zero_after_equal_belief_correction"),
+                             "exact_zero_after_equal_belief_correction",
+                             choice_rule="logistic", choice_temperature=.40),
         TrialPolicyCandidate("ideal_observer", "Ideal observer", _replay_ideal_observer,
                              _BELIEF_PARAMETER_NAMES + ("hmm_reward_decay_lambda", "omission_lam"),
-                             "exact_zero_after_belief_correction_and_raw_doubt_subtraction"),
+                             "exact_zero_after_belief_correction_and_raw_doubt_subtraction",
+                             choice_rule="logistic", choice_temperature=.40),
         TrialPolicyCandidate("immediate_persistence", "Immediate persistence", _replay_immediate_persistence,
                              history_update_rule="observed_choice"),
     )
@@ -297,6 +306,42 @@ def effective_trial_policy_parameters(
     return effective
 
 
+def effective_trial_policy_choice_parameters(
+    candidates: Sequence[TrialPolicyCandidate], *, temperatures: Mapping[str, float] | None = None,
+    error_prob: float = .10,
+) -> dict[str, dict[str, Any]]:
+    """Resolve fixed choice rules for K selected candidates, without fitting.
+
+    candidates is ordered length K. Optional temperatures maps graded model IDs
+    to finite positive scales in that model's signed-score units; omitted IDs
+    use declared defaults. Known unselected graded IDs may be supplied for reuse
+    of one configuration with subsets. error_prob is the discrete policies'
+    dimensionless opposite-action probability. Returns a plain per-ID mapping
+    containing rule/temperature or rule/error settings for selected IDs only.
+    """
+    error = float(error_prob)
+    if not np.isfinite(error) or not 0 < error < .5 or not 0 < 1 - error < 1:
+        raise ValueError("error probability and its complement must be representable inside (0,1), error < .5")
+    overrides = {} if temperatures is None else dict(temperatures)
+    known_graded = {candidate.model_id for candidate in (*resolve_trial_policy_candidates(), *candidates)
+                    if candidate.choice_rule == "logistic"}
+    unknown = set(overrides) - known_graded
+    if unknown:
+        raise ValueError(f"Temperatures require graded policy IDs; invalid IDs: {sorted(unknown)}")
+    overrides = {model_id: _choice_temperature(value, model_id) for model_id, value in overrides.items()}
+    effective = {}
+    for candidate in candidates:
+        if candidate.choice_rule == "logistic":
+            temperature = _choice_temperature(overrides.get(candidate.model_id, candidate.choice_temperature),
+                                              candidate.model_id)
+            effective[candidate.model_id] = {"rule": "logistic", "temperature": temperature}
+        elif candidate.choice_rule == "fixed_error":
+            effective[candidate.model_id] = {"rule": "fixed_error", "opposite_action_error_prob": error}
+        else:
+            raise ValueError(f"Unknown choice rule for {candidate.model_id}: {candidate.choice_rule}")
+    return effective
+
+
 def replay_trial_policy_candidates(
     history: PreparedTrialHistory,
     candidates: Sequence[TrialPolicyCandidate],
@@ -337,6 +382,17 @@ def replay_trial_policy_candidates(
 
 
 # Private input and adapter helpers.
+def _choice_temperature(value: Any, model_id: str) -> float:
+    """Validate scalar temperature in model-score units; return positive finite float."""
+    try:
+        temperature = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{model_id} temperature must be finite and positive") from error
+    if not np.isfinite(temperature) or temperature <= 0:
+        raise ValueError(f"{model_id} temperature must be finite and positive")
+    return temperature
+
+
 def _parse_binary_value(value: Any, context: str, field: str, *, unknown_allowed: bool = False) -> float:
     """Parse scalar dimensionless observation to exact float 0/1 or missing NaN.
 

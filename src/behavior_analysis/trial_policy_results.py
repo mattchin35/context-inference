@@ -4,6 +4,7 @@ Numerical arrays retain `(T,)` trial and `(T,K)` ordered-candidate axes. All
 choice probabilities/residuals are dimensionless; likelihoods are natural logs.
 """
 
+from collections.abc import Mapping
 from dataclasses import fields
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -16,7 +17,9 @@ from typing import Any, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from .trial_policy_models import effective_trial_policy_parameters, prepare_trial_policy_history
+from .trial_policy_models import (
+    effective_trial_policy_choice_parameters, effective_trial_policy_parameters, prepare_trial_policy_history,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -24,7 +27,7 @@ if TYPE_CHECKING:
     from .trial_policy_models import PreparedTrialHistory, TrialPolicyCandidate
     from .gather_trial_features import TaskParams
 
-ANALYSIS_VERSION = "trial_policy_hmm_v4"
+ANALYSIS_VERSION = "trial_policy_hmm_v5"
 ANALYSIS_SOURCE_FILES = (
     "trial_policy_models.py", "trial_policy_analysis.py", "trial_policy_results.py",
     "trial_features.py", "project_utils.py", "gather_trial_features.py",
@@ -35,12 +38,15 @@ ANALYSIS_SOURCE_FILES = (
 def build_trial_policy_metadata(history: "PreparedTrialHistory", candidates: "Sequence[TrialPolicyCandidate]",
                                 feature_params: "TaskParams", *, parameter_source: str,
                                 error_prob=0.10, stay_prob=0.90, smoothing=True,
-                                probability_tie_atol=1e-6) -> dict[str, Any]:
+                                probability_tie_atol=1e-6,
+                                choice_temperatures: Mapping[str, float] | None = None) -> dict[str, Any]:
     """Build JSON-compatible provenance and deterministic cache identity.
 
     history has T retained source-session rows; candidates is ordered K
     adapters; feature_params contains effective TaskParams. Probabilities and
     transition settings are dimensionless; returned metadata is plain data.
+    choice_temperatures optionally overrides fixed graded-model temperatures
+    by ID, in model-score units. No parameters are fitted or session-normalized.
     """
     from .trial_policy_analysis import trial_policy_transition_matrix
 
@@ -53,6 +59,8 @@ def build_trial_policy_metadata(history: "PreparedTrialHistory", candidates: "Se
     if not np.isfinite(probability_tie_atol) or probability_tie_atol < 0:
         raise ValueError("probability_tie_atol must be finite and nonnegative")
     effective = effective_trial_policy_parameters(candidates, feature_params)
+    choice_parameters = effective_trial_policy_choice_parameters(
+        candidates, temperatures=choice_temperatures, error_prob=error_prob)
     packages = {}
     for package in ("numpy", "pandas", "scipy", "jax", "dynamax"):
         try:
@@ -69,6 +77,10 @@ def build_trial_policy_metadata(history: "PreparedTrialHistory", candidates: "Se
                        "probability_tie_atol": float(probability_tie_atol),
                        "candidate_ids": [c.model_id for c in candidates]},
         "candidate_parameters": effective,
+        "candidate_choice_parameters": choice_parameters,
+        "choice_temperature_source": "approved fixed defaults" if choice_temperatures is None
+                                     else "explicit overrides plus approved fixed defaults",
+        "choice_probability_definition": "logistic P(Left)=expit(score/temperature), no cap or lapse; discrete policies use fixed opposite-action error",
         "parameter_source": str(parameter_source),
         "input_digest": history.metadata["input_digest"],
         "source_flag_columns": list(history.metadata["source_flag_columns"]),
@@ -80,6 +92,7 @@ def build_trial_policy_metadata(history: "PreparedTrialHistory", candidates: "Se
         "analysis_source_digest": _analysis_source_digest(),
         "units": {"probabilities": "unitless", "log_likelihoods": "natural log probability",
                   "policy_scores": "dimensionless; Q-learning/FQL use reward-indicator scale",
+                  "choice_temperatures": "same units as each model's signed policy score",
                   "omission_counts": "trials", "omission_lam": "inverse trials"},
         "axis_conventions": {"arrays": "retained trial rows by ordered candidate IDs",
                              "actions": "0=Right, 1=Left", "states": "zero-based candidate indices"},
@@ -186,7 +199,7 @@ def attach_trial_policy_outputs(trial_df: pd.DataFrame, result: "TrialPolicyResu
         elif name.endswith("_tie"):
             series = pd.array(np.where(np.asarray(values) < 0, pd.NA, values), dtype="boolean")
         output[column] = series
-    for name in ("prediction_valid", "model_indifferent", "greedy_choice", "p_right", "log_likelihoods",
+    for name in ("policy_scores", "prediction_valid", "model_indifferent", "greedy_choice", "p_right", "log_likelihoods",
                  "choice_residuals", "independent_probs", "independent_best_model_mask",
                  "hmm_smoothed_probs", "hmm_smoothed_best_model_mask"):
         values = getattr(result, name, None)

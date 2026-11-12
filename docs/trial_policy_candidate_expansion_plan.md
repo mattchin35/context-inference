@@ -4,6 +4,61 @@ Status: implemented and validated on 2026-11-08 after user approval. This extend
 first round in `trial_dynamax_hmm_implementation_plan.md` and follows the causal
 history and probability contracts in `trial_dynamax_hmm_spec.md`.
 
+2026-11-11 graded-choice extension (v5): the user approved ordinary logistic
+choices for the five graded candidates, with fixed temperatures QL=.14,
+FQL=.14, HMM=.40, decay HMM=.40, and observer=.40. These are explicit first-pass
+assumptions calibrated to approximately 90% preference after one reward from a
+neutral state with default learning parameters. They are not fitted or adjusted
+using session ranges. WSLS and persistence retain their .10 discrete error.
+
+The implementation adds candidate choice-rule declarations and one common
+probability/log-likelihood conversion. Graded likelihoods use `log_expit` directly
+for numerical stability; no 0.1-0.9 cap, neutral band, lapse, or new history update
+is introduced. Greedy directions remain diagnostics, and raw signed scores are
+saved as `policy_scores[T,K]`. Legacy NPZs without that optional array still load.
+
+`SingleSessionAnalysisConfig.trial_policy_temperatures`, the single runner's
+`choice_temperatures`, and multisession `trial_policy_temperatures` accept partial
+fixed overrides keyed by graded model ID. For example, `{"q_learning": .20}`
+changes only QL's readout temperature. Defaults for other selected models remain
+fixed; discrete/unknown model temperature keys are rejected. Effective choice
+settings and their source enter cache identity and figure captions. The generic
+low-level comparison keeps its original fixed-error behavior when choice settings
+are omitted for API compatibility; normal main workflows explicitly resolve and
+pass the selected candidates' graded/discrete settings.
+
+Tests were written, confirmed failing, and committed first as `27858fa`.
+The affected checks passed: 297 trial-policy/feature/observer/plotting tests,
+92 existing main-workflow tests, and 15 single/multisession trial-workflow tests
+(404 total). Tests cover zero/symmetry/monotonicity, uncapped choices, stable
+extreme log likelihoods, FQL decay to 50/50, preserved replay eligibility,
+temperature overrides and permutation, raw-score round trips, old archives,
+cache identity, discrete policies, and matching serial/threaded source outputs.
+
+Full-pipeline validation then passed on the 140-trial synthetic history and the
+current CT026 2026-08-28 processed table (699 rows, 696 eligible comparisons).
+Logistic probabilities and stable log likelihoods were checked directly against
+the saved raw scores and fixed temperatures. Seven previous numerical artifacts,
+the prior current CSV, block outputs, parameter file, and non-policy columns were
+preserved. No experimental batch or upstream feature analysis was run.
+
+Among the 696 eligible CT026 comparisons, probabilities fell within 45-55% on
+24 FQL, 34 QL, 19 decay-HMM, 14 observer, and 1 full-HMM trials. These descriptive
+counts include the neutral initialization and do not apply a hard neutral band.
+Independent maxima were unique on 571 scored trials; smoothed marginal maxima
+were unique on all 699 retained rows. A unique maximum is not necessarily a
+high posterior probability. Bayesian HMM and WSLS may still agree in direction,
+but their graded versus fixed confidence now yields different likelihoods.
+
+The inspected v5 PNG, validation report, saved driver, and script/log snapshots
+are in (UTC timestamp, November 11 local date):
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/figures/trial_policy_hmm/2026-11-12_03-59-49_805169_UTC/`
+
+The report distinguishes exact choice-probability agreement from greedy-direction
+agreement, records the effective choice settings, and links immutable v5 arrays.
+Figure captions distinguish logistic temperatures from discrete-policy error.
+
 2026-11-11 extension: the user approved a seventh default, `immediate_persistence`,
 and choice-memory updates despite missing rewards. Its definition is reused from
 the existing benchmark model. A shared `trial_features.immediate_persistence_regressor`

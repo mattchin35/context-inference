@@ -1,11 +1,11 @@
 """Bernoulli comparison and retrospective smoothing of fixed causal policies."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 import jax.numpy as jnp
 import numpy as np
-from scipy.special import softmax
+from scipy.special import expit, log_expit, softmax
 from scipy.stats import bernoulli
 
 from .exemplar_hmm_modeling import (
@@ -32,6 +32,8 @@ class TrialPolicyResult:
     Identifiers are Unicode; row_position is int64[T], original retained order.
     history_update_valid marks usable choice/outcome pairs; the choice-only
     persistence policy uses eligible choices even when that flag is False.
+    Optional policy_scores contains raw float64[T,K] left-positive scores;
+    archives predating graded choices load with this field set to None.
     """
 
     model_ids: np.ndarray
@@ -61,6 +63,7 @@ class TrialPolicyResult:
     hmm_smoothed_best_model_mask: np.ndarray | None = None
     hmm_smoothed_state: np.ndarray | None = None
     hmm_smoothed_tie: np.ndarray | None = None
+    policy_scores: np.ndarray | None = None
 
 
 def assign_unique_probability_maxima(
@@ -99,6 +102,7 @@ def compute_trial_policy_comparison(
     history: PreparedTrialHistory, scores: np.ndarray, prediction_valid: np.ndarray,
     model_ids: Sequence[str], *, opposite_action_error_prob: float = .10,
     probability_tie_atol: float = PROBABILITY_TIE_ATOL,
+    choice_parameters: Mapping[str, Mapping] | None = None,
 ) -> TrialPolicyResult:
     """Compare pre-choice policies on a common animal-choice eligibility mask.
 
@@ -108,6 +112,12 @@ def compute_trial_policy_comparison(
     error probability is strictly between zero and .5, with a representable
     complement below one. Returns full-row TrialPolicyResult, without HMM fields
     or I/O. Unavailable comparisons have NaN likelihoods/probabilities/residuals.
+    choice_parameters maps each model ID to a logistic rule/positive temperature
+    in score units or a fixed-error rule/error probability. None preserves the
+    original fixed-error interface for generic callers. Normal workflows pass
+    candidate-specific settings. Logistic likelihoods are evaluated directly in
+    log space without clipping choice probabilities. policy_scores saves (T,K)
+    raw values; greedy_choice is a direction diagnostic rather than a likelihood.
     """
     error = float(opposite_action_error_prob)
     if not np.isfinite(error) or not 0 < error < .5 or not 0 < 1 - error < 1:
@@ -127,16 +137,14 @@ def compute_trial_policy_comparison(
     greedy = np.full(shape, -1, dtype=np.int8)
     greedy[available & (scores < 0)] = 0
     greedy[available & (scores > 0)] = 1
-    probabilities = np.full(shape, np.nan)
-    probabilities[greedy == 0] = 1 - error
-    probabilities[greedy == 1] = error
-    probabilities[indifferent] = .5
+    probabilities, log_right, log_left = _choice_probability_arrays(scores, available, ids, choice_parameters, error)
     comparison_valid = history.comparison_valid & available.all(axis=1)
     likelihoods = np.full(shape, np.nan)
     residuals = np.full(shape, np.nan)
     independent = np.full(shape, np.nan)
     y_right = 1 - history.actions[comparison_valid]
-    likelihoods[comparison_valid] = bernoulli.logpmf(y_right[:, None], p=probabilities[comparison_valid])
+    likelihoods[comparison_valid] = np.where(y_right[:, None] == 1,
+                                            log_right[comparison_valid], log_left[comparison_valid])
     residuals[comparison_valid] = y_right[:, None] - probabilities[comparison_valid]
     if comparison_valid.any():
         independent[comparison_valid] = softmax(likelihoods[comparison_valid], axis=1)
@@ -150,7 +158,60 @@ def compute_trial_policy_comparison(
         history.actions.copy(), comparison_valid, history.history_update_valid.copy(), np.asarray(reasons, dtype=str),
         history.history_update_exclusion_reason.copy(), available.copy(), indifferent, greedy, probabilities,
         likelihoods, residuals, independent, best, states, ties, status,
+        policy_scores=np.where(available, scores, np.nan),
     )
+
+
+def _choice_probability_arrays(
+    scores: np.ndarray, available: np.ndarray, model_ids: Sequence[str],
+    choice_parameters: Mapping[str, Mapping] | None, default_error: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Convert validated left-positive float[T,K] scores to choice/log-probability arrays.
+
+    available is bool[T,K]; ordered IDs and per-ID plain choice settings define
+    K columns. Temperatures have score units and default_error is unitless.
+    Returns three float64[T,K] arrays: p_right, log P(Right), log P(Left).
+    Unavailable entries stay NaN. Finite logits yield finite log likelihoods,
+    including when expit rounds a displayed probability to zero or one.
+    """
+    parameters = choice_parameters
+    if parameters is None:
+        parameters = {model_id: {"rule": "fixed_error", "opposite_action_error_prob": default_error}
+                      for model_id in model_ids}
+    if set(parameters) != set(model_ids):
+        raise ValueError("Choice parameter IDs must match the selected model IDs")
+    probabilities = np.full(scores.shape, np.nan)
+    log_right = np.full(scores.shape, np.nan)
+    log_left = np.full(scores.shape, np.nan)
+    for column, model_id in enumerate(model_ids):
+        settings = parameters[model_id]
+        rows = available[:, column]
+        values = scores[rows, column]
+        if settings.get("rule") == "logistic":
+            try:
+                temperature = float(settings["temperature"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError(f"{model_id} temperature must be finite and positive") from error
+            if not np.isfinite(temperature) or temperature <= 0:
+                raise ValueError(f"{model_id} temperature must be finite and positive")
+            with np.errstate(over="ignore", invalid="ignore"):
+                logits = values / temperature
+            if not np.isfinite(logits).all():
+                raise ValueError(f"{model_id} temperature produces non-finite choice logits")
+            probabilities[rows, column] = expit(-logits)
+            log_right[rows, column] = log_expit(-logits)
+            log_left[rows, column] = log_expit(logits)
+        elif settings.get("rule") == "fixed_error":
+            error = float(settings.get("opposite_action_error_prob", default_error))
+            if not np.isfinite(error) or not 0 < error < .5 or not 0 < 1 - error < 1:
+                raise ValueError(f"{model_id} error probability must be representable inside (0, .5)")
+            right = np.where(values > 0, error, np.where(values < 0, 1 - error, .5))
+            probabilities[rows, column] = right
+            log_right[rows, column] = bernoulli.logpmf(1, p=right)
+            log_left[rows, column] = bernoulli.logpmf(0, p=right)
+        else:
+            raise ValueError(f"Unknown choice rule for {model_id}: {settings.get('rule')}")
+    return probabilities, log_right, log_left
 
 
 def trial_policy_transition_matrix(num_models: int, stay_prob: float) -> np.ndarray:

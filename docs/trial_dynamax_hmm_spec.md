@@ -4,7 +4,11 @@
 
 Extend the **existing block-level fixed-exemplar/Dynamax analysis** to operate on individual trials.
 
-Each candidate model uses the mouse’s actual preceding choices and rewards to recommend a greedy Left or Right choice. Convert that recommendation into a probabilistic policy using a common error rate, calculate the likelihood of the mouse’s observed choice, and optionally smooth the model assignments using the existing Dynamax infrastructure.
+Each candidate model uses the mouse's actual preceding observed history to produce
+a pre-choice signed score. Convert graded scores to logistic choice probabilities,
+and discrete recommendations to fixed-error probabilities, then calculate the
+likelihood of the mouse's observed choice. Optionally smooth model assignments
+using the existing Dynamax infrastructure. No choices or rewards are sampled.
 
 **Approved first-round candidates, in fixed order:**
 
@@ -37,11 +41,22 @@ manual rewards, invalid switches/no-choice attempts, and unknown manual flags
 still freeze it. This choice-only exception is approved explicitly and saved in
 the v4 metadata. The outer HMM's policy-state persistence is a separate concept.
 
+**Graded-choice extension (2026-11-11, v5):** QL, FQL, HMM, decay HMM, and the ideal
+observer now use ordinary logistic choices from their existing signed scores.
+Fixed temperatures are .14 for QL/FQL and .40 for both HMMs and the observer.
+WSLS and immediate persistence retain the discrete opposite-action error .10.
+There is no probability floor, 0.1-0.9 cap, fitted temperature, or neutral band for
+graded choices. Learning/decay rules and the outer HMM transition rule are unchanged.
+
 Those future adapters must use the raw causal policy values. Session-wide residualized columns such as `HMM_decay_res` and `rel_hazard_res` can depend on later observations and are not substitutes for these policies.
 
 Use a small ordered collection of candidate definitions and ordinary adapter functions. Each adapter receives one chronological session's observed history and explicit parameters, and returns aligned left-positive pre-choice scores and prediction availability, each with shape `(n_trials,)`. Its definition records its stable ID, parameter provenance, and indifference rule. Common stages operate on `(n_trials, n_models)` arrays and model labels; they must not assume exactly three models. Avoid a new agent class hierarchy or plugin framework.
 
-Use one FQL candidate initially. The current standard and fast-learn FQL features have the same decay and differ only in positive reward-update scaling from zero initialization; they have the same greedy policy. Duplicating that policy would change prior mass without adding distinguishable predictions.
+Use one FQL candidate. The standard and fast-learn FQL features have the same
+decay and differ by positive reward-update scaling from zero initialization, so
+they had identical predictions under the first-round sign-only readout. With
+graded choices, score scaling affects probabilities unless temperature is scaled
+with it. The fast-learn candidate is not added by this extension.
 
 This task does **not** require new behavioral-model fitting, learning new HMM emissions, or simulated choices/rewards.
 
@@ -107,9 +122,30 @@ Existing `min_time`/`max_time` preprocessing can trim a session before feature g
 
 **Approved cropping behavior:** for intentionally cropped sessions, preserve current first-retained-row initialization in round one. Do not replay the omitted earlier history or reuse precomputed scores that include it. Full-session inputs are unaffected. Record the retained range and initialization convention; do not claim that a cropped replay uses unobserved earlier history.
 
-## 3. Convert greedy recommendations to choice probabilities
+## 3. Convert scores to choice probabilities
 
-Use one configurable parameter shared by all models:
+For each graded candidate m, use its existing left-positive signed score s:
+
+```text
+P(Left)  = expit(s / temperature_m)
+P(Right) = expit(-s / temperature_m)
+```
+
+The fixed defaults are QL=.14, FQL=.14, HMM=.40, decay HMM=.40, and observer=.40.
+These scales were chosen to approximate 90% preference after one reward from
+neutral initialization with default learning parameters; they are assumptions,
+not fitted animal parameters. Use the existing transformed belief scores for
+the HMMs and existing belief-minus-doubt score for the observer. Do not reinterpret
+those scores as context probabilities, or normalize them using session data.
+
+Zero score gives exact 50/50; a shrinking nonzero score approaches 50/50 smoothly.
+No extra neutral band, probability clipping, lapse term, bias, or stickiness is
+added. Temperatures must be finite and strictly positive in model-score units.
+Temperature overrides are explicit, fixed, keyed by stable graded-model IDs,
+and saved in metadata/cache identity. They are not automatically recalibrated
+when a session's learning parameters change.
+
+For WSLS and immediate persistence, retain one configurable discrete error rate:
 
 ```python
 opposite_action_error_prob = 0.10
@@ -135,7 +171,7 @@ Do not change the codebase’s original action representation.
 
 For valid raw actions, `y_right = 1 - action`. The conversion must happen only after action validation.
 
-For each trial and model:
+For each trial and discrete model:
 
 | Greedy recommendation | `p_right` |
 |---|---:|
@@ -145,7 +181,12 @@ For each trial and model:
 
 A genuine model tie is represented as `p_right=0.5`, with no greedy side. Do not use the existing repeat-on-tie agreement helper or invent an initial Right choice. For the three first-round adapters, use exact zero of their existing signed score as the indifference rule. Record this rule explicitly.
 
-Do not apply a blanket absolute near-zero threshold to signed scores: repeated forgetting can make a nonzero FQL score arbitrarily small without changing its greedy direction. Positive rescaling must not change its recommendations. This is separate from the numerical tolerance for comparing posterior probabilities below. The later decay-HMM adapter must address roundoff around symmetric belief using its belief representation; a global score deadband is not an acceptable substitute.
+Do not apply a blanket near-zero threshold to signed scores. Tiny nonzero scores
+retain their greedy direction as a diagnostic, while their graded probabilities
+approach 50/50. Positive score rescaling preserves direction but intentionally
+changes graded probability strength unless temperature changes proportionally.
+The posterior-probability tie tolerance below is separate. The decay-HMM feature
+recognizes equal belief components directly to preserve genuine neutrality.
 
 Missing data or failed model calculations are **not** genuine indifference; handle those separately.
 
@@ -168,7 +209,8 @@ For observed choice `y` and model probability `p`, use the Bernoulli log-likelih
 LL = y\log(p)+(1-y)\log(1-p).
 \]
 
-Use SciPy’s `bernoulli.logpmf`, which evaluates the log probability mass of a binary observation. [SciPy Documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.bernoulli.html)
+For discrete policies, use SciPy's `bernoulli.logpmf`, which evaluates the log
+probability mass of a binary observation. [SciPy Documentation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.bernoulli.html)
 
 ```python
 from scipy.stats import bernoulli
@@ -180,13 +222,30 @@ log_likelihoods = bernoulli.logpmf(
 )
 ```
 
-With the default error probability:
+For logistic policies, compute log likelihoods directly from the scaled score:
+
+```text
+Observed Left:  log_expit(s / temperature)
+Observed Right: log_expit(-s / temperature)
+```
+
+This is the same Bernoulli likelihood, evaluated stably without reconstructing
+logs from probabilities that might round to zero or one. Finite scaled scores
+produce finite log likelihoods. Nonfinite derived logits raise a parameter error.
+
+For discrete policies with the default error probability:
 
 ```text
 Mouse agrees with greedy recommendation:    log(0.9)
 Mouse disagrees with greedy recommendation: log(0.1)
 Model is indifferent:                       log(0.5)
 ```
+
+The v5 output saves raw `policy_scores[T,K]` as well as `p_right[T,K]`, exact
+score-indifference flags, and greedy directions. Greedy directions do not determine
+graded likelihoods. Metadata saves per-candidate rule/temperature or discrete
+error settings and their provenance. Older artifacts remain loadable; old files
+lacking raw scores restore that optional field as None.
 
 Optionally retain descriptive choice residuals:
 

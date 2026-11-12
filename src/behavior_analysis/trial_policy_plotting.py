@@ -224,9 +224,30 @@ def _caption(results: Sequence[Any], metadata_records: Sequence[dict[str, Any]],
         )
     else:
         temporal_text = "HMM smoothing disabled; independent comparisons use causal pre-choice policies."
+    choice_records = [metadata.get("candidate_choice_parameters", {}) for metadata in metadata_records]
+    if any(choice_records):
+        graded = []
+        discrete = []
+        for model_id in model_ids:
+            settings = [record.get(str(model_id), {}) for record in choice_records]
+            temperatures = sorted({str(item["temperature"]) for item in settings if item.get("rule") == "logistic"})
+            label = _MODEL_LABELS.get(str(model_id), str(model_id))
+            if temperatures:
+                graded.append(f"{label}={','.join(temperatures)}")
+            if any(item.get("rule") == "fixed_error" for item in settings):
+                discrete.append(label)
+        choice_text = ""
+        if graded:
+            choice_text += ("Logistic P(Left)=sigmoid(score/temperature), without a probability cap or lapse. "
+                            f"Fixed temperatures: {'; '.join(graded)}. ")
+        if discrete:
+            choice_text += (f"Discrete policies: {', '.join(discrete)}; opposite-action error probability: "
+                            f"{', '.join(error_values)}. ")
+    else:
+        # Older artifacts used the same fixed-error mapping for every policy.
+        choice_text = f"Shared opposite-action error probability: {', '.join(error_values)}. "
     caption = (
-        f"Candidates: {', '.join(map(str, model_ids))}. Shared opposite-action error probability: "
-        f"{', '.join(error_values)}. "
+        f"Candidates: {', '.join(map(str, model_ids))}. {choice_text}"
         "Filled cells mark winning models; multiple filled cells in a trial column show a tie. "
         f"All tied maxima are shown; no tied winner is selected.{tie_text} "
         "Gray marks excluded comparison evidence; HMM maxima there remain visible. "

@@ -287,7 +287,10 @@ class SingleSessionAnalysisConfig:
     trial_policy_model_ids : tuple[str, ...]
         Ordered implemented candidate IDs, independent of legacy trial options.
     trial_policy_error_prob, trial_policy_stay_prob : float
-        Shared opposite-action error (.10) and trialwise state persistence (.90).
+        Discrete-policy opposite-action error (.10) and trialwise state persistence (.90).
+    trial_policy_temperatures : Mapping[str, float] or None
+        Fixed graded-choice temperatures by model ID, in score units. None
+        uses approved defaults (.14 for QL/FQL, .40 for HMMs/observer).
     trial_policy_smoothing, rerun_trial_policy_analysis : bool
         Enable retrospective smoothing; optionally force a new numerical run.
     """
@@ -330,6 +333,7 @@ class SingleSessionAnalysisConfig:
     trial_policy_stay_prob: float = .90
     trial_policy_smoothing: bool = True
     rerun_trial_policy_analysis: bool = False
+    trial_policy_temperatures: Mapping[str, float] | None = None
 
 
 def build_simulation_session(simulated_run_dir: Path, sess_id: str, session_info: dict) -> Session:
@@ -4392,6 +4396,7 @@ def _trial_policy_timestamp() -> str:
 def _compute_trial_policy_result(
     history: "PreparedTrialHistory", candidates: Sequence["TrialPolicyCandidate"],
     feature_params: "gtf.TaskParams", error_prob: float, stay_prob: float, smoothing: bool,
+    choice_temperatures: Mapping[str, float] | None = None,
 ) -> "TrialPolicyResult":
     """Compute one source's T-by-K dimensionless outputs without files or logging.
 
@@ -4399,14 +4404,19 @@ def _compute_trial_policy_result(
     indicators; candidates supplies K ordered adapters; other arguments are
     explicit policy parameters and fixed probability settings. Returns a data-
     only result, retaining one HMM row per retained trial when smoothing=True.
+    choice_temperatures optionally overrides positive graded-policy scales by
+    ID; each temperature has the corresponding adapter's score units.
     """
     from src.behavior_analysis import trial_policy_models as models
     from src.behavior_analysis import trial_policy_analysis as analysis
 
     scores, available = models.replay_trial_policy_candidates(history, candidates, feature_params)
+    choice_parameters = models.effective_trial_policy_choice_parameters(
+        candidates, temperatures=choice_temperatures, error_prob=error_prob)
     result = analysis.compute_trial_policy_comparison(
         history, scores, available, tuple(candidate.model_id for candidate in candidates),
         opposite_action_error_prob=error_prob,
+        choice_parameters=choice_parameters,
     )
     return analysis.smooth_trial_policy_comparison(result, stay_prob=stay_prob) if smoothing else result
 
@@ -4415,6 +4425,7 @@ def run_dynamax_trial_analysis(
     trial_df: pd.DataFrame, session: Session, *, feature_params: "gtf.TaskParams",
     model_ids: Sequence[str] = DEFAULT_MODEL_IDS, error_prob: float = .10,
     stay_prob: float = .90, smoothing: bool = True, rerun: bool = False, plot: bool = True,
+    choice_temperatures: Mapping[str, float] | None = None,
 ) -> tuple[pd.DataFrame, "TrialPolicyResult", Path]:
     """Save/reuse one source's trial policies, attach to current rows, and plot saved arrays.
 
@@ -4422,6 +4433,9 @@ def run_dynamax_trial_analysis(
     reward indicators and original cur_trial/cur_block IDs. session supplies its
     full ID and processed/figure paths; feature_params is the effective TaskParams.
     Model IDs and scalar probabilities configure fixed comparison/smoothing.
+    choice_temperatures optionally maps graded model IDs to fixed positive
+    scales in score units; None uses approved defaults. Discrete policies use
+    error_prob, while graded choice probabilities have no clipping or lapse.
     Returns current attached table, numerical result (T,K), and immutable NPZ
     Path. Run controls act only at this orchestration boundary. Prior results
     are preserved; early validation errors reach a signature-independent log.
@@ -4436,14 +4450,16 @@ def run_dynamax_trial_analysis(
     record = {"session_id": session.sess_id_full, "session_ids": [session.sess_id_full],
               "status": "running", "warnings": [], "errors": [], "runtime_seconds": 0.,
               "requested_options": {"model_ids": list(model_ids), "error_prob": error_prob,
-                                    "stay_prob": stay_prob, "smoothing": smoothing, "rerun": rerun}}
+                                    "stay_prob": stay_prob, "smoothing": smoothing, "rerun": rerun,
+                                    "choice_temperatures": None if choice_temperatures is None else dict(choice_temperatures)}}
     results.write_trial_policy_run_record(directory, record)
     try:
         history = models.prepare_trial_policy_history(trial_df, session_id=session.sess_id_full)
         candidates = models.resolve_trial_policy_candidates(model_ids)
         metadata = results.build_trial_policy_metadata(history, candidates, feature_params,
                                                        parameter_source="explicit TaskParams", error_prob=error_prob,
-                                                       stay_prob=stay_prob, smoothing=smoothing)
+                                                       stay_prob=stay_prob, smoothing=smoothing,
+                                                       choice_temperatures=choice_temperatures)
         record["warnings"] = results.trial_policy_warnings(history)
         for message in record["warnings"]:
             print(message)
@@ -4452,7 +4468,8 @@ def run_dynamax_trial_analysis(
         if cache_hit:
             result, _saved_metadata = results.load_trial_policy_results(numerical_path)
         else:
-            result = _compute_trial_policy_result(history, candidates, feature_params, error_prob, stay_prob, smoothing)
+            result = _compute_trial_policy_result(history, candidates, feature_params, error_prob, stay_prob, smoothing,
+                                                   choice_temperatures)
         metadata.update(status=result.status, warnings=record["warnings"], errors=[],
                         runtime_seconds=perf_counter() - started, cache_hit=cache_hit)
         if numerical_path is None:
@@ -4553,6 +4570,7 @@ def _run_multisession_trial_policy(
     source_sessions: Sequence[SavedSessionAnalysis] | None,
     overrides: Mapping[str, "gtf.TaskParams"] | None, *, model_ids: Sequence[str], error_prob: float,
     stay_prob: float, smoothing: bool, rerun: bool, n_jobs: int | None,
+    choice_temperatures: Mapping[str, float] | None = None,
 ) -> pd.DataFrame:
     """Compute independent source histories and attach them to current joint rows.
 
@@ -4561,6 +4579,8 @@ def _run_multisession_trial_policy(
     Returns current (T,C+outputs) table preserving block fields/order/index.
     Parent prepares/cache-checks/saves/logs/plots; only numerical cache misses run
     in source-level threads. Partial failures never publish a joint trial table.
+    choice_temperatures optionally maps graded IDs to positive fixed score-unit
+    scales shared across sources; no session-wide normalization or fitting occurs.
     """
     from concurrent.futures import ThreadPoolExecutor
     from contextlib import nullcontext
@@ -4576,7 +4596,8 @@ def _run_multisession_trial_policy(
               "warnings": [], "errors": [], "runtime_seconds": 0., "sources": [],
               "requested_options": {"model_ids": list(model_ids), "error_prob": error_prob,
                                     "stay_prob": stay_prob, "smoothing": smoothing, "rerun": rerun,
-                                    "n_jobs": n_jobs}}
+                                    "n_jobs": n_jobs,
+                                    "choice_temperatures": None if choice_temperatures is None else dict(choice_temperatures)}}
     results.write_trial_policy_run_record(directory, record)
     try:
         if source_sessions is None:
@@ -4606,7 +4627,8 @@ def _run_multisession_trial_policy(
             parameters, provenance, parameter_warnings = _resolve_trial_policy_feature_params(
                 source.session, candidates, None if overrides is None else overrides.get(identity))
             metadata = results.build_trial_policy_metadata(history, candidates, parameters, parameter_source=provenance,
-                                                           error_prob=error_prob, stay_prob=stay_prob, smoothing=smoothing)
+                                                           error_prob=error_prob, stay_prob=stay_prob, smoothing=smoothing,
+                                                           choice_temperatures=choice_temperatures)
             messages = parameter_warnings + results.trial_policy_warnings(history)
             metadata["warnings"] = messages
             record["warnings"].extend(messages)
@@ -4621,7 +4643,7 @@ def _run_multisession_trial_policy(
         with (ThreadPoolExecutor(max_workers=workers) if workers > 1 else nullcontext()) as executor:
             futures = {} if executor is None else {
                 index: executor.submit(_compute_trial_policy_result, work.history, candidates, work.feature_params,
-                                       error_prob, stay_prob, smoothing)
+                                       error_prob, stay_prob, smoothing, choice_temperatures)
                 for index, work in enumerate(prepared) if work.numerical_path is None}
             for index, work in enumerate(prepared):
                 source, history = work.source, work.history
@@ -4630,7 +4652,7 @@ def _run_multisession_trial_policy(
                     result = work.cached_result
                     if result is None:
                         result = futures[index].result() if executor is not None else _compute_trial_policy_result(
-                            history, candidates, work.feature_params, error_prob, stay_prob, smoothing)
+                            history, candidates, work.feature_params, error_prob, stay_prob, smoothing, choice_temperatures)
                     metadata.update(status=result.status, errors=[], cache_hit=path is not None,
                                     runtime_seconds=perf_counter() - started)
                     if path is None:
@@ -4692,6 +4714,7 @@ def run_multisession_analysis(
     trial_policy_smoothing: bool = True,
     rerun_trial_policy_analysis: bool = False,
     trial_policy_n_jobs: int | None = None,
+    trial_policy_temperatures: Mapping[str, float] | None = None,
     **legacy_options,
 ) -> tuple[None, None, pd.DataFrame, pd.DataFrame]:
     """Smooth one continuous ordered multisession sequence with fixed exemplars.
@@ -4713,6 +4736,8 @@ def run_multisession_analysis(
     available CPUs capped at session count. Trial HMMs reset independently by
     source. Returned current trial rows retain block assignments and original
     order; failures retain the fresh block-only current export.
+    trial_policy_temperatures optionally maps graded policy IDs to positive
+    fixed score-unit scales; None uses approved per-model defaults.
     """
     if legacy_options:
         warnings.warn(
@@ -4732,7 +4757,8 @@ def run_multisession_analysis(
         trials = _run_multisession_trial_policy(
             trials, concatenated, session, source_sessions, trial_feature_params_by_session,
             model_ids=trial_policy_model_ids, error_prob=trial_policy_error_prob, stay_prob=trial_policy_stay_prob,
-            smoothing=trial_policy_smoothing, rerun=rerun_trial_policy_analysis, n_jobs=trial_policy_n_jobs)
+            smoothing=trial_policy_smoothing, rerun=rerun_trial_policy_analysis, n_jobs=trial_policy_n_jobs,
+            choice_temperatures=trial_policy_temperatures)
     return None, None, blocks, trials
 
 
@@ -4883,6 +4909,7 @@ def main_multisession(
     rerun_trial_policy_analysis: bool = False,
     trial_policy_n_jobs: int | None = None,
     trial_feature_params_by_session: Mapping[str, "gtf.TaskParams"] | None = None,
+    trial_policy_temperatures: Mapping[str, float] | None = None,
 ):
     """Analyze selected saved sessions as one continuous multisession table.
 
@@ -5192,6 +5219,7 @@ def main_multisession(
         trial_policy_smoothing=trial_policy_smoothing,
         rerun_trial_policy_analysis=rerun_trial_policy_analysis,
         trial_policy_n_jobs=trial_policy_n_jobs,
+        trial_policy_temperatures=trial_policy_temperatures,
     )
     if multisession_result is None:
         return
@@ -5411,6 +5439,7 @@ def run_single_session_workflow(
             model_ids=config.trial_policy_model_ids, error_prob=config.trial_policy_error_prob,
             stay_prob=config.trial_policy_stay_prob, smoothing=config.trial_policy_smoothing,
             rerun=config.rerun_trial_policy_analysis,
+            choice_temperatures=config.trial_policy_temperatures,
         )
 
     performance_plots.plot_single_session_summary_grid(
