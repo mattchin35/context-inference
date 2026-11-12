@@ -15,6 +15,7 @@ from typing import Callable, Mapping
 import numpy as np
 from scipy.special import expit
 
+from src.behavior_analysis import trial_features
 from src.behavior_modeling.agents.agents import HMMRewardDecayRelativeDoubt
 from src.behavior_modeling.counterfactual_doubt import (
     CounterfactualDoubtState,
@@ -874,15 +875,18 @@ def _state_outputs(history: ObservableHistory, *names: str) -> dict[str, np.ndar
 
 
 def _previous_history(history: ObservableHistory) -> tuple[np.ndarray, np.ndarray]:
-    """Return signed previous-valid-choice and binary-reward arrays."""
-    previous_choice = _empty_output(history)
+    """Return dimensionless previous-choice/reward float[T] arrays for ObservableHistory.
+
+    Choices are left-positive signed values; reward is binary delivery. Invalid
+    rows are NaN. The shared persistence readout uses the benchmark's existing
+    completed-pair validity mask, preserving its original update conventions.
+    """
+    previous_choice = trial_features.immediate_persistence_regressor(
+        history.action, experimenter_reward_given=~history.valid)
     previous_reward = _empty_output(history)
-    last_choice = 0.0
     last_reward = 0.0
     for index in np.flatnonzero(history.valid):
-        previous_choice[index] = last_choice
         previous_reward[index] = last_reward
-        last_choice = 1.0 if history.action[index] == 1 else -1.0
         last_reward = float(history.reward[index] > 0)
     return previous_choice, previous_reward
 

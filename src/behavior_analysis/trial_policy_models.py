@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 DEFAULT_MODEL_IDS = (
     "forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
     "q_learning", "reward_decay_hmm", "ideal_observer",
+    "immediate_persistence",
 )
 FLAG_COLUMN_NAMES = ("give_reward", "experimenter_reward_given")
 _BELIEF_PARAMETER_NAMES = (
@@ -44,7 +45,9 @@ class PreparedTrialHistory:
 
     actions/rewards/manual_reward_flags are float64[T], dimensionless binary
     codes with NaN for missing/unknown values; actions use 0=Right, 1=Left.
-    adapter_skip_flags and eligibility arrays are bool[T]. Reasons and original
+    adapter_skip_flags and eligibility arrays are bool[T]. history_update_valid
+    denotes a usable choice/outcome pair; choice-only persistence instead uses
+    comparison_valid, including choices with missing rewards. Reasons and original
     display identifiers are Unicode[T]; row_position is int64[T], zero-based.
     metadata is a plain provenance dictionary including schema-bearing digest.
     """
@@ -71,7 +74,9 @@ class TrialPolicyCandidate:
     adapter receives PreparedTrialHistory and TaskParams and returns aligned
     dimensionless left-positive float64[T] scores and bool[T] availability.
     parameter_names records TaskParams attributes used by the adapter; labels
-    and indifference_rule are strings for plain saved provenance.
+    and indifference_rule are strings for plain saved provenance. The default
+    history_update_rule requires an observed choice/outcome pair; choice-only
+    persistence records observed_choice instead and does not require reward.
     """
 
     model_id: str
@@ -79,6 +84,7 @@ class TrialPolicyCandidate:
     adapter: Callable[[PreparedTrialHistory, "TaskParams"], tuple[np.ndarray, np.ndarray]]
     parameter_names: tuple[str, ...] = ()
     indifference_rule: str = "exact_zero"
+    history_update_rule: str = "observed_choice_and_reward"
 
 
 # Public computational functions.
@@ -103,7 +109,8 @@ def prepare_trial_policy_history(
     -------
     PreparedTrialHistory
         Aligned (T,) arrays with dimensionless values and original display IDs.
-        Missing outcomes freeze updates but preserve current choice eligibility.
+        Missing outcomes freeze outcome-based updates but preserve current choice
+        eligibility and the choice-only persistence update.
     """
     if not isinstance(session_id, str) or not session_id:
         raise ValueError("session_id must be a nonempty full source-session string")
@@ -237,6 +244,8 @@ def resolve_trial_policy_candidates(
         TrialPolicyCandidate("ideal_observer", "Ideal observer", _replay_ideal_observer,
                              _BELIEF_PARAMETER_NAMES + ("hmm_reward_decay_lambda", "omission_lam"),
                              "exact_zero_after_belief_correction_and_raw_doubt_subtraction"),
+        TrialPolicyCandidate("immediate_persistence", "Immediate persistence", _replay_immediate_persistence,
+                             history_update_rule="observed_choice"),
     )
     by_id = {definition.model_id: definition for definition in definitions}
     unknown = [model_id for model_id in model_ids if model_id not in by_id]
@@ -420,6 +429,18 @@ def _replay_wsls(history: PreparedTrialHistory, params: "TaskParams") -> tuple[n
     return _feature_arrays(trial_features.win_stay_lose_switch_regressor(
         actions=history.actions, rewards=history.rewards,
         experimenter_reward_given=history.adapter_skip_flags,
+    ), history.adapter_skip_flags)
+
+
+def _replay_immediate_persistence(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
+    """Return shared previous-choice float/bool[T] scores from observed history[T].
+
+    Scores are dimensionless and left-positive. TaskParams is unused. Every
+    eligible observed action updates choice memory, including missing-reward
+    rows; manual/no-choice/unknown-flag attempts freeze it. No rewards are imputed.
+    """
+    return _feature_arrays(trial_features.immediate_persistence_regressor(
+        actions=history.actions, experimenter_reward_given=history.adapter_skip_flags,
     ), history.adapter_skip_flags)
 
 

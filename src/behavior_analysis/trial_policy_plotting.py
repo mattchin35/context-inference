@@ -22,6 +22,7 @@ _KNOWN_COLORS = {
     "q_learning": "#d62728",
     "reward_decay_hmm": "#9467bd",
     "ideal_observer": "#8c564b",
+    "immediate_persistence": "#17becf",
     "synthetic_fourth": "#9467bd",
 }
 _MODEL_LABELS = {
@@ -31,6 +32,7 @@ _MODEL_LABELS = {
     "q_learning": "QL",
     "reward_decay_hmm": "Decay HMM",
     "ideal_observer": "Observer",
+    "immediate_persistence": "Persistence",
 }
 
 

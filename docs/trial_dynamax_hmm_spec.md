@@ -25,6 +25,18 @@ and `ideal_observer` are appended. See
 [the expansion plan and validation handoff](trial_policy_candidate_expansion_plan.md)
 for parameters, the belief-symmetry correction, general tie grids, and v2 results.
 
+**Immediate-persistence extension (2026-11-11):** `immediate_persistence` is the
+seventh default candidate, appended after the six above. It repeats the previous
+eligible actual mouse choice regardless of reward, using the same shared
+previous-choice computation as the existing benchmark model. It is indifferent
+before any eligible choice. This differs from the exponentially weighted
+`perseveration_regressor`, which averages multiple earlier choices. The adapter
+has no task-feature parameters and uses the existing shared choice error rate.
+Missing rewards do not prevent its choice-memory update; exclusions such as
+manual rewards, invalid switches/no-choice attempts, and unknown manual flags
+still freeze it. This choice-only exception is approved explicitly and saved in
+the v4 metadata. The outer HMM's policy-state persistence is a separate concept.
+
 Those future adapters must use the raw causal policy values. Session-wide residualized columns such as `HMM_decay_res` and `rel_hazard_res` can depend on later observations and are not substitutes for these policies.
 
 Use a small ordered collection of candidate definitions and ordinary adapter functions. Each adapter receives one chronological session's observed history and explicit parameters, and returns aligned left-positive pre-choice scores and prediction availability, each with shape `(n_trials,)`. Its definition records its stable ID, parameter provenance, and indifference rule. Common stages operate on `(n_trials, n_models)` arrays and model labels; they must not assume exactly three models. Avoid a new agent class hierarchy or plugin framework.
@@ -287,17 +299,19 @@ comparison_valid = observed animal choice is eligible
 
 Use this common mask so models are compared on the same observations.
 
-Maintain a separate `history_update_valid` flag; a usable choice observation and a usable outcome update are not the same condition:
+Maintain a separate `history_update_valid` flag for complete usable choice/outcome
+pairs. Choice-only persistence uses the prepared history's animal-choice
+eligibility even when that outcome-update flag is False:
 
 - Known manual-reward or no-choice rows: no choice likelihood, no behavioral-model update. Retain the HMM time step. Existing Q forgetting, Bayesian hazard advancement, and WSLS memory all freeze on these rows.
-- Eligible choice with a missing reward: score the current pre-choice recommendation if available for every model; skip the entire outcome update for every candidate, including forgetting/hazard advancement. Do not fabricate a zero reward. WSLS retains the last usable choice/outcome pair.
+- Eligible choice with a missing reward: score the current pre-choice recommendation if available for every model; skip the entire update for outcome-based candidates, including forgetting/hazard advancement. Do not fabricate a zero reward. WSLS retains the last usable choice/outcome pair. Immediate persistence remembers the observed choice for its next recommendation.
 - Unknown/missing values in an existing manual-reward flag column: exclude from scoring and history updates and log the condition. If the entire flag column is absent, retain the project's compatibility convention of treating rows as animal-controlled, and record that assumption. Normalize the legacy flag-column alias with the existing helper.
 - A missing candidate prediction invalidates the comparison row for every candidate. It does not by itself invalidate an otherwise usable outcome update.
 - Unsupported/malformed supplied values and unexpected numerical failures must be reported explicitly, not silently converted into ordinary missingness or indifference.
 
-Save exclusion/update flags or reason codes and log counts plus affected original trial IDs for missing rewards and unknown flags. Skipping a missing outcome is an explicit carry-forward approximation: subsequent policies condition on available usable history, not the unknowable complete mouse history. Do not impute outcomes or add a latent missing-history model in this round. The new adapters must apply the same approved history eligibility across candidates; unverified cached features with different flag handling must be replayed. Do not alter shared legacy analysis behavior to implement this policy.
+Save exclusion/update flags or reason codes and log counts plus affected original trial IDs for missing rewards and unknown flags. Skipping a missing outcome is an explicit carry-forward approximation for outcome-based policies: subsequent recommendations condition on available usable history, not the unknowable complete mouse history. Do not impute outcomes or add a latent missing-history model. All candidates share animal-choice exclusions, with the approved missing-reward exception for immediate persistence. Save `candidate_history_update_rules` and `history_update_valid_definition` so that `history_update_valid=False` is not interpreted as freezing this choice-only model. Unverified cached features with different flag handling must be replayed. Do not alter shared legacy analysis behavior to implement this policy.
 
-Make this visible with one concise warning per condition per session in the existing console/run log, stating the count, affected trial IDs, and action taken. For many affected trials, show a short ID preview and keep the full row flags in saved results. For example: `Session X: missing reward on 2 trials (12, 35); scored available choice predictions and skipped all candidate history updates.` Missing rewards follow this documented continuation rule without user prompts. Use ordinary masks, the saved flags, and existing logging; do not introduce per-trial warning spam, extra diagnostic files, or a missing-data subsystem. Clean sessions need no edge-case warnings.
+Make this visible with one concise warning per condition per session in the existing console/run log, stating the count, affected trial IDs, and action taken. For many affected trials, show a short ID preview and keep the full row flags in saved results. Missing-reward messages distinguish skipped outcome-based updates from persistence remembering the observed choice when selected. Missing rewards follow this documented continuation rule without user prompts. Use ordinary masks, the saved flags, and existing logging; do not introduce per-trial warning spam, extra diagnostic files, or a missing-data subsystem. Clean sessions need no edge-case warnings.
 
 **Do not delete interior invalid trials and concatenate the remaining rows before smoothing**, because that changes the spacing of HMM transitions.
 

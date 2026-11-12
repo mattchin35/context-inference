@@ -30,6 +30,8 @@ class TrialPolicyResult:
     zero-based model_ids indices; -1 is unavailable/ambiguous. Independent ties
     use int8 -1=unavailable, 0=unique, 1=tied. HMM arrays are None when disabled.
     Identifiers are Unicode; row_position is int64[T], original retained order.
+    history_update_valid marks usable choice/outcome pairs; the choice-only
+    persistence policy uses eligible choices even when that flag is False.
     """
 
     model_ids: np.ndarray
@@ -39,7 +41,7 @@ class TrialPolicyResult:
     row_position: np.ndarray
     observed_action: np.ndarray
     comparison_valid: np.ndarray
-    history_update_valid: np.ndarray
+    history_update_valid: np.ndarray  # Complete choice/outcome pairs; persistence uses comparison_valid.
     comparison_exclusion_reason: np.ndarray
     history_update_exclusion_reason: np.ndarray
     prediction_valid: np.ndarray

@@ -725,6 +725,40 @@ def relative_hazard_index(relative_monotonic_cf_value, lam):
     return np.tanh(lam * np.asarray(relative_monotonic_cf_value, dtype=float))
 
 
+def immediate_persistence_regressor(actions, experimenter_reward_given=None) -> np.ndarray:
+    """Return the previous valid observed action as a pre-choice signed score.
+
+    Parameters
+    ----------
+    actions : array-like, shape (T,)
+        Chronological choices encoded 0=Right, 1=Left, with the usual no-choice
+        sentinels. Each usable choice updates memory regardless of reward.
+    experimenter_reward_given : array-like, shape (T,), or None
+        Manual/skip flags using make_skip_trial_mask conventions. Skipped rows
+        neither receive predictions nor replace the previous observed action.
+
+    Returns
+    -------
+    np.ndarray, shape (T,)
+        Dimensionless float64 scores: +1 favors Left, -1 favors Right, zero
+        before any usable choice, and NaN on skipped rows. Scores depend only
+        on earlier choices; no reward values or physical units are involved.
+    """
+    actions = np.asarray(actions)
+    skipped = make_skip_trial_mask(experimenter_reward_given, actions)
+    if skipped is None:
+        skipped = np.zeros(len(actions), dtype=bool)
+    scores = np.full(len(actions), np.nan, dtype=float)
+    previous_choice = 0.0
+    for row in np.flatnonzero(~skipped):
+        action = _parse_choice_side(actions[row], N_ACTIONS)
+        if action is None:
+            continue
+        scores[row] = previous_choice
+        previous_choice = 1.0 if action == ChoiceSide.LEFT else -1.0
+    return scores
+
+
 def perseveration_regressor(choices, decay=0.25):
     """
     Compute exponentially weighted perseveration regressor.

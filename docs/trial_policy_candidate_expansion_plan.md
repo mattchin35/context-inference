@@ -4,6 +4,51 @@ Status: implemented and validated on 2026-11-08 after user approval. This extend
 first round in `trial_dynamax_hmm_implementation_plan.md` and follows the causal
 history and probability contracts in `trial_dynamax_hmm_spec.md`.
 
+2026-11-11 extension: the user approved a seventh default, `immediate_persistence`,
+and choice-memory updates despite missing rewards. Its definition is reused from
+the existing benchmark model. A shared `trial_features.immediate_persistence_regressor`
+now supplies both the benchmark's previous-choice calculation and the trial-HMM
+adapter; no separate learning rule or benchmark probability mapping is introduced.
+The exponentially weighted perseveration regressor is a different policy and
+remains unchanged. Subsequent sections describing six candidates record the
+earlier expansion; the current default list appends immediate persistence.
+
+The extension adds no dependencies and uses linear-time choice replay. Tests
+were committed first as `f032b9d`, after confirming failures for the absent
+candidate, shared helper, and seven-model integration. They cover hand-calculated
+repeats, reward independence, actual mouse history, skipped attempts, cropping,
+missing-reward updates, shared benchmark delegation, metadata, and seven-row plots.
+The existing six-candidate subset and benchmark behavior remain covered.
+
+Metadata version `trial_policy_hmm_v4` saves per-candidate history-update rules.
+The existing `history_update_valid` array still means a usable choice/outcome
+pair; the new policy instead uses eligible observed choices. Existing result
+array shapes remain trial by selected candidate, and older NPZs remain loadable.
+
+The persistence extension passed 326 affected tests: 31 persistence/benchmark
+model tests, 237 trial-policy/feature/plotting tests, 14 main trial-workflow tests,
+and 44 benchmark workflow/plotting and trial-outcome tests. This includes the
+existing benchmark suite after extracting its previous-choice calculation.
+No dependencies, HMM likelihood equations, or transition construction changed.
+
+Synthetic full-pipeline validation used 140 deterministic trials with manual,
+no-choice, unknown-flag, and missing-reward rows. The user-designated CT026
+2026-08-28 session was then checked using its current processed table: 699
+retained rows, 696 eligible comparisons, and 391 eligible rows with differing
+candidate predictions. Posterior rows were finite and normalized within the
+existing tolerance. All four preceding numerical artifacts, the block CSV,
+saved parameters, and non-policy table columns were preserved. No batch ran.
+
+The inspected seven-row figure, validation report, and reproducibility files are
+in this directory (UTC timestamp, corresponding to November 11 in New York):
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/figures/trial_policy_hmm/2026-11-12_03-10-46_633593_UTC/`
+
+The cyan Persistence row uses the same membership display as the other models.
+The numerical v4 artifact and effective parameters are linked from
+`validation_report.json`. The original first-retained-row initialization,
+shared 0.1 opposite-action error, and 0.9 outer HMM stay probability remain.
+
 ## Scope and decisions
 
 Add standard Q-learning, reward-decay HMM log odds, and the existing mouse-history

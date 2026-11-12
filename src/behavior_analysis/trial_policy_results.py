@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from .trial_policy_models import PreparedTrialHistory, TrialPolicyCandidate
     from .gather_trial_features import TaskParams
 
-ANALYSIS_VERSION = "trial_policy_hmm_v3"
+ANALYSIS_VERSION = "trial_policy_hmm_v4"
 ANALYSIS_SOURCE_FILES = (
     "trial_policy_models.py", "trial_policy_analysis.py", "trial_policy_results.py",
     "trial_features.py", "project_utils.py", "gather_trial_features.py",
@@ -84,7 +84,9 @@ def build_trial_policy_metadata(history: "PreparedTrialHistory", candidates: "Se
         "axis_conventions": {"arrays": "retained trial rows by ordered candidate IDs",
                              "actions": "0=Right, 1=Left", "states": "zero-based candidate indices"},
         "eligibility_rules": "common valid non-manual Left/Right animal choice; absent flag column assumes animal control",
-        "history_update_rule": "manual/no-choice/unknown-flag rows skip updates; missing reward scores choice and freezes all candidate updates",
+        "history_update_rule": "manual/no-choice/unknown-flag rows skip updates; missing rewards freeze outcome-based policies; choice-only persistence remembers valid choices",
+        "history_update_valid_definition": "usable observed choice/outcome pair; choice-only update eligibility is comparison_valid",
+        "candidate_history_update_rules": {candidate.model_id: candidate.history_update_rule for candidate in candidates},
         "tie_rule": "absolute probability tolerance; preserve every maximum; no arbitrary tie break",
         "score_indifference_rule": "exact_zero",
         "candidate_indifference_rules": {candidate.model_id: candidate.indifference_rule for candidate in candidates},
@@ -230,7 +232,7 @@ def trial_policy_warnings(history: "PreparedTrialHistory") -> list[str]:
         ("unclassified no-choice attempt", no_choice & ~invalid_switch & (history.manual_reward_flags != 1),
          "excluded these attempts; the log does not establish a switch or manual-reward outcome"),
         ("missing reward", history.comparison_valid & ~np.isfinite(history.rewards),
-         "scored available choice predictions and skipped all candidate history updates"),
+         "scored available choice predictions; outcome-based policies skipped history updates; immediate persistence, when selected, retained the observed choice"),
         ("unknown manual-reward flag", np.isnan(history.manual_reward_flags) & ~no_choice,
          "excluded these rows from scoring and candidate history updates"),
     ):
