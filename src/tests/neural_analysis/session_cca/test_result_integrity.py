@@ -6,9 +6,13 @@ import pytest
 
 from src.neural_analysis.population.session_cca_io import save_cca_result
 from src.tests.neural_analysis.session_cca.test_results import (
-    cca_result as cca_result,
-    synthetic_timeline_session as synthetic_timeline_session,
+    cca_result as result_fixture,
+    synthetic_timeline_session as timeline_session_fixture,
 )
+
+
+cca_result = result_fixture
+synthetic_timeline_session = timeline_session_fixture
 
 
 @pytest.mark.parametrize("field", ["session_id", "probe_roles"])
