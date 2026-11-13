@@ -146,9 +146,11 @@ def test_actual_spawn_isolates_failure_and_completes_other_session(shared_privat
     with a temporary script that cannot be imported by multiprocessing spawn.
     """
     session = shared_private_session
-    missing = session.metadata_path.parent / "missing.json"
+    invalid = session.metadata_path.parent / "invalid.json"
+    # The CLI requires existing list entries; malformed JSON fails inside a worker.
+    invalid.write_text("{invalid json}", encoding="ascii")
     session_list = session.session_root / "batch_sessions.txt"
-    session_list.write_text(f"{missing}\n{session.metadata_path}\n", encoding="ascii")
+    session_list.write_text(f"{invalid}\n{session.metadata_path}\n", encoding="ascii")
     process = subprocess.run(
         [sys.executable, "-m", "src.neural_analysis.population.run_session_cca_batch",
          "--session-list", str(session_list), "--pfc-probe", "A", "--hpc-probe", "B", "--workers", "2"],
@@ -156,8 +158,8 @@ def test_actual_spawn_isolates_failure_and_completes_other_session(shared_privat
     )
     assert process.returncode == 1, process.stderr
     lines = process.stdout.splitlines()
-    assert len(lines) == 2, process.stdout
-    assert lines[0].startswith(f"{missing}: failed ")
+    assert len(lines) == 2, (process.stdout, process.stderr)
+    assert lines[0].startswith(f"{invalid}: failed ")
     assert lines[1].startswith(f"{session.metadata_path}: prepared ")
     loaded = cca_io.load_cca_result(Path(lines[1].split(": prepared ", 1)[1]))
     assert loaded.fit.scores["PFC"].shape == (16, 8, 3)
