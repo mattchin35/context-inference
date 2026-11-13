@@ -129,7 +129,7 @@ def plot_session_cca(
             figure.add_trace(go.Heatmap(
                 **data, name=region, coloraxis="coloraxis", zsmooth=False,
                 connectgaps=False, hoverongaps=False,
-                hovertemplate=_score_hover(result, region, "%{z:.5g}", "%{y}", "%{customdata[7]:.4f}"),
+                hovertemplate=_score_hover(result, region, "%{z:.5g}", "%{y:.0f}", "%{customdata[7]:.4f}"),
             ), row=row, col=1)
             figure.update_yaxes(
                 autorange="reversed", tickmode="array", tickvals=ranks,
