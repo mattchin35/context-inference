@@ -1,6 +1,7 @@
 # Session Timeline PFC-HPC CCA: Implementation Plan and Live Handoff
 
-Status: Implementation and designated-session validation complete, 2026-11-13.
+Status: Base CCA implementation complete; optional treadmill-speed extension
+approved and in progress, 2026-11-13.
 CT026 2026-08-28 passed at 500/20 ms after synthetic/browser acceptance.
 User inspection precedes any additional experimental sessions.
 The [CCA spec](session_timeline_cca_spec_v1.md) owns the
@@ -23,14 +24,14 @@ Update at assignment, RED/test-commit, GREEN/review, interruption, and data gate
 | --- | --- |
 | Observation | 2026-11-13; branch `refactor`; hover-fix HEAD `35c1481`. Recheck on resumption; this is not a reset target. |
 | Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 designated CT026 2026-08-28 after synthetic/browser gates. |
-| Feature state | WP1-WP8 technical work complete; CT026 500/20-ms fits, independent audits and actual saved displays passed. Usage guide complete. User inspection precedes wider batches. |
+| Feature state | Base WP1-WP8 complete. User accepted the view and approved optional signed treadmill-speed reuse. Extension tests-first phase in progress. |
 | Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
-| Active worker / writable scope | `/root/cca_worker` idle, no writable scope. Orchestrator owns WP8 validation and final usage/handoff docs. |
+| Active worker / writable scope | Orchestrator handles extension integration/CT026 validation directly; `/root/cca_worker` idle/unassigned. Source accepted as `d214c5e`; no parallel workers. |
 | Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
 | Current feature files | Source committed through `35c1481`; final handoff/usage/README changes owned by orchestrator. No worker-owned pending changes. |
 | Tests / processes | Lead combined 360 passed/one Node skip/18.12 s; final CCA/chart 164 passed/one Node skip/13.24 s; all CCA Ruff/whitespace passed. CT026 preview server78560 at loopback8527, IAB tab1 retained as deliverable; all analysis processes complete. |
 | Experimental validation | User designated CT026 2026-08-28 after synthetic/browser gates; metadata path recorded below. No further session authorized. |
-| Next action | User inspects CT026 outputs. No implementation task or additional experimental session is assigned. Preview command and results below support resumption. |
+| Next action | Commit failing speed integration tests, expose existing shared controls/renderer and wire CCA, then synthetic/browser checks and CT026 speed registration/preparation without refitting CCA. |
 
 ### 0.2 Work-package ledger
 
@@ -48,6 +49,7 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | WP6 app integration | Same worker | Accepted | `d7f4f0c`, `e689a92`, `51d637e`, `274614c` | `2a8a57c`; review fixes 13 passed/6.14 s; lead combined 360 passed/one Node skip/18.12 s |
 | WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Accepted; guide/README complete | `cb1b035`; hover regression `6514e5b` RED1.93 s | Browser pan/ranks/pair/hide-trace/start/Jump/20-ms bounds/hover passed; footer `bb12bfc`, hover `35c1481`; final CCA/chart164 passed/one skip |
 | WP8 designated-session/performance | Orchestrator and user | Technical validation accepted; user inspection before batches | No new defect | Both fits/audits/browser passed; 696 common windows,141pairs; measured costs and paths below |
+| Extension: optional speed | Orchestrator, sole active implementation owner | Source accepted; CT026 registration/validation next | `e412b4d`; six intended failures3.75s | Six new tests4.47s; affected suite265 passed/one Node skip20.26s; Ruff/whitespace clean |
 
 ### 0.3 Resume procedure
 
@@ -806,3 +808,29 @@ Next exact action, owner, and outstanding user decision if any:
   README links the completed `SESSION_CCA.md`; all11 original dirty tracked
   files and unrelated untracked work are retained. Worker idle, no next code
   assignment. User inspection is the only gate before wider experimental work.
+
+### 2026-11-13 - approved optional-speed extension / source acceptance
+
+- User approved the proposed addition: reuse the PCA timeline's signed-mm/s
+  step track and Prepare speed/Recompute speed/Show speed cache workflow,
+  register CT026's existing Teensy log, and validate without refitting CCA.
+  The lead is sole active implementation owner; existing worker remains idle.
+- New `session_cca/test_speed.py` was written first: six expected failures
+  (missing speed argument/controls/row) in3.75s; tests committed `e412b4d`.
+  Reused existing parser/alignment/cache; two public helpers expose existing
+  controls and trace rendering. Four source files changed, no dependency,
+  fitting, archive schema or speed algorithm change. Six new tests passed4.47s.
+- Combined tests revealed existing Streamlit AppTest leaves a temporary
+  __main__ script that cannot be imported by a later spawn test. The real
+  spawn check passes alone3.41s. Isolated it through the actual batch CLI in
+  a clean interpreter (`42476c0`); corrected its fixture to an existing invalid
+  JSON list entry because the CLI validates path existence before dispatch
+  (`188f850`). Failure isolation/order and nonzero status still verified.
+- Focused speed+integration11 passed8.66s. Full affected command (CCA, saved
+  speed, treadmill alignment, PCA timeline plotting/UI, chart and metadata):
+  265 passed, one existing Node skip,20.26s. Existing speed batch fork warning
+  retained. All changed source/tests Ruff and whitespace passed. Lead read
+  actual diff; source committed `d214c5e`. CT026 data writes not started yet.
+- Read-only metadata preflight found all eight existing CT026 PCA archives use
+  scientific identity v2, so no legacy identity registration is needed before
+  adding the optional treadmill field. The identified log is5,736,530 bytes.
