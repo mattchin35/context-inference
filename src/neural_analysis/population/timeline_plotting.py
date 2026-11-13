@@ -272,6 +272,19 @@ def add_timeline_behavior(
         _add_event_track(figure, result.events, track, row)
 
 
+def add_timeline_speed(
+    figure: go.Figure, speed: TreadmillSpeed, origin_s: float, row: int,
+) -> None:
+    """Add signed speed to a preallocated one-based Plotly subplot row; return None.
+
+    speed holds (S,) UTC-second updates and signed mm/s values. origin_s is
+    UTC seconds; only x converts to elapsed seconds. Preserve every sample,
+    source order and actual endpoint, using steps and full-series y limits.
+    The caller owns subplot allocation, time bounds and zero-line visibility.
+    """
+    _add_speed_track(figure, speed, origin_s, row)
+
+
 def plot_session_timeline(
     result: SessionTimelineResult,
     time_range_s: tuple[float, float] | None = None,

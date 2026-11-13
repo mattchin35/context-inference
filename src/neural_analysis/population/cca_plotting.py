@@ -6,11 +6,13 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from src.mouse_behavior_preprocessing.treadmill_speed import TreadmillSpeed
 from src.neural_analysis.population.session_cca_io import SessionCCAResult
 from src.neural_analysis.population.session_timeline import SessionTimelineResult
 from src.neural_analysis.population.timeline_plotting import (
     EVENT_LABELS,
     add_timeline_behavior,
+    add_timeline_speed,
     available_event_tracks,
     session_time_bounds,
 )
@@ -73,6 +75,8 @@ def plot_session_cca(
     viewport_s: tuple[float, float] | None = None,
     viewport_revision: int = 0,
     show_context: bool = True,
+    *,
+    speed: TreadmillSpeed | None = None,
 ) -> go.Figure:
     """Build a light session figure using saved behavior and (W,B,K) CCA scores.
 
@@ -85,6 +89,9 @@ def plot_session_cca(
     neural payload by intersecting windows; viewport_s sets visible time. Both
     are elapsed-second (low,high) pairs. viewport_revision resets time zoom on
     explicit navigation; row/rank changes reset vertical state independently.
+    speed optionally adds the complete (S,) signed-mm/s step series below
+    events, using its UTC timestamps and this result's elapsed-time origin.
+    Neural payload bounds never crop or rescale the measured speed series.
     Return Plotly Figure. Scores, transforms and metadata remain unchanged;
     neither raw sources nor numerical fitting are accessed.
     """
@@ -98,6 +105,9 @@ def plot_session_cca(
     tracks = tuple(track for track in event_tracks if track in available_event_tracks(result.events))
     titles = ["Choices"] + [EVENT_LABELS[track] for track in tracks]
     heights = [1.] + [.65] * len(tracks)
+    if speed is not None:
+        titles.append("Signed speed (mm/s)")
+        heights.append(1.1)
     ranks = _selected_ranks(result, pair_range) if result.fit is not None else np.array([], dtype=int)
     if result.fit is not None:
         if not isinstance(selected_pair, (int, np.integer)) or not 1 <= selected_pair <= len(result.fit.correlations):
@@ -116,10 +126,15 @@ def plot_session_cca(
         vertical_spacing=min(.025, .16 / len(titles)), subplot_titles=titles,
     )
     add_timeline_behavior(figure, behavior, tracks, show_context)
-    # Behavior already has outcome/context hover; only paired traces need legends.
+    row = 2 + len(tracks)
+    speed_row = None
+    if speed is not None:
+        speed_row = row
+        add_timeline_speed(figure, speed, result.time_origin_s, row)
+        row += 1
+    # Behavior and speed have labeled rows; only paired traces need legends.
     for trace in figure.data:
         trace.showlegend = False
-    row = 2 + len(tracks)
     if result.fit is not None:
         limit = float(result.fit.color_limit if color_limit is None else color_limit)
         if not np.isfinite(limit) or limit <= 0:
@@ -158,8 +173,10 @@ def plot_session_cca(
         rangeslider={"visible": True, "range": full_bounds,
                      "thickness": min(.07, 60 / figure_height)},
     )
-    vertical_revision = f"{result.meta.get('configuration_id', result.session_id)}:{tracks}:{tuple(ranks)}:{show_traces}:{selected_pair}"
+    vertical_revision = f"{result.meta.get('configuration_id', result.session_id)}:{tracks}:{tuple(ranks)}:{show_traces}:{selected_pair}:speed:{speed is not None}"
     figure.update_yaxes(fixedrange=True, showgrid=False, zeroline=False, uirevision=vertical_revision)
+    if speed_row is not None:
+        figure.update_yaxes(zeroline=True, zerolinecolor="#9ca3af", row=speed_row, col=1)
     caption = ("In-sample canonical correlations; task activity retained.<br>"
                "Scores use session sample SD; pooled bins are temporally dependent.")
     if result.fit is None:

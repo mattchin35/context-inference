@@ -22,7 +22,7 @@ from src.neural_analysis.population.timeline_plotting import (
 )
 from src.neural_analysis.session_metadata import ResolvedSession, resolve_probe_sources
 from src.neural_analysis.webapp.timeline_chart import render_timeline_chart
-from src.neural_analysis.webapp.timeline_view import render_timeline_navigation
+from src.neural_analysis.webapp.timeline_view import render_timeline_navigation, render_timeline_speed_controls
 
 
 def render_session_cca_view(st_module: object, session: ResolvedSession) -> None:
@@ -59,6 +59,7 @@ def render_session_cca_view(st_module: object, session: ResolvedSession) -> None
             saved_ms = int(round(result.meta["bin_width_s"] * 1000))
             st_module.caption(f"Saved CCA: {saved}; {saved_ms} ms. Preparation settings apply only to the next explicit action.")
         navigation_key = f"{scope}_{result.session_id}_{result.time_origin_s}_navigation"
+        speed = render_timeline_speed_controls(st_module, session, scope)
         viewport, revision = render_timeline_navigation(st_module, result, navigation_key)
         pair_range, pair, traces, limit = _pair_controls(st_module, result, scope)
         context_available = not context_intervals(result.events, session_time_bounds(result)[1]).empty
@@ -88,6 +89,7 @@ def render_session_cca_view(st_module: object, session: ResolvedSession) -> None
             result, pair_range=pair_range, selected_pair=pair, show_traces=traces,
             event_tracks=tracks, color_limit=limit, loaded_range_s=loaded,
             viewport_s=viewport, viewport_revision=revision, show_context=show_context,
+            speed=speed,
         )
     render_timeline_chart(figure, key=f"{scope}_chart")
     st_module.caption(

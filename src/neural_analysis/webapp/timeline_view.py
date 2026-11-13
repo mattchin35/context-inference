@@ -240,6 +240,19 @@ def render_timeline_navigation(
     return _navigation_controls(st_module, result, key)
 
 
+def render_timeline_speed_controls(
+    st_module: object, session: ResolvedSession, scope: str,
+) -> TreadmillSpeed | None:
+    """Return optional cached signed-mm/s speed using the existing timeline controls.
+
+    st_module is Streamlit's interface; session supplies the declared treadmill
+    path; scope independently keys this view's widgets. Return TreadmillSpeed
+    with (S,) UTC-second/signed-mm/s samples or None when hidden/unavailable.
+    Only explicit preparation buttons parse the log and decode its IRIG clock.
+    """
+    return _speed_controls(st_module, session, scope)
+
+
 def resolve_time_range(
     start_s: float, duration_s: float, bounds_s: tuple[float, float]
 ) -> tuple[float, float]:
