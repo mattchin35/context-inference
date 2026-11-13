@@ -20,16 +20,16 @@ Update at assignment, RED/test-commit, GREEN/review, interruption, and data gate
 
 | Field | Current value |
 | --- | --- |
-| Observation | 2026-11-13; branch `refactor`; plot tests HEAD `f27c8e3`. Recheck on resumption; this is not a reset target. |
+| Observation | 2026-11-13; branch `refactor`; figure HEAD `c7cbafb`. Recheck on resumption; this is not a reset target. |
 | Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 designated CT026 2026-08-28 after synthetic/browser gates. |
-| Feature state | WP1-WP4 accepted; WP5 plotting/real-figure benchmark GREEN in progress; initial WP6 tests committed. |
+| Feature state | WP1-WP5 accepted, all four synthetic bin pipelines pass; WP6 app integration GREEN in progress. |
 | Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
-| Active worker / writable scope | `/root/cca_worker`, WP5 GREEN: new `population/cca_plotting.py` and benchmark function/import/docstring in `population/run_session_cca.py` only; tests and other source frozen. |
+| Active worker / writable scope | `/root/cca_worker`, WP6 GREEN: new `webapp/cca_view.py`, localized `webapp/app.py` and `webapp/session_inputs.py` only; other source/tests frozen. |
 | Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
 | Current feature files | Spec/approved plan committed as `9e48e76`; live handoff and usage draft belong to orchestrator. Worker owns current runner GREEN only. |
 | Tests / processes | Numerical core 50 passed; baseline 86 passed, 1 Node-dependent skip. Connectivity-only Streamlit server exec 73923 at loopback 8527; see latest evidence. No experimental analysis running. |
 | Experimental validation | User designated CT026 2026-08-28 after synthetic/browser gates; metadata path recorded below. No further session authorized. |
-| Next action | Review WP5 GREEN and synthetic integration; initial WP6 tests stay RED until that package. |
+| Next action | Review WP6 actual app/source; verify selected-fit clamping, then browser and designated-session gates. |
 
 ### 0.2 Work-package ledger
 
@@ -43,8 +43,8 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | WP2 paired inputs/identity | Same worker | Accepted | `6592449`; missing-IO RED, lead 0.73 s | `a383bb4`; lead 36 passed/2.08 s; worker accumulated 154 passed; source/Ruff reviewed |
 | WP3 persistence/discovery | Same worker | Accepted | `d599397`; review `41d6fbb`, four failures/1.46 s | `1203545`; lead 115 CCA passed/3.22 s, worker accumulated 171 passed; source/Ruff read |
 | WP4 session/batch runners | Same worker | Accepted | `a1f7fd8`; missing-runner RED, lead 0.68 s | `64a9c11`; lead 22 passed/2.38 s, worker accumulated 193 passed/6.12 s; source/Ruff read |
-| WP5 scientific figure | Same worker | GREEN in progress | `f27c8e3`; lead missing-plotter 1.11 s; two actual benchmark failures 1.30 s | Pending |
-| WP6 app integration | Same worker | Initial tests committed; supplemental RED awaits WP5 | `d7f4f0c`; seven missing-route/view failures 2.36 s | Not run |
+| WP5 scientific figure | Same worker | Accepted | `f27c8e3`; lead missing-plotter 1.11 s; two actual benchmark failures 1.30 s | `c7cbafb`; lead 13 passed/5.75 s, worker accumulated 204 passed/10.34 s; source/Ruff read |
+| WP6 app integration | Same worker | GREEN in progress | `d7f4f0c` seven missing-route/view failures 2.36 s; `e689a92` three cache/navigation/manual-route failures 2.14 s | Pending |
 | WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Seeded integration tests committed; acceptance awaits WP6 | `cb1b035`; four missing-plotter failures | Real spawn failure isolation passed; usage/UI gates remain |
 | WP8 designated-session/performance | Orchestrator and user | Not started / synthetic acceptance and session designation | Not applicable unless a defect needs a regression | Not run; later user inspection precedes batches |
 
@@ -693,3 +693,16 @@ Next exact action, owner, and outstanding user decision if any:
   `test_webapp.py`: expected missing-route/view RED 2.36 s; Ruff passed,
   committed `d7f4f0c`. These are not part of WP5 GREEN. Worker will supplement
   navigation/cache/clamp/manual-route contracts tests-first at WP6.
+
+### 2026-11-13 - WP5 accepted / WP6 GREEN dispatch
+
+- Focused plot/benchmark 8 passed/2.34 s; worker accumulated CCA (excluding
+  both not-yet-implemented app files), timeline computation/IO/plotting:
+  204 passed/10.34 s. Includes four-bin seeded replay/reuse/rerun and real spawn.
+  Lead independently ran 13 plot/benchmark/integration tests: 5.75 s. All added
+  figure/benchmark source read; existing public behavior helper reused; Ruff/
+  whitespace passed. Accepted `c7cbafb`.
+- Lead supplemental app tests `e689a92` preceded source: three intended RED
+  failures/2.14 s, including actual manual-route path initialization. Ten app
+  tests now frozen. Sole worker owns new CCA view and two local wiring files.
+  Lower-K saved-selection clamping will receive a focused review check.
