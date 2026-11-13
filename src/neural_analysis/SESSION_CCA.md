@@ -71,6 +71,39 @@ actual bin interval, canonical score, and session correlation. The summary lists
 paired-window/observation counts, unit counts, and numerical ranks; the full
 correlation spectrum is available separately from the plotted row selection.
 
+## Optional treadmill speed
+
+Declare the session-relative log as `behavior.treadmill` in
+`neural_session.json`, then click **Prepare speed**. **Show speed** adds an
+IRIG-aligned, signed **mm/s** step row below events and above the heatmaps.
+Matching saved speed is reused; **Recompute speed** creates a new speed run.
+Speed preparation and display do not refit or change saved CCA results.
+
+The row preserves actual update times, signed values, and activity between
+choices. It uses the whole prepared series and fixed full-series y limits,
+including during bounded neural loading. Hiding/showing it preserves pan.
+Missing, stale or invalid speed leaves CCA available with an explanatory
+status. Raw logs are parsed only on explicit preparation.
+
+Speed version `treadmill-speed-v3` treats consecutive equal sync states as
+redundant pulse reports. Every logged interval still contributes to elapsed
+time; only pulse pairing ignores those reports. Their parsed positions and
+times are recorded as `redundant_sync_records`. The existing policy for short
+ambiguous speed offsets remains separately recorded as `rejected_speed_records`.
+Use **Prepare speed** to create a v3 cache for an older prepared session.
+
+CT026 validation retained 29,714 readings and 63 UTC frame anchors. One
+redundant LOW retained the full 0.799985-second low phase. One separately
+ambiguous speed reading was excluded across a 4.223-ms interval under the
+existing policy. Source-clock and retained-value audits passed, and both CCA
+archive hashes and modification times were unchanged after browser checks.
+The speed run contains `cca_speed_validation.json`, its audit script,
+`cca_speed_display_validation.json`, and `viewer_preview.jpg`:
+
+```text
+analysis_runs/treadmill_speed_20261113_152337_327562_320dffb85af6bb7c/
+```
+
 ## Interpretation
 
 PFC CC1 and HPC CC1 are different regional weighted combinations chosen to have
@@ -160,6 +193,11 @@ not performance guarantees.
 | Full-session plot JSON | 16.66 MB | 443.72 MB |
 | Default viewer JSON, with optional events | 17.61 MB | 18.68 MB |
 | Peak process RSS through full benchmark | 0.72 GB | 4.35 GB |
+
+These original CCA measurements exclude the optional speed row. With CT026's
+complete speed series, default viewer JSON was 18.91/19.99 MB at 500/20 ms;
+construction took 1.38/1.13 s and serialization 0.84/0.87 s, excluding browser
+rendering. Speed preparation took 0.21 s. These are single local observations.
 
 Full-session JSON uses the plotter's first ten pairs and CC1, without optional
 events. The actual default viewer includes all four available event tracks;

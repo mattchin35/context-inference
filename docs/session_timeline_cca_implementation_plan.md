@@ -1,7 +1,7 @@
 # Session Timeline PFC-HPC CCA: Implementation Plan and Live Handoff
 
-Status: Base CCA implementation complete; optional treadmill-speed extension
-approved and in progress, 2026-11-13.
+Status: Base CCA and approved optional treadmill-speed extension complete,
+2026-11-13. CT026 speed v3 and both saved CCA displays validated.
 CT026 2026-08-28 passed at 500/20 ms after synthetic/browser acceptance.
 User inspection precedes any additional experimental sessions.
 The [CCA spec](session_timeline_cca_spec_v1.md) owns the
@@ -22,16 +22,16 @@ Update at assignment, RED/test-commit, GREEN/review, interruption, and data gate
 
 | Field | Current value |
 | --- | --- |
-| Observation | 2026-11-13; branch `refactor`; hover-fix HEAD `35c1481`. Recheck on resumption; this is not a reset target. |
+| Observation | 2026-11-13; branch `refactor`; speed source HEAD `1272570`. Recheck on resumption; this is not a reset target. |
 | Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 designated CT026 2026-08-28 after synthetic/browser gates. |
-| Feature state | Base WP1-WP8 complete. User accepted the view and approved optional signed treadmill-speed reuse. Extension tests-first phase in progress. |
+| Feature state | Base WP1-WP8 and optional signed-speed extension complete. User-approved repeated-state handling preserves elapsed time and is tested/validated on CT026. |
 | Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
-| Active worker / writable scope | Orchestrator handles extension integration/CT026 validation directly; `/root/cca_worker` idle/unassigned. Source accepted as `d214c5e`; no parallel workers. |
+| Active worker / writable scope | No active implementation worker. Orchestrator completed extension; `/root/cca_worker` idle/unassigned. |
 | Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
-| Current feature files | Source committed through `35c1481`; final handoff/usage/README changes owned by orchestrator. No worker-owned pending changes. |
-| Tests / processes | Lead combined 360 passed/one Node skip/18.12 s; final CCA/chart 164 passed/one Node skip/13.24 s; all CCA Ruff/whitespace passed. CT026 preview server78560 at loopback8527, IAB tab1 retained as deliverable; all analysis processes complete. |
+| Current feature files | Source committed `d214c5e` and approved alignment fix `1272570`; final extension docs owned by orchestrator. |
+| Tests / processes | Final extension suite269 passed/one Node skip20.26s; Ruff/whitespace clean. CT026 preview server92967 at loopback8527, IAB tab1 retained with speed shown; older/synthetic servers stopped. All analyses complete. |
 | Experimental validation | User designated CT026 2026-08-28 after synthetic/browser gates; metadata path recorded below. No further session authorized. |
-| Next action | Commit failing speed integration tests, expose existing shared controls/renderer and wire CCA, then synthetic/browser checks and CT026 speed registration/preparation without refitting CCA. |
+| Next action | User inspects CT026 CCA with signed speed. No further code or experimental session assigned. |
 
 ### 0.2 Work-package ledger
 
@@ -49,7 +49,7 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | WP6 app integration | Same worker | Accepted | `d7f4f0c`, `e689a92`, `51d637e`, `274614c` | `2a8a57c`; review fixes 13 passed/6.14 s; lead combined 360 passed/one Node skip/18.12 s |
 | WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Accepted; guide/README complete | `cb1b035`; hover regression `6514e5b` RED1.93 s | Browser pan/ranks/pair/hide-trace/start/Jump/20-ms bounds/hover passed; footer `bb12bfc`, hover `35c1481`; final CCA/chart164 passed/one skip |
 | WP8 designated-session/performance | Orchestrator and user | Technical validation accepted; user inspection before batches | No new defect | Both fits/audits/browser passed; 696 common windows,141pairs; measured costs and paths below |
-| Extension: optional speed | Orchestrator, sole active implementation owner | Source accepted; CT026 registration/validation next | `e412b4d`; six intended failures3.75s | Six new tests4.47s; affected suite265 passed/one Node skip20.26s; Ruff/whitespace clean |
+| Extension: optional speed | Orchestrator, sole implementation owner | Accepted and CT026/browser validated | `e412b4d` six failures3.75s; repeated-state `3610cc9` five failures1.75s | `d214c5e`, `1272570`; final269 passed/one Node skip20.26s; clocks/values/CCA hashes audited |
 
 ### 0.3 Resume procedure
 
@@ -834,3 +834,58 @@ Next exact action, owner, and outstanding user decision if any:
 - Read-only metadata preflight found all eight existing CT026 PCA archives use
   scientific identity v2, so no legacy identity registration is needed before
   adding the optional treadmill field. The identified log is5,736,530 bytes.
+
+### 2026-11-13 - speed alignment decision and completed validation
+
+- Registered the approved CT026 log in `behavior.treadmill`; original metadata
+  backed up to `neural_session.before_treadmill_20261113_151233_538677.json`.
+  Before/after CCA configurations remained exactly equal. Initial speed v2 run
+  `treadmill_speed_20261113_151233_580601_a2646d0d24bf6435` failed its existing
+  repeated-state check and retained its log/config with no completed NPZ.
+- Read-only inspection:96,931 parsed records,29,715 speed rows,7,786 sync rows;
+  one repeated LOW at parsed row18941 / receipt13:55:07.629. The split intervals
+  .395778+.404207=.799985s retain the normal low phase. Explained clock versus
+  pulse-pairing distinction to user; the clarification was not treated as
+  approval. User then explicitly approved implementing/verifying repeated-state
+  handling, preserving intervals/speeds and recording diagnostics/versioning.
+- New tests `3610cc9` preceded source: four LOW/HIGH single/multiple insertion
+  cases plus speed-version test failed1.75s. Changed the old invalid-state test
+  to UNKNOWN because the user explicitly approved repeated HIGH/LOW support.
+  Core change filters redundant rows only after full clock reconstruction;
+  `redundant_sync_records` preserve row/state/source-clock/interval information.
+  Speed analysis/config version is v3, with explicit sync-state policy. No raw
+  file, clock reconstruction function, source units or CCA math changed.
+  Focused32 passed4.48s; source accepted `1272570` after actual diff review.
+- New speed run:
+  `analysis_runs/treadmill_speed_20261113_152337_327562_320dffb85af6bb7c/results.npz`.
+  Preparation0.212s;29,714 retained readings,63 frame anchors; signed range
+  -171.37..399.76mm/s. Redundant row18941 is ignored for pulse pairing only.
+  Existing short-gap rule excludes speed row24724 (188.68mm/s) across4.223ms;
+  this is separate from the repeated LOW. Full source-frame intervals range
+  59.998853..59.998939s per60UTC seconds; source clock/UTC ratio.9999814941.
+- Independent audit verified every retained signed value against the original
+  log, every source-clock time against cumulative ALL sync intervals, and UTC
+  mapping against63 frame anchors: source-clock/mapping max error0. The low
+  phase remained.799985s. Both CCA configuration IDs unchanged; both NPZ hashes
+  and mtimes unchanged after browser use. Saved `cca_speed_validation.json`,
+  `validate_cca_speed.py`, `cca_speed_display_validation.json` in the speed run.
+- Browser synthetic speed row shows signed steps and activity between choices;
+  native pan moved ticks10-60 to20-70 and hiding/showing speed retained exact
+  tick positions. Proof `.pytest_cache/cca_speed_synthetic_view.jpg`. Actual
+  CT026 both500/20ms saved products show the prepared speed row; retained tab1
+  is500ms. Proof `.pytest_cache/cca_ct026_with_speed.jpg`, additionally saved as
+  the speed run's `viewer_preview.jpg`. Speed never triggered CCA preparation.
+- With all optional events and full speed series: viewer JSON18.911/19.990MB
+  at500/20ms; figure construction1.383/1.125s, serialization.836/.867s. Browser
+  rendering unmeasured; fine-bin neural bounds retain the existing default.
+- Final exact test selection: CCA directory, `test_session_speed.py`,
+  `test_session_speed_view.py`, `test_treadmill_speed.py`,
+  `test_treadmill_speed_repeated_states.py`, `test_timeline_plotting.py`,
+  `test_session_timeline_webapp.py`, `test_timeline_chart.py`, and
+  `test_session_metadata.py`, under `UV_CACHE_DIR=.pytest_cache/uv uv run
+  --frozen --no-sync pytest -q`:269 passed/one Node skip/20.26s. Existing speed
+  batch fork warning unchanged. All changed code/tests Ruff and whitespace clean.
+  Session-local writes approved automatically; old11 dirty files retained.
+- Current preview process92967 uses the recorded CT026 command at port8527;
+  prior78560 and synthetic95925 stopped. No analysis is running. No new session
+  or algorithm change is awaiting approval; extension complete.

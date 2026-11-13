@@ -413,6 +413,24 @@ documentation, and recorded performance. A future implementation plan should
 name the concrete modules/functions, verified estimator, tests and numerical
 tolerances before code is written.
 
+## 11. Approved optional treadmill-speed extension (2026-11-13)
+
+The user approved an optional signed-mm/s row using the existing PCA timeline
+speed pipeline. A declared `behavior.treadmill` source enables explicit
+Prepare speed/Recompute speed and cached Show speed controls. The step row
+appears after events, shares the elapsed-time axes, retains activity between
+choices and uses full-series y limits. Missing or invalid speed affects only
+this row. Its cache is independent of CCA; it does not enter the fit or alter
+saved scores, source identity, binning or normalization. Display toggles preserve
+native pan. No smoothing, resampling or new dependency is required.
+
+The user separately approved handling redundant same-level sync reports in
+speed v3. Their intervals remain in the source clock; only pulse pairing ignores
+them, with explicit row/time diagnostics. Synthetic insertion tests must preserve
+frame UTC anchors and every retained speed timestamp/value. Existing short-gap
+ambiguous speed exclusions remain a separate diagnostic, not part of redundant
+state handling. Raw logs remain unchanged; speed cache version/identity changes.
+
 ## References and inspected reuse points
 
 - Existing scientific spec: `docs/session_timeline_pca_spec_v1.md`.
