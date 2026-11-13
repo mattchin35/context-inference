@@ -20,16 +20,16 @@ Update at assignment, RED/test-commit, GREEN/review, interruption, and data gate
 
 | Field | Current value |
 | --- | --- |
-| Observation | 2026-11-13; branch `refactor`; runner HEAD `64a9c11`. Recheck on resumption; this is not a reset target. |
+| Observation | 2026-11-13; branch `refactor`; plot tests HEAD `f27c8e3`. Recheck on resumption; this is not a reset target. |
 | Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 designated CT026 2026-08-28 after synthetic/browser gates. |
-| Feature state | WP1-WP4 accepted; WP5 plotting/real-figure benchmark RED in progress. |
+| Feature state | WP1-WP4 accepted; WP5 plotting/real-figure benchmark GREEN in progress; initial WP6 tests committed. |
 | Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
-| Active worker / writable scope | `/root/cca_worker`, WP5 RED: new `session_cca/test_plotting.py` and `test_plot_benchmark.py` only; all source and previous tests frozen. |
+| Active worker / writable scope | `/root/cca_worker`, WP5 GREEN: new `population/cca_plotting.py` and benchmark function/import/docstring in `population/run_session_cca.py` only; tests and other source frozen. |
 | Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
 | Current feature files | Spec/approved plan committed as `9e48e76`; live handoff and usage draft belong to orchestrator. Worker owns current runner GREEN only. |
 | Tests / processes | Numerical core 50 passed; baseline 86 passed, 1 Node-dependent skip. Connectivity-only Streamlit server exec 73923 at loopback 8527; see latest evidence. No experimental analysis running. |
 | Experimental validation | User designated CT026 2026-08-28 after synthetic/browser gates; metadata path recorded below. No further session authorized. |
-| Next action | Review WP5 tests/RED, commit tests, then authorize plotter/benchmark GREEN. |
+| Next action | Review WP5 GREEN and synthetic integration; initial WP6 tests stay RED until that package. |
 
 ### 0.2 Work-package ledger
 
@@ -43,8 +43,8 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | WP2 paired inputs/identity | Same worker | Accepted | `6592449`; missing-IO RED, lead 0.73 s | `a383bb4`; lead 36 passed/2.08 s; worker accumulated 154 passed; source/Ruff reviewed |
 | WP3 persistence/discovery | Same worker | Accepted | `d599397`; review `41d6fbb`, four failures/1.46 s | `1203545`; lead 115 CCA passed/3.22 s, worker accumulated 171 passed; source/Ruff read |
 | WP4 session/batch runners | Same worker | Accepted | `a1f7fd8`; missing-runner RED, lead 0.68 s | `64a9c11`; lead 22 passed/2.38 s, worker accumulated 193 passed/6.12 s; source/Ruff read |
-| WP5 scientific figure | Same worker | RED in progress | Pending | Not run |
-| WP6 app integration | Same worker | Not started / WP5 accepted | Not run | Not run |
+| WP5 scientific figure | Same worker | GREEN in progress | `f27c8e3`; lead missing-plotter 1.11 s; two actual benchmark failures 1.30 s | Pending |
+| WP6 app integration | Same worker | Initial tests committed; supplemental RED awaits WP5 | `d7f4f0c`; seven missing-route/view failures 2.36 s | Not run |
 | WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Seeded integration tests committed; acceptance awaits WP6 | `cb1b035`; four missing-plotter failures | Real spawn failure isolation passed; usage/UI gates remain |
 | WP8 designated-session/performance | Orchestrator and user | Not started / synthetic acceptance and session designation | Not applicable unless a defect needs a regression | Not run; later user inspection precedes batches |
 
@@ -682,3 +682,14 @@ Next exact action, owner, and outstanding user decision if any:
 - Focused pytest: four intended missing-plotter failures, one actual two-process
   spawn/failure-isolation pass, 2.72 s; Ruff passed. Tests committed `cb1b035`
   before plotter implementation. No experimental processing.
+
+### 2026-11-13 - WP5 RED accepted / initial WP6 RED
+
+- Lead read all six plotting and two benchmark tests. Independently reproduced
+  missing-plotter collection RED in 1.11 s and actual missing metric/unsupported
+  bounded benchmark failures in 1.30 s. Tests committed `f27c8e3`; sole worker
+  now owns plotter plus benchmark extension only. Source and other tests frozen.
+- Lead used independent review time for seven real AppTests/routing tests in
+  `test_webapp.py`: expected missing-route/view RED 2.36 s; Ruff passed,
+  committed `d7f4f0c`. These are not part of WP5 GREEN. Worker will supplement
+  navigation/cache/clamp/manual-route contracts tests-first at WP6.
