@@ -10,6 +10,7 @@ import pandas as pd
 
 from src.neural_analysis.session_metadata import ResolvedSession
 from src.neural_analysis.event_sequences import io as event_sequence_io
+from src.neural_analysis.population.session_cca_io import discover_cca_results
 from src.neural_analysis.session_metadata import (
     load_session_metadata,
     resolve_probe_sources,
@@ -67,6 +68,8 @@ PLOT_VIEW_CONTEXT_ENCODING = "Context encoding results"
 
 PLOT_VIEW_SESSION_TIMELINE = "Session timeline and PCA"
 
+PLOT_VIEW_SESSION_CCA = "Session timeline and CCA"
+
 PLOT_VIEW_PHASE_SYNCHRONY = "Session timeline: LFP power and synchrony"
 
 PLOT_VIEW_EVENT_SEQUENCE_CENTRAL = "Event sequences: central trials"
@@ -89,6 +92,7 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_INTERREGIONAL,
     PLOT_VIEW_CONTEXT_ENCODING,
     PLOT_VIEW_SESSION_TIMELINE,
+    PLOT_VIEW_SESSION_CCA,
     PLOT_VIEW_PHASE_SYNCHRONY,
     PLOT_VIEW_EVENT_SEQUENCE_CENTRAL,
     PLOT_VIEW_EVENT_SEQUENCE_TRANSITION,
@@ -194,6 +198,7 @@ def metadata_view_availability(
     """
     # Saved event products establish view availability before current-source checks.
     saved_event_products = event_sequence_io.discover_event_sequences(session.session_root)
+    saved_cca_products = discover_cca_results(session.session_root)
     behavior_ready = (
         session.behavior.session_directory is not None
         and session.behavior.session_directory.is_dir()
@@ -240,9 +245,11 @@ def metadata_view_availability(
             availability[view] = MetadataViewAvailability(True, "available")
         elif view == PLOT_VIEW_SESSION_TIMELINE and discover_prediction_runs(session.session_root):
             availability[view] = MetadataViewAvailability(True, "saved predictions available")
+        elif view == PLOT_VIEW_SESSION_CCA and saved_cca_products:
+            availability[view] = MetadataViewAvailability(True, "saved CCA available")
         elif not behavior_ready:
             availability[view] = MetadataViewAvailability(False, behavior_reason)
-        elif view in {PLOT_VIEW_SESSION_TIMELINE, PLOT_VIEW_PHASE_SYNCHRONY}:
+        elif view in {PLOT_VIEW_SESSION_TIMELINE, PLOT_VIEW_SESSION_CCA, PLOT_VIEW_PHASE_SYNCHRONY}:
             # This view loads probes independently and also supports behavior only.
             availability[view] = MetadataViewAvailability(True, "available")
         elif view in lfp_only and not lfp_ready:

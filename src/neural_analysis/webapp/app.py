@@ -159,6 +159,7 @@ from src.neural_analysis.webapp.session_inputs import (
     PLOT_VIEW_INTERREGIONAL,
     PLOT_VIEW_CONTEXT_ENCODING,
     PLOT_VIEW_SESSION_TIMELINE,
+    PLOT_VIEW_SESSION_CCA,
     PLOT_VIEW_EVENT_SEQUENCE_CENTRAL,
     PLOT_VIEW_EVENT_SEQUENCE_TRANSITION,
     PLOT_VIEW_PHASE_SYNCHRONY,
@@ -210,6 +211,7 @@ from src.neural_analysis.webapp.condition_generalization_views import (
 from src.neural_analysis.webapp.cross_condition_view import render_cross_condition_view
 from src.neural_analysis.webapp.task_decoding_views import render_task_decoding_view
 from src.neural_analysis.webapp.timeline_view import render_session_timeline_view
+from src.neural_analysis.webapp.cca_view import render_session_cca_view
 from src.neural_analysis.webapp.phase_synchrony_view import render_phase_synchrony_view
 from src.neural_analysis.webapp.event_sequence_views import render_event_sequence_view
 from src.neural_analysis.webapp.unit_views import (
@@ -695,6 +697,9 @@ def _start_metadata_webapp(session: ResolvedSession) -> str | None:
     if plot_view == PLOT_VIEW_SESSION_TIMELINE:
         render_session_timeline_view(st, session)
         return None
+    if plot_view == PLOT_VIEW_SESSION_CCA:
+        render_session_cca_view(st, session)
+        return None
     if plot_view == PLOT_VIEW_EVENT_SEQUENCE_CENTRAL:
         render_event_sequence_view(st, session, kind="central")
         return None
@@ -757,6 +762,9 @@ def main(argv: Sequence[str] = ()) -> None:
         metadata_lfp_sites = metadata_lfp_site_inputs(metadata_session)
     else:
         plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+        if plot_view == PLOT_VIEW_SESSION_CCA:
+            st.info("Session timeline and CCA uses session metadata. Launch with --session-metadata <session_root>/neural_session.json.")
+            return
         if plot_view == PLOT_VIEW_CROSS_CONDITION_GENERALIZATION:
             st.info("Cross-condition generalization uses session metadata. Launch with --session-metadata <session_root>/neural_session.json.")
             return
