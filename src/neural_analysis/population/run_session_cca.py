@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 from src.neural_analysis.population import cca
 from src.neural_analysis.population import session_cca_io as cca_io
+from src.neural_analysis.population.cca_plotting import plot_session_cca
 from src.neural_analysis.population.run_session_timeline import (
     probe_roles_from_arguments,
     resolve_timeline_probe_roles,
@@ -114,25 +115,39 @@ def run_session_cca(
     return CCARunReport("prepared", saved, identity, perf_counter() - began)
 
 
-def benchmark_cca_result(result_path: Path | str) -> dict:
-    """Measure saved-load time, score/file bytes and process memory, without fitting.
+def benchmark_cca_result(
+    result_path: Path | str, *, loaded_range_s: tuple[float, float] | None = None,
+) -> dict:
+    """Measure saved loading, actual figure construction/JSON and process memory.
 
-    result_path names a completed CCA NPZ. Return a JSON-compatible dictionary:
-    seconds for measured load/preparation times, bytes for sizes/memory, and
+    result_path names a completed CCA NPZ. loaded_range_s optionally bounds
+    neural display windows in elapsed seconds; full scores still load. Return
+    a JSON-compatible dictionary: seconds for measured load/preparation/figure
+    and serialization times, UTF-8 bytes for JSON, bytes for file/memory, and
     dimensionless window/unit/rank/pair counts. Filesystem cache state is
     unspecified; RSS is process-lifetime peak, not incremental allocation.
-    This initial benchmark requires no plotter and makes no browser claim.
+    Browser rendering is not measured. No fitting or file modification occurs.
     """
     path = Path(result_path)
     began = perf_counter()
     result = cca_io.load_cca_result(path)
     loading_s = perf_counter() - began
+    began = perf_counter()
+    figure = plot_session_cca(result, loaded_range_s=loaded_range_s)
+    construction_s = perf_counter() - began
+    began = perf_counter()
+    serialized = figure.to_json().encode("utf-8")
+    serialization_s = perf_counter() - began
     return {
         "measurement": "measured; filesystem cache state unspecified",
         "result_path": str(path), "session_id": result.session_id,
         "bin_width_s": result.meta["bin_width_s"], "choices": len(result.choices),
         "paired_windows": len(result.choice_positions), "pairs": len(result.fit.correlations),
         "npz_load_s": loading_s, "npz_bytes": path.stat().st_size,
+        "figure_construction_s": construction_s, "serialization_s": serialization_s,
+        "json_bytes": len(serialized),
+        "loaded_range_s": list(loaded_range_s) if loaded_range_s is not None else None,
+        "browser_rendering": "not measured",
         "score_bytes": sum(values.nbytes for values in result.fit.scores.values()),
         "preparation_timings_s": result.meta.get("preparation_timings_s", {}),
         "regions": {region: {"units": len(transform.retained_unit_ids), "rank": transform.rank,
