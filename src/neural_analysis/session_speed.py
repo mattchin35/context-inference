@@ -22,6 +22,7 @@ import numpy as np
 from src.irig_tools import irig_serial_io
 from src.mouse_behavior_preprocessing.treadmill_speed import (
     MAX_REJECTED_INTERVAL_S,
+    SYNC_STATE_POLICY,
     TreadmillSpeed,
     align_treadmill_speed,
 )
@@ -31,7 +32,7 @@ from src.neural_analysis.session_metadata import (
     resolve_session_metadata,
 )
 
-ANALYSIS_VERSION = "treadmill-speed-v2"
+ANALYSIS_VERSION = "treadmill-speed-v3"
 ARRAY_NAMES = ("utc_s", "speed_mm_s", "source_rows", "frame_clock_s", "frame_utc_s")
 
 
@@ -78,6 +79,7 @@ def speed_configuration(session: ResolvedSession) -> dict:
             "mapping": "piecewise linear; endpoint extrapolation only to actual records",
             "timing_rejection": "omit reset-offset suffix before following sync; do not reassign time",
             "maximum_rejected_interval_s": MAX_REJECTED_INTERVAL_S,
+            "sync_state_policy": SYNC_STATE_POLICY,
         },
     }
     encoded = json.dumps(config, sort_keys=True, separators=(",", ":"))

@@ -11,6 +11,7 @@ from src.irig_tools import irig_core
 from src.neural_analysis.synchronization.manual import make_timebase_mapper
 
 MAX_REJECTED_INTERVAL_S = 0.05
+SYNC_STATE_POLICY = "ignore repeated states for pulse pairing only; retain all clock intervals"
 
 
 @dataclass(frozen=True)
@@ -135,8 +136,11 @@ def align_treadmill_speed(parsed: pd.DataFrame) -> TreadmillSpeed:
     parsed follows reconstruct_treadmill_clock's contract; time_value is seconds
     and runSpeed values are mm/s strings/numbers. Return UTC/value/source-row
     arrays (S,) and frame anchors (A,), preserving zeros, negatives, duplicates,
-    and leading samples. Only the documented short-gap ambiguous speed records
-    are omitted, with their original positions/values recorded in meta.
+    and leading samples. Repeated sync states are ignored only for pulse
+    pairing; every interval still contributes to the source clock, and those
+    redundant parsed rows/times are recorded in metadata. Only the documented
+    short-gap ambiguous speed records are omitted, with their original
+    positions/values recorded in meta.
     At least two increasing frame anchors are required.
     Mapping extrapolates only to actual logged samples at the boundaries.
     PC receipt timestamps, choice windows, and neural bin widths are unused.
@@ -145,10 +149,13 @@ def align_treadmill_speed(parsed: pd.DataFrame) -> TreadmillSpeed:
     labels = parsed.label.to_numpy()
     sync_rows = np.flatnonzero(labels == "syncPinState")
     states = parsed.value.to_numpy()[sync_rows]
-    if not np.isin(states, ("HIGH", "LOW")).all() or (states[1:] == states[:-1]).any():
-        raise ValueError(
-            "Sync transitions must alternate HIGH/LOW without duplicate states."
-        )
+    if not np.isin(states, ("HIGH", "LOW")).all():
+        raise ValueError("Sync states must be HIGH or LOW.")
+    # A repeated level is not a new pulse boundary. Keep its interval in the
+    # already reconstructed clock so no elapsed time or speed sample is lost.
+    repeated = np.r_[False, states[1:] == states[:-1]]
+    redundant_rows = sync_rows[repeated]
+    sync_rows, states = sync_rows[~repeated], states[~repeated]
     # An initial LOW and final HIGH have no completed pulse partner.
     start = 1 if states[0] == "LOW" else 0
     stop = len(states) - (1 if states[-1] == "HIGH" else 0)
@@ -224,6 +231,13 @@ def align_treadmill_speed(parsed: pd.DataFrame) -> TreadmillSpeed:
         "rejected_speed_records": rejected,
         "ambiguous_source_rows": np.flatnonzero(~np.isfinite(clock)).tolist(),
         "frame_anchors": len(frames),
+        "sync_state_policy": SYNC_STATE_POLICY,
+        "redundant_sync_rows": redundant_rows.tolist(),
+        "redundant_sync_records": [
+            {"source_row": int(row), "state": str(parsed.value.iloc[row]),
+             "source_clock_s": float(clock[row]), "logged_interval_s": float(parsed.time_value.iloc[row])}
+            for row in redundant_rows
+        ],
         "incomplete_boundary_pulses": start + (len(states) - stop),
         "invalid_pulse_indices": decoded.invalid_pulse_ix.tolist(),
         "source_extent_s": [float(clock[0]), float(clock[-1])],
