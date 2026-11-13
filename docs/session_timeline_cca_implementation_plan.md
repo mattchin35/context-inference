@@ -789,6 +789,8 @@ Next exact action, owner, and outstanding user decision if any:
   `.pytest_cache/cca_ct026_20ms.jpg`. Native fullscreen in this IAB produced an
   undersized chart and black surrounding capture; exited it and verified the
   normal display. Shared existing fullscreen renderer was not changed.
+- Both verified screenshots were additionally saved without overwriting as
+  `viewer_preview.jpg` in their corresponding session-local result directories.
 - Old synthetic preview stopped. Deliverable preview server exec78560 uses
   `UV_CACHE_DIR=.pytest_cache/uv MPLCONFIGDIR=.pytest_cache/matplotlib uv run
   --frozen --no-sync streamlit run src/neural_analysis/psth_webapp.py

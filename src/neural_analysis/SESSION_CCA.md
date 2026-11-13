@@ -179,6 +179,7 @@ analysis_runs/session_timeline_cca_20261113_143906_219681_fb80ed228f329ade/
 
 Each includes immutable scientific results, preparation measurements, a full
 benchmark JSON, and `validation_audit.json` with a copy of the audit script.
+`viewer_preview.jpg` records the verified display for each bin width.
 Inspect these two results before processing additional experimental sessions.
 The [live handoff](../../docs/session_timeline_cca_implementation_plan.md)
 records exact commands, commits, and validation evidence.
