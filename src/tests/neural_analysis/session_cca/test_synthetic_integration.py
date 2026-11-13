@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
@@ -10,7 +13,6 @@ import pytest
 
 from src.neural_analysis.population.cca import transform_cca_activity
 from src.neural_analysis.population import run_session_cca as runner
-from src.neural_analysis.population import run_session_cca_batch as batch
 from src.neural_analysis.population import session_cca_io as cca_io
 from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
 
@@ -138,11 +140,24 @@ def test_seeded_pipeline_replay_and_display_preserve_all_fitted_observations(sha
 
 
 def test_actual_spawn_isolates_failure_and_completes_other_session(shared_private_session):
-    """Real spawn processes return ordered reports without transferring numerical arrays."""
+    """Real batch CLI spawn processes isolate failure and preserve input report order.
+
+    Run in a fresh interpreter because Streamlit AppTest replaces __main__
+    with a temporary script that cannot be imported by multiprocessing spawn.
+    """
     session = shared_private_session
-    reports = batch.run_batch((session.metadata_path.parent / "missing.json", session.metadata_path),
-                              ROLES, workers=2)
-    assert [report.status for report in reports] == ["failed", "prepared"], reports
-    assert "missing.json" in reports[0].error
-    loaded = cca_io.load_cca_result(reports[1].result_path)
+    missing = session.metadata_path.parent / "missing.json"
+    session_list = session.session_root / "batch_sessions.txt"
+    session_list.write_text(f"{missing}\n{session.metadata_path}\n", encoding="ascii")
+    process = subprocess.run(
+        [sys.executable, "-m", "src.neural_analysis.population.run_session_cca_batch",
+         "--session-list", str(session_list), "--pfc-probe", "A", "--hpc-probe", "B", "--workers", "2"],
+        capture_output=True, text=True, check=False, timeout=60,
+    )
+    assert process.returncode == 1, process.stderr
+    lines = process.stdout.splitlines()
+    assert len(lines) == 2, process.stdout
+    assert lines[0].startswith(f"{missing}: failed ")
+    assert lines[1].startswith(f"{session.metadata_path}: prepared ")
+    loaded = cca_io.load_cca_result(Path(lines[1].split(": prepared ", 1)[1]))
     assert loaded.fit.scores["PFC"].shape == (16, 8, 3)
