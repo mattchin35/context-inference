@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -83,3 +84,29 @@ def test_manual_route_explains_metadata_requirement_before_any_path_or_signal_wo
     app.main([])
     assert fake_st.info.call_count == 1
     assert "--session-metadata" in fake_st.info.call_args.args[0]
+
+
+def test_switching_to_lower_rank_saved_fit_clamps_stale_display_choices(shared_private_session):
+    """A valid three-pair selection safely becomes CC1 when a one-pair archive is chosen."""
+    session = shared_private_session
+    first = runner.run_session_cca(session.metadata_path, ROLES)
+    at = AppTest.from_function(_render_cca, args=(str(session.metadata_path),)).run()
+    assert not at.exception
+    next(widget for widget in at.slider if widget.label == "Canonical pair ranks").set_value((2, 3)).run()
+    next(widget for widget in at.selectbox if widget.label == "Trace pair").select(3).run()
+    assert not at.exception
+    previous_time_revision = _figure(at)["layout"]["uirevision"]
+    metadata = json.loads(session.metadata_path.read_text())
+    for probe in ("A", "B"):
+        metadata["probes"][probe]["unit_channels"] = [0]
+    session.metadata_path.write_text(json.dumps(metadata), encoding="ascii")
+    smaller = runner.run_session_cca(session.metadata_path, ROLES)
+    assert len(cca_io.load_cca_result(smaller.result_path).fit.correlations) == 1
+    at.run()
+    next(widget for widget in at.selectbox if widget.label == "Saved CCA result").select(str(smaller.result_path)).run()
+    assert not at.exception
+    figure = _figure(at)
+    assert figure["layout"]["uirevision"] == previous_time_revision
+    assert any(trace["name"] == "PFC CC1" for trace in figure["data"])
+    assert any("pairs 1-1" in annotation["text"] for annotation in figure["layout"]["annotations"])
+    assert first.result_path.is_file()
