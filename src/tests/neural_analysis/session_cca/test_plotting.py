@@ -145,6 +145,9 @@ def test_display_controls_revisions_hover_and_light_caption_do_not_fit_or_mutate
         assert region.lower() in hover and result.probe_roles[region] in trace.hovertemplate
         assert "rho" in hover or "correlation" in hover
         assert "utc" in hover and "relative" in hover
+        # Explicit numeric formatting avoids Plotly prepending the CC tick label
+        # to the already present CC prefix in the canonical-pair hover label.
+        assert "CC%{y:.0f}" in trace.hovertemplate
         np.testing.assert_array_equal(result.fit.scores[region], before[region])
 
 
