@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from base64 import b64decode
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 from streamlit.testing.v1 import AppTest
 
 from src.neural_analysis.population import run_session_cca as runner
@@ -143,7 +145,14 @@ def _render_cca(metadata_path: str) -> None:
 def _figure(app_test: AppTest) -> dict:
     """Return the actual JSON figure passed to the persistent chart component."""
     component = app_test.get("bidi_component")[0]
-    return json.loads(json.loads(component.proto.json)["figure_json"])
+    figure = json.loads(json.loads(component.proto.json)["figure_json"])
+    # Plotly serializes numeric vectors as typed base64 arrays; assertions
+    # about displayed ranks need their values rather than encoding field count.
+    for trace in figure["data"]:
+        values = trace.get("y")
+        if isinstance(values, dict) and "bdata" in values:
+            trace["y"] = np.frombuffer(b64decode(values["bdata"]), dtype=values["dtype"]).tolist()
+    return figure
 
 
 def _remove_raw_sources(session) -> None:
