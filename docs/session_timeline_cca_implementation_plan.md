@@ -20,16 +20,16 @@ Update at assignment, RED/test-commit, GREEN/review, interruption, and data gate
 
 | Field | Current value |
 | --- | --- |
-| Observation | 2026-11-13; branch `refactor`; figure HEAD `c7cbafb`. Recheck on resumption; this is not a reset target. |
+| Observation | 2026-11-13; branch `refactor`; hover-fix HEAD `35c1481`. Recheck on resumption; this is not a reset target. |
 | Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 designated CT026 2026-08-28 after synthetic/browser gates. |
-| Feature state | WP1-WP5 accepted; WP6 initial 11 app tests pass after genuine Plotly test-decoder correction; two review regressions under fix. |
+| Feature state | WP1-WP7 accepted; source, synthetic and browser gates complete. WP8 designated-session preflight started; no fit run yet. |
 | Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
-| Active worker / writable scope | `/root/cca_worker`, WP6 review-fix GREEN: `webapp/cca_view.py` only; wiring/source/tests otherwise frozen. |
+| Active worker / writable scope | `/root/cca_worker` idle, no writable scope. Orchestrator owns WP8 validation and final usage/handoff docs. |
 | Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
 | Current feature files | Spec/approved plan committed as `9e48e76`; live handoff and usage draft belong to orchestrator. Worker owns current runner GREEN only. |
-| Tests / processes | Initial app 11 passed/5.27 s; worker old UI regressions 113 passed/6.51 s; two new review failures committed. Old connectivity server 73923 stopped; restart fresh synthetic preview after fixes. No experimental analysis running. |
+| Tests / processes | Lead default pytest: 360 passed, 1 Node skip/18.12 s; all CCA Ruff passed. Synthetic preview server 48322 at loopback8527, stable temporary fixture below; no experimental fit running yet. |
 | Experimental validation | User designated CT026 2026-08-28 after synthetic/browser gates; metadata path recorded below. No further session authorized. |
-| Next action | Review WP6 actual app/source; verify selected-fit clamping, then browser and designated-session gates. |
+| Next action | CT026 source/unit/memory preflight, then sequential 500/20-ms preparation/audit/benchmark and actual saved-result preview. Finish usage docs. |
 
 ### 0.2 Work-package ledger
 
@@ -44,9 +44,9 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | WP3 persistence/discovery | Same worker | Accepted | `d599397`; review `41d6fbb`, four failures/1.46 s | `1203545`; lead 115 CCA passed/3.22 s, worker accumulated 171 passed; source/Ruff read |
 | WP4 session/batch runners | Same worker | Accepted | `a1f7fd8`; missing-runner RED, lead 0.68 s | `64a9c11`; lead 22 passed/2.38 s, worker accumulated 193 passed/6.12 s; source/Ruff read |
 | WP5 scientific figure | Same worker | Accepted | `f27c8e3`; lead missing-plotter 1.11 s; two actual benchmark failures 1.30 s | `c7cbafb`; lead 13 passed/5.75 s, worker accumulated 204 passed/10.34 s; source/Ruff read |
-| WP6 app integration | Same worker | Review fixes in progress | `d7f4f0c`, `e689a92`; lower-K `51d637e`; two real review failures `274614c`/3.40 s | Initial 11 passed/5.27 s after decoder-only `e8e83c6`; source not accepted yet |
-| WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Seeded integration tests committed; acceptance awaits WP6 | `cb1b035`; four missing-plotter failures | Real spawn failure isolation passed; usage/UI gates remain |
-| WP8 designated-session/performance | Orchestrator and user | Not started / synthetic acceptance and session designation | Not applicable unless a defect needs a regression | Not run; later user inspection precedes batches |
+| WP6 app integration | Same worker | Accepted | `d7f4f0c`, `e689a92`, `51d637e`, `274614c` | `2a8a57c`; review fixes 13 passed/6.14 s; lead combined 360 passed/one Node skip/18.12 s |
+| WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Synthetic/browser accepted; final usage measurements remain | `cb1b035`; hover regression `6514e5b` RED1.93 s | Browser pan/ranks/pair/hide-trace/start/Jump/20-ms bounds/hover passed; footer `bb12bfc`, hover `35c1481`; usage finish after WP8 |
+| WP8 designated-session/performance | Orchestrator and user | CT026 preflight started after browser gates | Not applicable unless a defect needs a regression | Pending; later user inspection precedes batches |
 
 ### 0.3 Resume procedure
 
@@ -721,3 +721,31 @@ Next exact action, owner, and outstanding user decision if any:
   Ruff clean. App retains identical 71 pre-existing F401 re-export findings.
 - Connectivity-only server 73923 stopped cleanly. Browser tab retained; start
   a fresh rich synthetic fixture preview after WP6 acceptance. No data run yet.
+
+### 2026-11-13 - WP6/WP7 acceptance and WP8 start
+
+- Worker review fixes: 13 app/navigation passed/6.14 s; combined importlib mode
+  295 passed/17.71 s. Lead reproduced default-mode test-name collision (1.94 s)
+  and isolated the new tests with a package marker. Default combined CCA,
+  timeline/UI/IO, synchrony UI, metadata, chart and PSTH command then passed:
+  360 tests, one existing Node skip, 18.12 s. All CCA source/tests and session
+  inputs Ruff clean; app's 71 pre-existing re-export warnings unchanged. Source
+  accepted `2a8a57c`; unrelated work retained.
+- Actual IAB browser: 20-ms bounded default; native pan changed ticks10-60 to
+  20-70 and identical tick positions survived rank/pair/hide-trace changes.
+  Window start100 loaded40-220; Jump118 loaded124.123-244.123 and displayed
+  ticks190-240. Saved500/20 switching preserves genuine saved settings.
+- Browser found overlapping figure footer/time label (DOM vertical boxes
+  overlap about5px). Local spacing/wrapping correction `bb12bfc`: plot/benchmark
+  tests8 passed/2.37s; actual DOM now separated by about30px. Browser also found
+  Plotly duplicated the CC tick prefix in hover. Regression `6514e5b` failed
+  before numeric formatting fix `35c1481`; six plotting tests passed/2.01s.
+  Browser verified `HPC (B) CC1`, rho1, trial102, elapsed18.123-18.623,
+  choice-relative0-.5 and saved score1.2934 after the fix.
+- Synthetic fixture now lives in a dedicated pytest basetemp so later default
+  pytest cleanup cannot remove the preview: `/tmp/cca-browser-validation-20261113-1940/test_seeded_pipeline_replay_an0/shared_private/neural_session.json`.
+  Five integration/spawn tests passed4.93s there. Server48322 is live on8527;
+  previous preview processes stopped. Proof: `.pytest_cache/cca_synthetic_hover.jpg`.
+- User-designated CT026 metadata opened only after gates. Version3 confirms
+  PFC ProbeA / HPC ProbeB. About41GB RAM available. Next small-source/unit/shape
+  preflight, then two sequential preparations; no other experimental session.
