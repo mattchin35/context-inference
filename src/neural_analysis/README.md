@@ -232,6 +232,15 @@ You can also click **Prepare** in the viewer. See the
 assignments, navigation, saved outputs, benchmarking, and session-level batch
 preparation. Stage 1 does not compute per-choice participation counts.
 
+## Session timeline and CCA
+
+Select **Session timeline and CCA** for fixed session-wide PFC/HPC canonical
+coordinates from paired unit counts. Both regions use the same complete
+`[-2,+2)` choice windows and canonical ranks. Prepare/Recompute save a paired
+model; display controls reuse its scores. Correlations are in-sample, with task
+responses retained. See the [CCA usage guide](SESSION_CCA.md) for preparation,
+interpretation, saved-result viewing, and measured validation.
+
 ## Choice-window LFP power and phase synchrony
 
 The independent `src.neural_analysis.phase_synchrony.run_session` command

@@ -1,8 +1,9 @@
 # Session Timeline PFC-HPC CCA: Implementation Plan and Live Handoff
 
-Status: Implementation approved, 2026-11-13: user instructed "Begin
-implementation". WP1-WP7 may proceed; CT026 2026-08-28 is designated for WP8
-after synthetic/browser acceptance. The [CCA spec](session_timeline_cca_spec_v1.md) owns the
+Status: Implementation and designated-session validation complete, 2026-11-13.
+CT026 2026-08-28 passed at 500/20 ms after synthetic/browser acceptance.
+User inspection precedes any additional experimental sessions.
+The [CCA spec](session_timeline_cca_spec_v1.md) owns the
 confirmed science; this plan owns design, tests, delivery and assignments under
 [AGENTS.md](../AGENTS.md) and [SoftwareDesign.md](SoftwareDesign.md).
 New user decisions take precedence.
@@ -22,14 +23,14 @@ Update at assignment, RED/test-commit, GREEN/review, interruption, and data gate
 | --- | --- |
 | Observation | 2026-11-13; branch `refactor`; hover-fix HEAD `35c1481`. Recheck on resumption; this is not a reset target. |
 | Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 designated CT026 2026-08-28 after synthetic/browser gates. |
-| Feature state | WP1-WP7 accepted; source, synthetic and browser gates complete. WP8 designated-session preflight started; no fit run yet. |
+| Feature state | WP1-WP8 technical work complete; CT026 500/20-ms fits, independent audits and actual saved displays passed. Usage guide complete. User inspection precedes wider batches. |
 | Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
 | Active worker / writable scope | `/root/cca_worker` idle, no writable scope. Orchestrator owns WP8 validation and final usage/handoff docs. |
 | Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
-| Current feature files | Spec/approved plan committed as `9e48e76`; live handoff and usage draft belong to orchestrator. Worker owns current runner GREEN only. |
-| Tests / processes | Lead default pytest: 360 passed, 1 Node skip/18.12 s; all CCA Ruff passed. Synthetic preview server 48322 at loopback8527, stable temporary fixture below; no experimental fit running yet. |
+| Current feature files | Source committed through `35c1481`; final handoff/usage/README changes owned by orchestrator. No worker-owned pending changes. |
+| Tests / processes | Lead combined 360 passed/one Node skip/18.12 s; final CCA/chart 164 passed/one Node skip/13.24 s; all CCA Ruff/whitespace passed. CT026 preview server78560 at loopback8527, IAB tab1 retained as deliverable; all analysis processes complete. |
 | Experimental validation | User designated CT026 2026-08-28 after synthetic/browser gates; metadata path recorded below. No further session authorized. |
-| Next action | CT026 source/unit/memory preflight, then sequential 500/20-ms preparation/audit/benchmark and actual saved-result preview. Finish usage docs. |
+| Next action | User inspects CT026 outputs. No implementation task or additional experimental session is assigned. Preview command and results below support resumption. |
 
 ### 0.2 Work-package ledger
 
@@ -45,8 +46,8 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | WP4 session/batch runners | Same worker | Accepted | `a1f7fd8`; missing-runner RED, lead 0.68 s | `64a9c11`; lead 22 passed/2.38 s, worker accumulated 193 passed/6.12 s; source/Ruff read |
 | WP5 scientific figure | Same worker | Accepted | `f27c8e3`; lead missing-plotter 1.11 s; two actual benchmark failures 1.30 s | `c7cbafb`; lead 13 passed/5.75 s, worker accumulated 204 passed/10.34 s; source/Ruff read |
 | WP6 app integration | Same worker | Accepted | `d7f4f0c`, `e689a92`, `51d637e`, `274614c` | `2a8a57c`; review fixes 13 passed/6.14 s; lead combined 360 passed/one Node skip/18.12 s |
-| WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Synthetic/browser accepted; final usage measurements remain | `cb1b035`; hover regression `6514e5b` RED1.93 s | Browser pan/ranks/pair/hide-trace/start/Jump/20-ms bounds/hover passed; footer `bb12bfc`, hover `35c1481`; usage finish after WP8 |
-| WP8 designated-session/performance | Orchestrator and user | CT026 preflight started after browser gates | Not applicable unless a defect needs a regression | Pending; later user inspection precedes batches |
+| WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Accepted; guide/README complete | `cb1b035`; hover regression `6514e5b` RED1.93 s | Browser pan/ranks/pair/hide-trace/start/Jump/20-ms bounds/hover passed; footer `bb12bfc`, hover `35c1481`; final CCA/chart164 passed/one skip |
+| WP8 designated-session/performance | Orchestrator and user | Technical validation accepted; user inspection before batches | No new defect | Both fits/audits/browser passed; 696 common windows,141pairs; measured costs and paths below |
 
 ### 0.3 Resume procedure
 
@@ -749,3 +750,57 @@ Next exact action, owner, and outstanding user decision if any:
 - User-designated CT026 metadata opened only after gates. Version3 confirms
   PFC ProbeA / HPC ProbeB. About41GB RAM available. Next small-source/unit/shape
   preflight, then two sequential preparations; no other experimental session.
+
+### 2026-11-13 - CT026 validation complete / final handoff
+
+- Read-only preflight confirmed696 complete choices in both regions,141 PFC
+  ProbeA units and286 HPC ProbeB units; predicted20-ms count storage475.5MB,
+  available RAM about41GB. Existing CCA products: zero. User authorization and
+  synthetic/browser gates already satisfied. No other experimental session run.
+- Prepared sequentially with `UV_CACHE_DIR=.pytest_cache/uv
+  MPLCONFIGDIR=.pytest_cache/matplotlib uv run --frozen --no-sync python -m
+  src.neural_analysis.population.run_session_cca --session-metadata
+  /home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/neural_session.json
+  --bin-width-ms 500 --benchmark`, then the same command with20. Session-local
+  writes received automatic sandbox approval. No earlier result was overwritten.
+- Results beneath the designated session's `analysis_runs`:
+  `session_timeline_cca_20261113_143835_549829_31e43944ef338a61/results.npz`
+  and `session_timeline_cca_20261113_143906_219681_fb80ed228f329ade/results.npz`.
+  Preparation wall time3.413/18.069s; NPZ12.987/302.623MB; full-plot JSON
+  16.658/443.724MB; peak process RSS through full benchmark0.716/4.349GB.
+  These are single observed runs with filesystem-cache state unspecified.
+- Independent public-API audit loaded fresh counts, verified saved behavior,
+  eligibility/edges/identity, replayed all scores, and checked full covariance
+  and cross-covariance matrices at both widths. Projection errors <=1.78e-14;
+  covariance errors <=3.22e-14; cross-covariance errors <=5.83e-15. All141/286
+  units nonconstant, regional ranks141/286,141 pairs, no rank-forced rho1.
+  Saved `validation_audit.json` and `validate_saved_cca.py` in each run using
+  exclusive JSON creation. Script source also remains ignored in
+  `.pytest_cache/cca_validate_session.py`; no refitting during audit.
+- Default actual-viewer measurement (all four available event tracks) was
+  17.605MB at500ms and18.684MB at20ms. Fine-bin viewport[-1.348,58.652] loads
+  neural windows intersecting[-1.348,118.652]; whole-session fitting/scales and
+  complete314-MB saved score arrays remain intact. Browser-render timing is
+  explicitly unmeasured. Guide contains measured load/build/JSON boundaries.
+- Actual IAB displayed both CT026 saved products with first10 pairs and CC1.
+  20-ms bounded default and correct archived labels verified; normal-view
+  heatmaps/traces are readable. Retained tab1 shows500ms for inspection.
+  Screenshots: `.pytest_cache/cca_ct026_500ms.jpg` and
+  `.pytest_cache/cca_ct026_20ms.jpg`. Native fullscreen in this IAB produced an
+  undersized chart and black surrounding capture; exited it and verified the
+  normal display. Shared existing fullscreen renderer was not changed.
+- Old synthetic preview stopped. Deliverable preview server exec78560 uses
+  `UV_CACHE_DIR=.pytest_cache/uv MPLCONFIGDIR=.pytest_cache/matplotlib uv run
+  --frozen --no-sync streamlit run src/neural_analysis/psth_webapp.py
+  --server.address 127.0.0.1 --server.port 8527 --server.headless true
+  --server.fileWatcherType none --browser.gatherUsageStats false --
+  --session-metadata` followed by the designated metadata path above. Restart
+  if the process ends; select Session timeline and CCA. No analysis is running.
+- Final source check: `UV_CACHE_DIR=.pytest_cache/uv uv run --frozen --no-sync
+  pytest -q src/tests/neural_analysis/session_cca
+  src/tests/neural_analysis/test_timeline_chart.py`:164 passed, one existing
+  Node skip,13.24s. All CCA source/tests and session-input Ruff passed;
+  whitespace clean. Broader combined suite previously360 passed/one skip.
+  README links the completed `SESSION_CCA.md`; all11 original dirty tracked
+  files and unrelated untracked work are retained. Worker idle, no next code
+  assignment. User inspection is the only gate before wider experimental work.
