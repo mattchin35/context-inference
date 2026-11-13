@@ -45,7 +45,7 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | WP4 session/batch runners | Same worker | Accepted | `a1f7fd8`; missing-runner RED, lead 0.68 s | `64a9c11`; lead 22 passed/2.38 s, worker accumulated 193 passed/6.12 s; source/Ruff read |
 | WP5 scientific figure | Same worker | RED in progress | Pending | Not run |
 | WP6 app integration | Same worker | Not started / WP5 accepted | Not run | Not run |
-| WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Usage outline drafted; acceptance awaits WP6 | Not run | Usage draft not yet verified against final UI/CLI |
+| WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Seeded integration tests committed; acceptance awaits WP6 | `cb1b035`; four missing-plotter failures | Real spawn failure isolation passed; usage/UI gates remain |
 | WP8 designated-session/performance | Orchestrator and user | Not started / synthetic acceptance and session designation | Not applicable unless a defect needs a regression | Not run; later user inspection precedes batches |
 
 ### 0.3 Resume procedure
@@ -670,3 +670,15 @@ Next exact action, owner, and outstanding user decision if any:
   `test_plot_benchmark.py`. Source frozen. Tests cover saved-score geometry,
   paired heatmaps/step traces/scales/hover/revisions and real full/bounded
   figure/serialization measurements. No experimental processing yet.
+
+### 2026-11-13 - synthetic integration tests / real spawn evidence
+
+- Lead wrote `test_synthetic_integration.py` while worker owned disjoint WP5
+  tests. Seed 20261113; 18 choices, 16 common windows; shared/private spiking,
+  exact cloned units, and a unit silent in fitting windows. One gap spike keeps
+  that unit present in the existing sorter population. Initial fixture omission
+  of that spike caused the existing legitimate missing-cluster error; corrected
+  fixture before interpreting RED. No source change was needed.
+- Focused pytest: four intended missing-plotter failures, one actual two-process
+  spawn/failure-isolation pass, 2.72 s; Ruff passed. Tests committed `cb1b035`
+  before plotter implementation. No experimental processing.
