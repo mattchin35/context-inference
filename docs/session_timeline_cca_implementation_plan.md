@@ -20,16 +20,16 @@ Update at assignment, RED/test-commit, GREEN/review, interruption, and data gate
 
 | Field | Current value |
 | --- | --- |
-| Observation | 2026-11-13; branch `refactor`; inspected HEAD `2e3ada8`. Recheck on resumption; this is not a reset target. |
+| Observation | 2026-11-13; branch `refactor`; numerical HEAD `3166892`. Recheck on resumption; this is not a reset target. |
 | Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 still needs a designated session. |
-| Feature state | Baseline complete; WP1 RED next. No CCA source yet. |
+| Feature state | WP1 accepted: core `3166892`, tests `ed25401`/`65b676f`. WP2 inputs/identity RED in progress. |
 | Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
-| Active worker / writable scope | None / none. No agents were dispatched to draft this plan. |
+| Active worker / writable scope | `/root/cca_worker`, WP2 RED only: new `test_inputs.py` and optional `conftest.py` under the CCA tests directory. Numerical module/tests frozen; runtime model/effort not exposed. |
 | Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
-| Current feature files | `docs/session_timeline_cca_spec_v1.md` and this plan are new untracked documentation. |
+| Current feature files | Spec/approved plan committed as `9e48e76`; current live-handoff changes belong to the orchestrator. Worker owns WP1 tests. |
 | Tests / processes | Baseline 86 passed, 1 Node-dependent check skipped, 5.29 s; exec 91147 completed. No CCA analysis process. |
 | Experimental validation | No CCA session designated. Prior PCA or synchrony session approvals do not select one. |
-| Next action | Orchestrator dispatches WP1 tests-only RED to the sole worker, reviews/reproduces RED and commits tests before GREEN. |
+| Next action | Worker returns WP2 tests/RED; lead reviews and commits tests before IO input/config implementation. |
 
 ### 0.2 Work-package ledger
 
@@ -39,8 +39,8 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | Package | Planned owner | State / next gate | RED command, result, test commit | GREEN command, result, implementation commit, review |
 | --- | --- | --- | --- | --- |
 | WP0 spec/plan | Orchestrator | Approved / complete | Not applicable | Baseline 86 passed, 1 skipped; Section 9 |
-| WP1 numerical CCA | Sole worker | RED assignment next | Not run | Not run |
-| WP2 paired inputs/identity | Same worker | Not started / WP1 accepted | Not run | Not run |
+| WP1 numerical CCA | Sole worker `/root/cca_worker` | Accepted | `ed25401`, rank-one `65b676f`; missing-module RED reproduced | `3166892`; lead 50 passed/0.77 s, worker 50 + 55 regressions, Ruff passed; source read |
+| WP2 paired inputs/identity | Same worker | RED in progress | Pending | Not run |
 | WP3 persistence/discovery | Same worker | Not started / WP2 accepted | Not run | Not run |
 | WP4 session/batch runners | Same worker | Not started / WP3 accepted | Not run | Not run |
 | WP5 scientific figure | Same worker | Not started / WP4 accepted | Not run | Not run |
@@ -190,6 +190,11 @@ Proposed algorithm:
    tolerance=1e-8)`. Here Q denotes the regional retained observation basis,
    not the unit count. These coordinates have singular values near one; the
    package's absolute tolerance no longer discards low-variance unit directions.
+   Installed statsmodels squeezes a one-column endog and then fails in CanCorr.
+   If only HPC has rank one, swap the package input roles and map outputs back;
+   if both ranks are one, use the complete scalar normalized-correlation case.
+   Regression tests for signed/perfect/imperfect/zero scalar relations precede
+   these narrow project-level workarounds; dependencies are unchanged.
 4. Map the package coefficients back through each region's right singular
    vectors and inverse retained singular values. This is the minimum-norm map
    to all nonconstant original units. Initially multiply by `sqrt(N - 1)` to
@@ -500,3 +505,58 @@ Next exact action, owner, and outstanding user decision if any:
 - Result: 86 passed, 1 skipped in 5.29 s. Node-dependent frontend lifecycle test
   skipped because Node is not on PATH. Tool exec 91147 completed normally.
 - Next: sole worker WP1 RED only; no source implementation before test commit.
+
+### 2026-11-13 - WP1 RED dispatch
+
+- Approved documents committed as `9e48e76`. Sole worker `/root/cca_worker`
+  assigned numerical tests only; no other worker or experimental job.
+- Frozen core API: `fit_paired_cca(pfc_counts, hpc_counts, pfc_unit_ids,
+  hpc_unit_ids)` returns transforms/scores keyed PFC/HPC, correlations,
+  n_observations, color_limit, diagnostics and joint_signs.
+  `transform_cca_activity(counts, unit_ids, fitted_transform)` returns scores.
+  Transform fields match Section 3; constant-unit IDs use `omitted_unit_ids`.
+- Worker checkpoint: independent DCT finite-sample oracle, invertible unit maps
+  and nonnegative unrounded shifts; direct statsmodels is agreement evidence.
+  Diagnostic test will name `forced_unit_correlations`. No blockers reported.
+- Writable scope: new computation test file only. Next: review RED and commit
+  tests before releasing source implementation.
+
+### 2026-11-13 - WP1 RED reviewed / tests committed / GREEN dispatch
+
+- Reviewed the full 421-line test suite. Lead reproduced the worker's exact
+  focused command: one expected missing `population.cca` collection error,
+  exit 2, 0.77 s. No source existed. Tests committed as `ed25401`.
+- Same sole worker released test ownership and now owns only new
+  `src/neural_analysis/population/cca.py` for GREEN. Tests/expectations stay
+  frozen unless a genuine error is demonstrated. No experimental processing.
+- Next: source review and numerical GREEN evidence; no WP2 work yet.
+
+### 2026-11-13 - WP1 rank-one package limitation / regression commit
+
+- Installed `ModelData._get_yarr` squeezes `(N,1)` endog; `CanCorr._fit` then
+  unpacks a two-dimensional shape and fails. Worker reproduced it with a toy
+  library call; lead verified both installed source locations.
+- Added `test_rank_one.py`: worker's four rank/slope cases plus lead's three
+  independent rho=-0.6/0/+0.6 scalar cases. Lead reproduced missing-module RED
+  (0.17 s); committed all seven cases as `65b676f` before any branch source.
+- Approved narrow wrapper handling: swap package input roles when HPC alone
+  has rank one; direct normalized scalar correlation when both ranks are one.
+  Scientific definition/tolerances unchanged; no dependency edits.
+- Same worker continues source-only GREEN. Original and added tests frozen.
+
+### 2026-11-13 - WP1 GREEN accepted / WP2 RED dispatch
+
+- Worker focused numerical suites: 50 passed in 0.99 s. Existing interregional
+  PCA/session-timeline/population-PCA regressions: 55 passed in 4.16 s, with four
+  existing Pynapple warnings. Ruff source/tests and new-file whitespace passed.
+- Lead read all numerical source and independently ran
+  `UV_CACHE_DIR=.pytest_cache/uv uv run --frozen --no-sync pytest
+  src/tests/neural_analysis/session_cca/test_computation.py
+  src/tests/neural_analysis/session_cca/test_rank_one.py`: 50 passed in 0.77 s.
+  Core accepted/committed as `3166892`. No tolerance/test expectation changes.
+- Sole worker now owns WP2 `test_inputs.py` and optional fixture conftest only.
+  Reuse existing synthetic timeline metadata fixture. Frozen inputs record:
+  session_id, time_origin_s, choices/events, choice_positions, coverage_positions,
+  bin_edges_s, probe_roles, unit_ids/counts dicts, configuration.
+- No experimental session response yet; no experimental data opened or run.
+  Next: WP2 RED review and test commit before input/config source.
