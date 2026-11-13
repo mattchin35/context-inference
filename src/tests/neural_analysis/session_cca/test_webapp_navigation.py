@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from src.neural_analysis.population import run_session_cca as runner
@@ -86,8 +87,9 @@ def test_manual_route_explains_metadata_requirement_before_any_path_or_signal_wo
     assert "--session-metadata" in fake_st.info.call_args.args[0]
 
 
-def test_switching_to_lower_rank_saved_fit_clamps_stale_display_choices(shared_private_session):
-    """A valid three-pair selection safely becomes CC1 when a one-pair archive is chosen."""
+@pytest.mark.parametrize("channels,pair", [([0], 1), ([0, 2], 2)])
+def test_switching_to_lower_rank_saved_fit_clamps_stale_display_choices(shared_private_session, channels, pair):
+    """A three-pair selection clamps to the new maximum, rather than resetting arbitrarily."""
     session = shared_private_session
     first = runner.run_session_cca(session.metadata_path, ROLES)
     at = AppTest.from_function(_render_cca, args=(str(session.metadata_path),)).run()
@@ -98,15 +100,33 @@ def test_switching_to_lower_rank_saved_fit_clamps_stale_display_choices(shared_p
     previous_time_revision = _figure(at)["layout"]["uirevision"]
     metadata = json.loads(session.metadata_path.read_text())
     for probe in ("A", "B"):
-        metadata["probes"][probe]["unit_channels"] = [0]
+        metadata["probes"][probe]["unit_channels"] = channels
     session.metadata_path.write_text(json.dumps(metadata), encoding="ascii")
     smaller = runner.run_session_cca(session.metadata_path, ROLES)
-    assert len(cca_io.load_cca_result(smaller.result_path).fit.correlations) == 1
+    assert len(cca_io.load_cca_result(smaller.result_path).fit.correlations) == pair
     at.run()
     next(widget for widget in at.selectbox if widget.label == "Saved CCA result").select(str(smaller.result_path)).run()
     assert not at.exception
     figure = _figure(at)
     assert figure["layout"]["uirevision"] == previous_time_revision
-    assert any(trace["name"] == "PFC CC1" for trace in figure["data"])
-    assert any("pairs 1-1" in annotation["text"] for annotation in figure["layout"]["annotations"])
+    assert any(trace["name"] == f"PFC CC{pair}" for trace in figure["data"])
+    assert any(f"pairs {pair}-{pair}" in annotation["text"] for annotation in figure["layout"]["annotations"])
     assert first.result_path.is_file()
+
+
+def test_missing_raw_sources_disable_preparation_with_valid_roles(shared_private_session):
+    """Historical viewing remains usable, with an explicit reason fresh preparation is unavailable."""
+    from src.tests.neural_analysis.session_cca.test_webapp import _remove_raw_sources
+
+    session = shared_private_session
+    runner.run_session_cca(session.metadata_path, ROLES)
+    _remove_raw_sources(session)
+    at = AppTest.from_function(_render_cca, args=(str(session.metadata_path),)).run()
+    assert not at.exception
+    next(widget for widget in at.selectbox if widget.label == "PFC probe").select("A").run()
+    next(widget for widget in at.selectbox if widget.label == "HPC probe").select("B").run()
+    assert not at.exception
+    assert next(widget for widget in at.button if widget.label == "Prepare").disabled
+    assert next(widget for widget in at.button if widget.label == "Recompute").disabled
+    assert any("missing" in item.value.lower() for item in at.caption)
+    assert len([trace for trace in _figure(at)["data"] if trace["type"] == "heatmap"]) == 2
