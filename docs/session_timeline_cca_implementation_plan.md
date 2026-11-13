@@ -22,12 +22,12 @@ Update at assignment, RED/test-commit, GREEN/review, interruption, and data gate
 | --- | --- |
 | Observation | 2026-11-13; branch `refactor`; figure HEAD `c7cbafb`. Recheck on resumption; this is not a reset target. |
 | Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 designated CT026 2026-08-28 after synthetic/browser gates. |
-| Feature state | WP1-WP5 accepted, all four synthetic bin pipelines pass; WP6 app integration GREEN in progress. |
+| Feature state | WP1-WP5 accepted; WP6 initial 11 app tests pass after genuine Plotly test-decoder correction; two review regressions under fix. |
 | Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
-| Active worker / writable scope | `/root/cca_worker`, WP6 GREEN: new `webapp/cca_view.py`, localized `webapp/app.py` and `webapp/session_inputs.py` only; other source/tests frozen. |
+| Active worker / writable scope | `/root/cca_worker`, WP6 review-fix GREEN: `webapp/cca_view.py` only; wiring/source/tests otherwise frozen. |
 | Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
 | Current feature files | Spec/approved plan committed as `9e48e76`; live handoff and usage draft belong to orchestrator. Worker owns current runner GREEN only. |
-| Tests / processes | Numerical core 50 passed; baseline 86 passed, 1 Node-dependent skip. Connectivity-only Streamlit server exec 73923 at loopback 8527; see latest evidence. No experimental analysis running. |
+| Tests / processes | Initial app 11 passed/5.27 s; worker old UI regressions 113 passed/6.51 s; two new review failures committed. Old connectivity server 73923 stopped; restart fresh synthetic preview after fixes. No experimental analysis running. |
 | Experimental validation | User designated CT026 2026-08-28 after synthetic/browser gates; metadata path recorded below. No further session authorized. |
 | Next action | Review WP6 actual app/source; verify selected-fit clamping, then browser and designated-session gates. |
 
@@ -44,7 +44,7 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | WP3 persistence/discovery | Same worker | Accepted | `d599397`; review `41d6fbb`, four failures/1.46 s | `1203545`; lead 115 CCA passed/3.22 s, worker accumulated 171 passed; source/Ruff read |
 | WP4 session/batch runners | Same worker | Accepted | `a1f7fd8`; missing-runner RED, lead 0.68 s | `64a9c11`; lead 22 passed/2.38 s, worker accumulated 193 passed/6.12 s; source/Ruff read |
 | WP5 scientific figure | Same worker | Accepted | `f27c8e3`; lead missing-plotter 1.11 s; two actual benchmark failures 1.30 s | `c7cbafb`; lead 13 passed/5.75 s, worker accumulated 204 passed/10.34 s; source/Ruff read |
-| WP6 app integration | Same worker | GREEN in progress | `d7f4f0c` seven missing-route/view failures 2.36 s; `e689a92` three cache/navigation/manual-route failures 2.14 s | Pending |
+| WP6 app integration | Same worker | Review fixes in progress | `d7f4f0c`, `e689a92`; lower-K `51d637e`; two real review failures `274614c`/3.40 s | Initial 11 passed/5.27 s after decoder-only `e8e83c6`; source not accepted yet |
 | WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Seeded integration tests committed; acceptance awaits WP6 | `cb1b035`; four missing-plotter failures | Real spawn failure isolation passed; usage/UI gates remain |
 | WP8 designated-session/performance | Orchestrator and user | Not started / synthetic acceptance and session designation | Not applicable unless a defect needs a regression | Not run; later user inspection precedes batches |
 
@@ -706,3 +706,18 @@ Next exact action, owner, and outstanding user decision if any:
   failures/2.14 s, including actual manual-route path initialization. Ten app
   tests now frozen. Sole worker owns new CCA view and two local wiring files.
   Lower-K saved-selection clamping will receive a focused review check.
+
+### 2026-11-13 - WP6 initial review / two bounded regressions
+
+- Worker initial UI: 10 passed/one failure caused by Plotly's typed-array `y`
+  encoding in the test helper. Lead corrected decoding only (`e8e83c6`), then
+  independently 11 app tests passed/5.27 s. No product behavior relaxed.
+- K1 switch (`51d637e`) passed through automatic widget reset, but K2 needs
+  true clamping. Lead extended it and checked missing-source button disablement:
+  two real failures/one pass in 3.40 s, committed `274614c` before fixes.
+  Worker now owns only CCA view fixes: explicit valid rank/pair state and small
+  path-only prerequisite checks; no raw/current-configuration reads on display.
+- Existing affected UI tests: worker 113 passed/6.51 s. CCA view/session-input
+  Ruff clean. App retains identical 71 pre-existing F401 re-export findings.
+- Connectivity-only server 73923 stopped cleanly. Browser tab retained; start
+  a fresh rich synthetic fixture preview after WP6 acceptance. No data run yet.
