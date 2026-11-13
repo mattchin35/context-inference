@@ -110,6 +110,7 @@ def plot_session_cca(
             heights.append(1.5)
     titles.append("Session navigator")
     heights.append(.45)
+    figure_height = max(740, int(sum(heights) * 90 + 300))
     figure = make_subplots(
         rows=len(titles), cols=1, shared_xaxes=True, row_heights=heights,
         vertical_spacing=min(.025, .16 / len(titles)), subplot_titles=titles,
@@ -154,23 +155,24 @@ def plot_session_cca(
     figure.update_xaxes(minallowed=allowed[0], maxallowed=allowed[1])
     figure.update_xaxes(
         title_text="Elapsed session time (s; zero = first trial start)", row=row, col=1,
-        rangeslider={"visible": True, "range": full_bounds, "thickness": .07},
+        rangeslider={"visible": True, "range": full_bounds,
+                     "thickness": min(.07, 60 / figure_height)},
     )
     vertical_revision = f"{result.meta.get('configuration_id', result.session_id)}:{tracks}:{tuple(ranks)}:{show_traces}:{selected_pair}"
     figure.update_yaxes(fixedrange=True, showgrid=False, zeroline=False, uirevision=vertical_revision)
-    caption = ("In-sample canonical correlations; task activity retained. "
+    caption = ("In-sample canonical correlations; task activity retained.<br>"
                "Scores use session sample SD; pooled bins are temporally dependent.")
     if result.fit is None:
         caption = f"Paired CCA unavailable: {result.unavailable_reason or 'not prepared'}. Behavior remains available."
     elif color_limit is not None and color_limit < result.fit.color_limit:
-        caption += f" Manual color limit +/-{color_limit:g}; larger magnitudes saturate."
+        caption += f"<br>Manual color limit +/-{color_limit:g}; larger magnitudes saturate."
     figure.add_annotation(
-        text=caption, x=0, y=-.14, xref="paper", yref="paper", xanchor="left",
+        text=caption, x=0, y=0, yshift=-145, xref="paper", yref="paper", xanchor="left",
         yanchor="top", showarrow=False, align="left", font={"size": 13},
     )
     figure.update_layout(
-        height=max(650, int(sum(heights) * 90 + 210)),
-        margin={"l": 85, "r": 145, "t": 60, "b": 125}, template="plotly_white",
+        height=figure_height,
+        margin={"l": 85, "r": 145, "t": 60, "b": 210}, template="plotly_white",
         paper_bgcolor="white", plot_bgcolor="white", font={"size": 14, "color": "black"},
         dragmode="pan", showlegend=bool(result.fit is not None and show_traces),
         legend={"orientation": "h", "y": 1.07},
