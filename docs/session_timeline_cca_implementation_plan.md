@@ -1,8 +1,8 @@
 # Session Timeline PFC-HPC CCA: Implementation Plan and Live Handoff
 
 Status: Implementation approved, 2026-11-13: user instructed "Begin
-implementation". WP1-WP7 may proceed; experimental processing still needs a
-designated session. The [CCA spec](session_timeline_cca_spec_v1.md) owns the
+implementation". WP1-WP7 may proceed; CT026 2026-08-28 is designated for WP8
+after synthetic/browser acceptance. The [CCA spec](session_timeline_cca_spec_v1.md) owns the
 confirmed science; this plan owns design, tests, delivery and assignments under
 [AGENTS.md](../AGENTS.md) and [SoftwareDesign.md](SoftwareDesign.md).
 New user decisions take precedence.
@@ -20,16 +20,16 @@ Update at assignment, RED/test-commit, GREEN/review, interruption, and data gate
 
 | Field | Current value |
 | --- | --- |
-| Observation | 2026-11-13; branch `refactor`; archive HEAD `1203545`. Recheck on resumption; this is not a reset target. |
-| Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 still needs a designated session. |
-| Feature state | WP1-WP3 accepted, 115 CCA tests pass; WP4 runner/CLI/batch RED in progress. |
+| Observation | 2026-11-13; branch `refactor`; runner HEAD `64a9c11`. Recheck on resumption; this is not a reset target. |
+| Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 designated CT026 2026-08-28 after synthetic/browser gates. |
+| Feature state | WP1-WP4 accepted; WP5 plotting/real-figure benchmark RED in progress. |
 | Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
-| Active worker / writable scope | `/root/cca_worker`, WP4 RED only: new `src/tests/neural_analysis/session_cca/test_scripts.py`; numerical/input/archive source and existing tests frozen. |
+| Active worker / writable scope | `/root/cca_worker`, WP5 RED: new `session_cca/test_plotting.py` and `test_plot_benchmark.py` only; all source and previous tests frozen. |
 | Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
-| Current feature files | Spec/approved plan committed as `9e48e76`; current live-handoff changes belong to the orchestrator. Worker owns WP1 tests. |
+| Current feature files | Spec/approved plan committed as `9e48e76`; live handoff and usage draft belong to orchestrator. Worker owns current runner GREEN only. |
 | Tests / processes | Numerical core 50 passed; baseline 86 passed, 1 Node-dependent skip. Connectivity-only Streamlit server exec 73923 at loopback 8527; see latest evidence. No experimental analysis running. |
 | Experimental validation | User designated CT026 2026-08-28 after synthetic/browser gates; metadata path recorded below. No further session authorized. |
-| Next action | Review WP4 runner tests/RED, commit tests before creating main/batch source. |
+| Next action | Review WP5 tests/RED, commit tests, then authorize plotter/benchmark GREEN. |
 
 ### 0.2 Work-package ledger
 
@@ -42,8 +42,8 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | WP1 numerical CCA | Sole worker `/root/cca_worker` | Accepted | `ed25401`, rank-one `65b676f`; missing-module RED reproduced | `3166892`; lead 50 passed/0.77 s, worker 50 + 55 regressions, Ruff passed; source read |
 | WP2 paired inputs/identity | Same worker | Accepted | `6592449`; missing-IO RED, lead 0.73 s | `a383bb4`; lead 36 passed/2.08 s; worker accumulated 154 passed; source/Ruff reviewed |
 | WP3 persistence/discovery | Same worker | Accepted | `d599397`; review `41d6fbb`, four failures/1.46 s | `1203545`; lead 115 CCA passed/3.22 s, worker accumulated 171 passed; source/Ruff read |
-| WP4 session/batch runners | Same worker | RED in progress | Pending | Not run |
-| WP5 scientific figure | Same worker | Not started / WP4 accepted | Not run | Not run |
+| WP4 session/batch runners | Same worker | Accepted | `a1f7fd8`; missing-runner RED, lead 0.68 s | `64a9c11`; lead 22 passed/2.38 s, worker accumulated 193 passed/6.12 s; source/Ruff read |
+| WP5 scientific figure | Same worker | RED in progress | Pending | Not run |
 | WP6 app integration | Same worker | Not started / WP5 accepted | Not run | Not run |
 | WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Usage outline drafted; acceptance awaits WP6 | Not run | Usage draft not yet verified against final UI/CLI |
 | WP8 designated-session/performance | Orchestrator and user | Not started / synthetic acceptance and session designation | Not applicable unless a defect needs a regression | Not run; later user inspection precedes batches |
@@ -659,3 +659,14 @@ Next exact action, owner, and outstanding user decision if any:
 - Resolved forward dependency: WP4 benchmarks saved-load/preparation/memory/size;
   WP5 adds real figure/serialization metrics tests-first once the plotter exists.
   No placeholder timing values or premature plotter implementation.
+
+### 2026-11-13 - WP4 accepted / WP5 RED dispatch
+
+- Tests `a1f7fd8` preceded both runners; lead missing-runner RED 0.68 s.
+  Worker focused tests 22 passed/2.42 s, accumulated CCA/scripts/IO/identity/
+  metadata command 193 passed/6.12 s. Lead read both files and independently
+  ran scripts: 22 passed/2.38 s. Ruff/whitespace passed; accepted `64a9c11`.
+- Same sole worker now owns only new `test_plotting.py` and
+  `test_plot_benchmark.py`. Source frozen. Tests cover saved-score geometry,
+  paired heatmaps/step traces/scales/hover/revisions and real full/bounded
+  figure/serialization measurements. No experimental processing yet.
