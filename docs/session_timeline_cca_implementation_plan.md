@@ -1,0 +1,502 @@
+# Session Timeline PFC-HPC CCA: Implementation Plan and Live Handoff
+
+Status: Implementation approved, 2026-11-13: user instructed "Begin
+implementation". WP1-WP7 may proceed; experimental processing still needs a
+designated session. The [CCA spec](session_timeline_cca_spec_v1.md) owns the
+confirmed science; this plan owns design, tests, delivery and assignments under
+[AGENTS.md](../AGENTS.md) and [SoftwareDesign.md](SoftwareDesign.md).
+New user decisions take precedence.
+
+The handoff format follows the existing
+[prediction plan](condition_prediction_generalization_implementation_plan.md#0-live-implementation-handoff)
+and [synchrony plan](session_timeline_phase_synchrony_implementation_plan.md#0-live-implementation-handoff).
+Keep current state here and append evidence below.
+
+## 0. Live implementation handoff
+
+### 0.1 Current snapshot
+
+Update at assignment, RED/test-commit, GREEN/review, interruption, and data gates.
+
+| Field | Current value |
+| --- | --- |
+| Observation | 2026-11-13; branch `refactor`; inspected HEAD `2e3ada8`. Recheck on resumption; this is not a reset target. |
+| Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 still needs a designated session. |
+| Feature state | Baseline complete; WP1 RED next. No CCA source yet. |
+| Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
+| Active worker / writable scope | None / none. No agents were dispatched to draft this plan. |
+| Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
+| Current feature files | `docs/session_timeline_cca_spec_v1.md` and this plan are new untracked documentation. |
+| Tests / processes | Baseline 86 passed, 1 Node-dependent check skipped, 5.29 s; exec 91147 completed. No CCA analysis process. |
+| Experimental validation | No CCA session designated. Prior PCA or synchrony session approvals do not select one. |
+| Next action | Orchestrator dispatches WP1 tests-only RED to the sole worker, reviews/reproduces RED and commits tests before GREEN. |
+
+### 0.2 Work-package ledger
+
+States: not started, RED, tests committed, GREEN pending review, accepted,
+or waiting for a named external decision. Worker completion is not acceptance.
+
+| Package | Planned owner | State / next gate | RED command, result, test commit | GREEN command, result, implementation commit, review |
+| --- | --- | --- | --- | --- |
+| WP0 spec/plan | Orchestrator | Approved / complete | Not applicable | Baseline 86 passed, 1 skipped; Section 9 |
+| WP1 numerical CCA | Sole worker | RED assignment next | Not run | Not run |
+| WP2 paired inputs/identity | Same worker | Not started / WP1 accepted | Not run | Not run |
+| WP3 persistence/discovery | Same worker | Not started / WP2 accepted | Not run | Not run |
+| WP4 session/batch runners | Same worker | Not started / WP3 accepted | Not run | Not run |
+| WP5 scientific figure | Same worker | Not started / WP4 accepted | Not run | Not run |
+| WP6 app integration | Same worker | Not started / WP5 accepted | Not run | Not run |
+| WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Not started / WP6 accepted | Not run | Not run |
+| WP8 designated-session/performance | Orchestrator and user | Not started / synthetic acceptance and session designation | Not applicable unless a defect needs a regression | Not run; later user inspection precedes batches |
+
+### 0.3 Resume procedure
+
+1. Read the spec, this snapshot/ledger, the latest evidence entry, and repository
+   rules. Confirm existing authorization instead of requesting it again.
+2. Inspect actual branch/HEAD, staged/unstaged changes, and owned files. Preserve
+   unrelated work. Stop for unexpected changes or uncertain ownership.
+3. Check the recorded worker and live command/session before replacing either.
+   Lost tool output is not proof that an agent or analysis process has stopped.
+4. Resume the unfinished gate. Reproduce missing/interrupted or invalidated
+   evidence; do not rerun every completed test or experimental preparation.
+5. Before dispatch or interruption, update owner, phase, exact writable paths,
+   last durable commit/product, live session/PID/log, and the next exact action.
+   If interrupted during GREEN, retain the failing tests and partial source.
+
+## 1. Scope and delivery boundaries
+
+Deliver one separate **Session timeline and CCA** route. Fit ordinary direct-unit,
+zero-lag, session-wide PFC-HPC CCA on the common complete choice windows, using
+the existing `[-2,+2)` half-open windows and 500/100/50/20-ms bins. Preserve all
+behavioral choices and real gaps. Retain all numerical pairs, with sample-SD-one
+canonical scores and the agreed numerical-null handling.
+
+The light-mode figure contains behavior, matched PFC/HPC heatmaps, one optional
+overlaid trace row for a selected pair, and the existing session navigator.
+Initially show the first ten available pairs and CC1 traces. Prepare/Recompute
+are explicit; display controls consume saved products.
+
+The scope excludes PCA prerequisites, condition residualization, within-window
+fits, regularization, CV/shuffles/significance, local correlation tracks, and
+LFP work. Six modules, small records, and local wiring suffice; no generic
+framework, metadata-schema change, or new configuration file is needed.
+
+## 2. Architecture, interfaces, and verified reuse
+
+All names below are proposed project APIs, not assumed library functions.
+New numerical functions document types, axes, units, and return values. Public
+computational functions precede grouped local helpers. No new dependency.
+
+| New module | Responsibility and planned interfaces |
+| --- | --- |
+| `population/cca.py` | Pure numerical records and functions: `RegionalCCATransform`, `PairedCCAFit`, `fit_paired_cca`, `transform_cca_activity`. No paths, widgets, or run flags. |
+| `population/session_cca_io.py` | `PairedCCAInputs`, `SessionCCAResult`, and small `CCAResultInfo` headers; `load_cca_inputs`, `cca_configuration`, `save_cca_result`, `load_cca_result`, `discover_cca_results`. Own source identity, metadata-only discovery, and named-array persistence; call existing loaders. |
+| `population/run_session_cca.py` | `run_session_cca` and CLI; compose input loading, fit, immutable output, log/summary/script copies, and `benchmark_cca_result`. Small run report, not full scores, returned to callers. |
+| `population/run_session_cca_batch.py` | Session-list CLI and process-level dispatch to the single-session runner. Reuse existing list parsing and worker-count functions. |
+| `population/cca_plotting.py` | `plot_session_cca` and a local window-geometry helper; consume saved records only. No fit, raw loading, or analysis writes. |
+| `webapp/cca_view.py` | `render_session_cca_view`, cached saved loads, controls, explicit preparation, and result details. No duplicated numerical algorithm. |
+
+Localized existing changes: `webapp/session_inputs.py` (route/availability),
+`webapp/app.py` (early dispatch), neural README/timeline links, and a new short
+`src/neural_analysis/SESSION_CCA.md` usage guide. Read callers before changing
+any shared helper. Existing PCA and synchrony public interfaces stay intact.
+
+```mermaid
+flowchart LR
+    S[Metadata and synchronized sources] --> I[Paired inputs and counts]
+    I --> C[Pure direct-unit CCA]
+    C --> R[Session-local NPZ and metadata]
+    R --> P[CCA figure]
+    P --> V[Existing persistent chart]
+    U[UI Prepare or CLI] --> I
+```
+
+Verified reuse and limits:
+
+- `load_timeline_behavior`, `prepare_timeline_choices`,
+  `select_complete_choice_windows`, `choice_bin_edges`, `bin_choice_counts`,
+  `select_timeline_population`, and `load_timeline_population` supply the
+  existing clock, quality policy, coverage, and unsmoothed count contracts.
+- Keep `population_quality="good_mua"` and `missing_label_policy="mua"`
+  explicit, matching the PCA timeline. Do not silently adopt another view's
+  strict-label default. A future policy change changes scientific identity.
+- `add_timeline_behavior`, `session_time_bounds`, and
+  `render_timeline_navigation` accept a behavior-only `SessionTimelineResult`.
+  A narrow conversion with empty PCA regions reuses these helpers without
+  putting CCA scores or invented variance fields into a PCA record.
+- Reuse `render_timeline_chart` and its existing JavaScript unchanged initially.
+  All proposed rows have elapsed-time x-axes, so no new pan callbacks are needed.
+  Preserve stable component position/key and time/vertical revisions separately.
+- PCA's heatmap builder requires variance fields and regional records; keep
+  CCA geometry/hover local rather than broadening that public interface.
+- `timeline_configuration` includes PCA-specific identity and version. Build a
+  CCA identity from the public selection/source APIs; do not reuse that digest,
+  call private compatibility helpers, or refactor the PCA cache system.
+- Metadata resolution permits absent referenced raw files. Current generic
+  availability can still reject missing behavior before route dispatch; WP6
+  must add a CCA saved-result exception before that check. It must not require
+  unrelated LFP, sites, or every probe's spike sources.
+
+## 3. Records and numerical design
+
+### 3.1 Data contracts
+
+Let W be common complete choices, B bins/window, N = W x B, U_r input units,
+P_r nonconstant units, and K = min(regional numerical ranks). Counts for both
+regions share `(W,B)` axes; unit counts may differ. Reject empty/misaligned
+axes, mismatched/duplicate IDs, and nonfinite data. Preparation also validates
+the bin geometry against the selected width.
+
+| Record / product | Required fields and meaning |
+| --- | --- |
+| `PairedCCAInputs` | Session ID/origin, choices/events, `(W,)` common choice positions, each region's coverage-eligible positions, `(B+1,)` relative-second edges, probe/unit IDs, count arrays `(W,B,U_r)`, source configuration. Counts per bin; UTC seconds retained. |
+| `RegionalCCATransform` | Ordered input/retained/constant unit IDs, float64 `(U_r,)` count means/SDs, `(P_r,K)` coefficients in canonical-SD units per standardized unit, `(K,)` score offset, singular values, rank/cutoff. |
+| `PairedCCAFit` | Two transforms; regional `(W,B,K)` float64 scores; ordered `(K,)` rho; fit observation count, diagnostics, joint signs, and fixed common color limit. |
+| `SessionCCAResult` | Behavior/origin, eligibility/edges, optional paired fit, unavailable reason when no fit, and `meta`. No raw count duplication required in the saved result. |
+| `CCAResultInfo` | Archive path, saved configuration, completion UTC and run ID; discovery reads these metadata fields without score arrays. |
+
+The projection contract is:
+
+```text
+X = (counts[..., retained] - count_mean[retained]) / count_scale[retained]
+Z = X @ coefficients - score_offset
+```
+
+Means/SDs are stored in input-unit order; `retained` selects the same P_r
+columns from counts and preprocessing arrays. Projection requires the exact
+fitted input-unit order. The offset is one saved session-level constant per
+pair, preserving replay after library centering.
+
+### 3.2 Estimator choice and rank adapter
+
+Use installed `statsmodels.multivariate.cancorr.CanCorr` as the CCA estimator,
+with a small NumPy/SciPy rank adapter. Its installed source was inspected:
+construction fits immediately, `endog=HPC`, `exog=PFC`; results are `cancorr`,
+`x_cancoef`, and `y_cancoef`. It centers inputs, returns unit-sum-square score
+normalization, and rejects singular columns using an absolute tolerance.
+Project with saved coefficients rather than assuming a package `transform`
+API. Do not call `corr_test`.
+
+Proposed algorithm:
+
+1. Validate finite, nonnegative `(W,B,U_r)` counts and ordered unique IDs. Pool
+   windows/bins identically. Calculate each unit's count mean and population SD
+   (`ddof=0`); omit exactly constant units once across the common pool.
+2. Standardize units. Compute a thin SVD for each region, keeping singular
+   values strictly above `eps_float64 * max(matrix.shape) * largest_value`.
+   This retains every numerically supported unit direction, without scientific
+   PCA truncation. Save ranks/cutoffs; rank zero or N < 2 is unavailable.
+3. Pass the retained left-singular-vector coordinates to
+   `CanCorr(endog=Q_HPC, exog=Q_PFC, missing="raise", hasconst=False,
+   tolerance=1e-8)`. Here Q denotes the regional retained observation basis,
+   not the unit count. These coordinates have singular values near one; the
+   package's absolute tolerance no longer discards low-variance unit directions.
+4. Map the package coefficients back through each region's right singular
+   vectors and inverse retained singular values. This is the minimum-norm map
+   to all nonconstant original units. Initially multiply by `sqrt(N - 1)` to
+   convert the package's score normalization. Minimum norm refers to the
+   standardized-unit coordinates used for fitting.
+5. Project original standardized activity. For each score column with mean m
+   and sample SD s, divide its coefficients by s and save offset m/s. This folds
+   residual normalization into the transform, giving mean-zero/sample-SD-one
+   scores through the public projection function. Reject zero/nonfinite scales.
+6. Keep all K pairs in descending correlation order. Apply the spec's joint sign
+   convention to both regional coefficients, offsets, and scores. Compute the
+   fixed common heatmap limit over both complete score arrays.
+
+Validate this single estimator/adapter path in WP1. Its complete numerical-rank
+basis satisfies direct-unit CCA without choosing a retained-PC count. Measure
+its extra SVD work before considering a different implementation.
+
+Numerical/input failures raise clear `ValueError` messages; the orchestration/UI
+turn these into unavailable/error states without manufacturing a paired fit.
+
+Proposed validation constants, saved with the numerical version: absolute
+`1e-8` for score means and dimensionless covariance identities, projection
+`rtol=1e-8, atol=1e-10` in canonical-score units, and `1e-10` for roundoff at
+correlation bounds. The rank cutoff is the formula above, not `1e-8`.
+Use `rtol=0` for identity/zero comparisons. WP1 must exercise these tolerances;
+if they fail, review conditioning/algorithm before changing tolerances or tests.
+
+Check sample covariance of each regional score matrix against identity and
+cross-covariance against `diag(rho)`. Recompute empirical paired correlations
+and compare to the package result; the package's internal clipping alone is
+not sufficient evidence. Record maximum errors, retained conditioning, and
+`max(0, rank_PFC + rank_HPC - (N - 1))` forced unit-correlation directions.
+Rank saturation is descriptive and flagged, not silently regularized away.
+
+Ties/zero correlations may have nonunique vectors. Test spectra and relevant
+subspaces, not unique weights. If a retained near-null direction causes the
+covariance/projection checks to fail, report numerical failure; do not silently
+raise the rank cutoff, loosen tolerances, or introduce regularization.
+
+## 4. Paired input, saved-result, and execution contracts
+
+### Inputs and identity
+
+WP2 reads current behavior and small quality/coverage metadata before loading
+spike arrays. Intersect regional coverage positions in chronological choice
+order, then bin exactly those choices for each region. Verify qualified unit
+order, source row/trial/time identity, and exact shared bin edges. Use absolute
+UTC tolerances with `rtol=0` where floating-point checks are necessary; default
+relative comparisons on Unix timestamps are inappropriate.
+
+CCA identity includes analysis/schema/numerical versions, session/probe roles,
+selected units/channels, quality policies, bin/windows, zero-lag/common-pool/raw-
+task policy, normalization/sign/rank parameters, and source path/size/mtime.
+Sources are the trial table, optional events, and each selected probe's alignment
+archive, spike assignments, cluster metadata and channel-quality file. Explicitly
+record an absent optional event source. Record metadata path separately; unrelated
+metadata or LFP fields and all display controls are excluded. Numerical changes
+require an analysis/numerical version bump; record code/library versions too.
+
+Do not silently change source sets between identity construction and fitting;
+check their identities again before publication and fail clearly if changed.
+This bounded check handles ordinary edits during preparation without a new
+locking, hashing, or transaction framework.
+
+### Saved versus fresh use
+
+- Fresh Prepare/CLI validates current prerequisites/identity and reuses a matching
+  completed fit unless rerun is explicit. Dry-run reads metadata/quality/coverage,
+  loads no spike arrays, writes nothing, and returns nonzero if inputs are missing.
+- Saved viewing selects actual saved session/probe/bin settings and stored
+  behavior before raw-source checks. Missing raw files disable preparation but
+  allow historical viewing with valid metadata; changed preparation widgets do
+  not relabel that result. Test this copied-session path.
+- Historical display does not establish compatibility with current sources:
+  fresh preparation/reuse always verifies the current identity.
+
+`session_cca_io.py` uses named arrays and dictionary `meta`, with
+`analysis_version="session-timeline-cca-v1"`, schema version 1, and an explicit
+numerical version. Store transform offsets as well as the spec's arrays. Save
+both regions as one completed paired product. Discovery returns small metadata
+headers; selected loading validates shapes, IDs, versions and paired-array
+consistency without refitting. Order completed compatible candidates by stored
+UTC completion time, then run ID and relative path as deterministic tie breaks.
+If loading the newest candidate fails, warn and try the next compatible one;
+ignore temporary/unsupported/metadata-corrupt files. No repeated decompression
+of every score array during app availability checks. Only valid fits are
+published; optional-fit records serve in-memory behavior-only/error presentation.
+
+Use a unique timestamped `analysis_runs/session_timeline_cca_*` directory,
+ordinary log/config/summary, and copies of main/batch scripts. Refuse experimental
+outputs inside the source repository. Write the result through a temporary
+sibling and rename only after success. Preserve failed-run logs and old results;
+do not add a recovery service, global registry, or distributed locks.
+
+The runner reports prepared/reused/dry-run, result path, identity and elapsed
+seconds; input/fit failures raise a clear exception and the CLI exits nonzero.
+Log parameters, counts, warnings/errors, timings and RSS. Batch dispatch uses
+spawn processes, available cores capped by session count, and `--workers` for
+RAM/I/O limits. Collect success/failure reports in session-list order, let other
+sessions finish after one fails, and exit nonzero if any failed. Dry-run is
+sequential with no pool. This CPU parallelism differs from the agent-worker
+limit; UI preparation remains synchronous and explicit.
+
+Proposed commands after implementation:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_cca --session-metadata /path/to/neural_session.json --bin-width-ms 500 --dry-run
+uv run -m src.neural_analysis.population.run_session_cca_batch --session-list /path/to/sessions.txt --bin-width-ms 500 --dry-run
+```
+
+Reuse `resolve_timeline_probe_roles`: version 3 supplies defaults, version 2
+needs explicit `--pfc-probe` / `--hpc-probe`. Preparation requires two distinct
+configured probes; a partial explicit selection does not silently fill the
+other role from metadata. Keep `--rerun` and `--benchmark` consistent with PCA.
+Incomplete selections still allow behavior-only navigation.
+
+## 5. Figure and app behavior
+
+WP5 consumes `SessionCCAResult` only. Combine shared behavior, two matched-rank
+heatmaps, one optional two-color step row and the navigator. Use actual bin
+edges, a NaN gap column between windows, and trace breaks at those gaps. Trace
+values equal the corresponding heatmap cells.
+
+Use one shared colorbar/fixed symmetric limit, matched one-based rank ranges,
+and fixed trace limits per selected pair. Preserve zero, label manual saturation,
+and keep time/pair/probe/rho identifiers in hover. The full correlation table is
+expandable; the visible summary contains unit/window/rank counts. No additional
+per-window statistic is computed. Caption correlations as in-sample, with task
+activity retained and pooled bins temporally dependent.
+
+WP6 gives the separate route early dispatch, without entering active-probe,
+trial-PSTH, or LFP loaders. Keep preparation settings distinct from the selected
+saved result. Cache loads by archive path/size/mtime, with a small entry limit.
+Controls for ranks, pair, traces, events, and color are display only.
+
+Use a stable chart position/key. Time revision depends on session ID/origin and
+explicit navigation; vertical revision reflects changed rows/ranks. Clamp pair
+and rank selections when a new saved fit has fewer pairs. At 20 ms, load the
+explicit viewport plus neighboring context and constrain native pan to those
+bounds; Window start/Jump load elsewhere. Fitting/scales still use the full pool.
+Full-score NPZ loading remains separate from bounded plot serialization.
+
+Behavior-only/unavailable states must remain useful. Show numerical/coverage
+failure reasons without replacing a compatible completed result. Avoid
+unrequested prediction, speed, or PCA tracks in this initial CCA view.
+
+## 6. Tests-first packages and acceptance
+
+Tests use pytest functions and seeded fixtures under
+`src/tests/neural_analysis/session_cca/`. Section 7 owns the RED/test-commit/
+GREEN/review protocol. An intentionally absent API can establish initial RED;
+broken dependencies or fixtures cannot.
+
+| Package / writable feature scope | Tests written before implementation and acceptance |
+| --- | --- |
+| WP1 `cca.py`; `test_computation.py` | Known finite-sample rho with unequal unit counts; direct-unit statsmodels agreement; pooled scaling, constant removal and correctly indexed projection; empty/misaligned/invalid inputs and wrong unit order; dependent/near-null units, all K pairs, signs/ties/zero rho, rank saturation; Section 3 covariance/replay invariants and no mutation. |
+| WP2 input/config portion of `session_cca_io.py`; `test_inputs.py` | Unequal coverage and off-grid UTC choices; original IDs and equal-length misalignment; four half-open bin widths; historical quality rules; missing optional streams; explicit/distinct roles; identity source/parameter changes and display exclusions; no spike arrays read for identity, no LFP/PCA dependency. |
+| WP3 persistence portion of same IO module; `test_results.py` | Named-array/meta/offset/eligibility round trip and projection replay; malformed shapes/IDs/versions rejected; metadata-only discovery, no repeated score reads; completed ordering and fallback when newer arrays are corrupt; no overwrite; raw-absent historical loading versus source-validated fresh reuse. |
+| WP4 runners; `test_scripts.py` | One paired fit; dry-run no spikes/writes/pool; reuse and new rerun; changed-during-fit source blocks publication; numerical failure leaves no completed result; v2/v3 and partial roles, worker cap/spawn, session-list paths; batch failure isolation/order/exit status; entry-point equivalence and separate timing fields. |
+| WP5 `cca_plotting.py`; `test_plotting.py` | Exact edges, ten-second gap, measured zero; matched rank/rho hover; step/heatmap value identity; shared fixed scales/manual saturation; pair outside heatmap ranks; loaded bounds; display invariance/no fit/no mutation; light layout/caption. |
+| WP6 view and app/session-input wiring; `test_webapp.py` | Actual early dispatch and raw-absent availability; behavior-only/incomplete probes; Prepare/Recompute only; saved versus preparation settings; cached loads and first-ten/CC1 defaults; pan retained across display changes, reset on session change; 20-ms bounded default and explicit navigation. |
+| WP7 `test_synthetic_integration.py` and usage docs | Shared/private activity, constants/dependence, unequal coverage; prepare/load/figure/reuse/rerun across four bins; full-array fine-bin audit; browser hover/pan/ranks/pair/hide-trace/Jump/bounded load; readable combined layout. Fixes require new RED. Independent finite samples need not yield zero rho. |
+| WP8 user-designated data | Saved identity/shape/projection/covariance/rank audit, 500/20-ms timings, and user inspection before more sessions. Biological observations do not define new test expectations. |
+
+The independent oracle uses centered orthogonal observation vectors with known
+finite-sample cross-covariance, embedded through well-conditioned unit maps.
+Shift analytic columns to nonnegative values without rounding; integer-spike
+pipeline fixtures are separate. A direct-unit statsmodels comparison is an
+agreement check, not an independent oracle for the adapter's estimator.
+
+After approval, run one relevant existing baseline:
+
+```bash
+uv run --frozen --no-sync pytest src/tests/neural_analysis/test_session_timeline.py src/tests/neural_analysis/test_session_timeline_io.py src/tests/neural_analysis/test_session_timeline_webapp.py src/tests/neural_analysis/test_timeline_plotting.py src/tests/neural_analysis/test_timeline_chart.py src/tests/neural_analysis/test_webapp_package.py
+```
+
+Run the package's new file and accumulated affected tests, then metadata,
+timeline/chart, app-routing and affected synchrony UI regressions before WP7
+acceptance. Use existing lint/whitespace checks and `uv run`; introduce no tooling
+dependency. If `UV_CACHE_DIR` is needed, use a verified ignored project cache.
+
+## 7. Orchestrator and single-worker execution
+
+| Role | Responsibility |
+| --- | --- |
+| Orchestrator / lead | Own scientific/software design, dispatch, actual-diff review, Git operations, handoff/evidence, integration, user communication, and authorized experimental validation. |
+| Sole implementation worker | Sequential WP1-WP6 RED/GREEN work and bounded corrections. Inherit the lead's runtime model/effort unless the user specifies otherwise; record the actual agent/model when exposed. |
+| User | Approve implementation plan, designate experimental session, inspect results before wider processing, and decide scope/scientific changes. |
+
+At most **one active worker alongside the orchestrator**, including review.
+Reuse it sequentially; no subworkers or additional reviewers. The lead may own
+small tasks with no worker. File ownership is exclusive until released.
+
+Each dispatch states package/RED or GREEN phase, baseline HEAD and relevant
+dirty state, exact writable files, frozen interfaces/spec sections, test oracles,
+focused command, and stop condition. Work outside that scope returns to the lead.
+
+1. Worker writes tests only, demonstrates RED, reports evidence, and becomes idle.
+2. Lead reviews oracles/diff, reproduces RED, commits intended tests, then releases
+   GREEN. Preserve unrelated staging; no blanket staging or history rewriting.
+3. Worker implements, checks, reports and releases files. Lead reviews the actual
+   diff/contracts, verifies acceptance, commits and updates this handoff.
+4. Defects get failing regressions before fixes. Explain genuine fixture errors
+   or changed requirements. Use the same idle worker to review lead-written
+   numerical code where useful; otherwise identify self-review honestly.
+
+Workers do not stage/commit, change dependencies, spawn agents, launch
+experimental work, or proceed into the next package without dispatch. Only the
+orchestrator updates this handoff. Internal RED/GREEN/review gates do not require
+repeated user approval after the plan is authorized. Complete approved coding
+and synthetic work autonomously, preserving the experimental scope boundary.
+
+## 8. Performance, experimental gate, and completion
+
+Use existing optimized libraries; release unneeded count/SVD arrays and serialize
+only selected heatmap rows and one trace pair. Keep the full mathematical result
+and sparse temporal gaps. Additional acceleration/infrastructure needs measured
+justification and user review.
+
+Record dimensions, ranks, machine/CPU/available RAM, elapsed stage times,
+major array bytes, process peak RSS, NPZ bytes, figure/JSON time and payload,
+and browser responsiveness. Separate source loading/binning, rank adapter,
+package CCA, projection/validation, compression/writing, saved loading, and
+display costs. File-cache state and process-lifetime RSS limitations are explicit.
+No CCA latency measurements exist yet; PCA timings are not CCA estimates.
+
+Measure a seeded synthetic case comparable to the documented 715-choice,
+174/316-unit session, recording actual ranks. Assess 500 ms, then 20 ms/bounded
+plotting; correctness covers all four widths. Report runtime, memory or layout
+problems before proposing optimization. Measure the rank adapter's extra SVD
+cost rather than adding a second implementation preemptively.
+
+Implementation approval covers WP1-WP7, including synthetic/browser checks.
+WP8 also needs the user's session path and processing authority; record it once.
+Keep outputs and captioned light-mode PNGs, if needed, in that session's run
+directory; existing Matplotlib suffices for static export. User inspection
+precedes any experimental batch; the CLI is tested synthetically in WP4/WP7.
+
+Coding delivery requires accepted WP1-WP7, passing relevant checks, usage and
+limitations, and a current handoff accounting for live processes/next action.
+Real-data acceptance also requires WP8 evidence and user inspection. A pending
+session designation does not reopen completed coding work.
+
+## 9. Execution evidence
+
+Append entries; preserve history and append corrections rather than replacing
+failed attempts. Keep the current snapshot concise and the exact evidence here.
+
+```text
+YYYY-MM-DD HH:MM America/New_York - package / phase
+Authority and scope; lead/worker identity and active state:
+Start/end HEAD; exact writable paths; relevant existing changes preserved:
+Exact RED/GREEN/review commands, results/warnings, test/implementation commits:
+Findings, interface changes, numerical/resource measurements or not measured:
+Live agent/process/tool session/PID/log/output; last durable product or none:
+Next exact action, owner, and outstanding user decision if any:
+```
+
+### 2026-11-13 - WP0 / implementation-plan draft
+
+- User requested a draft referring to SoftwareDesign and existing plans, with a
+  live handoff and orchestrator/worker designations limited to one active worker.
+- Read those design/rule/spec sources, prediction/synchrony/event handoffs, and
+  directly related timeline loading, binning, navigation, metadata routing and
+  installed statsmodels estimator source. Drafted this plan only.
+- Inspected branch/HEAD: `refactor` / `2e3ada8`; pre-existing tracked changes
+  preserved. No source/test edits, tests, commits, worker dispatch, benchmark,
+  or experimental analysis. Numerical design remains proposed, not verified.
+- Documentation QA: ASCII/trailing-whitespace scan found no matches;
+  `git diff --no-index --check /dev/null docs/session_timeline_cca_implementation_plan.md`
+  reported no whitespace errors (exit 1 reflects a new file). All five fenced
+  blocks are balanced, and the five linked local documents exist. No code tests
+  were run for this documentation-only draft.
+- Next action: user reviews the plan; after approval follow Section 0.3 and
+  WP1 RED. Experimental session designation remains pending for WP8.
+
+### 2026-11-13 - WP0 / correctness, completeness and conciseness review
+
+- Reviewed the plan against the accepted spec, current metadata/source loaders,
+  timeline chart/navigation, batch helpers and installed `CanCorr` source.
+- Corrected a projection shape error: retained count columns require identically
+  indexed mean/SD arrays. Added explicit shape/unit-order rejection and clarified
+  minimum norm in standardized-unit coordinates. The analytical known-rho
+  fixture is the independent oracle; direct statsmodels comparison is agreement
+  evidence only. Its analytic inputs can be shifted positive without rounding.
+- Completed metadata-only discovery versus selected-array validation/fallback,
+  source enumeration/absence/versioning, distinct/partial role rules, batch
+  failure/order/exit behavior, and result-change control/navigation contracts.
+- Condensed repeated scope/workflow/performance prose. Kept one sequential
+  worker, explicit test packages, live state and resume/evidence procedures.
+- Documentation-only changes. No numerical experiment, code/test implementation,
+  agent dispatch, or experimental run; WP1 must still validate the proposed
+  adapter and tolerances. Next gate remains user implementation-plan review.
+- Review QA: five balanced fenced blocks; ASCII/trailing-whitespace scan and
+  new-file diff check found no errors. Existing tracked changes are unchanged.
+
+### 2026-11-13 - implementation approval / baseline
+
+- User instruction: "Begin implementation"; WP1-WP7 authorized under this plan.
+  No experimental session designated. Existing dirty files are unchanged.
+- Baseline command: `UV_CACHE_DIR=.pytest_cache/uv uv run --frozen --no-sync pytest
+  src/tests/neural_analysis/test_session_timeline.py
+  src/tests/neural_analysis/test_session_timeline_io.py
+  src/tests/neural_analysis/test_session_timeline_webapp.py
+  src/tests/neural_analysis/test_timeline_plotting.py
+  src/tests/neural_analysis/test_timeline_chart.py
+  src/tests/neural_analysis/test_webapp_package.py`.
+- Result: 86 passed, 1 skipped in 5.29 s. Node-dependent frontend lifecycle test
+  skipped because Node is not on PATH. Tool exec 91147 completed normally.
+- Next: sole worker WP1 RED only; no source implementation before test commit.
