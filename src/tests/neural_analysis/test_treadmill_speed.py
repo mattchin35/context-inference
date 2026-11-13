@@ -154,7 +154,7 @@ def test_invalid_inputs_are_explicit_and_never_fabricate_zero_speed(
     elif fault == "beyond_edge":
         parsed.loc[speed_rows[0], "time_value"] = 1.5
     elif fault == "sync_state":
-        parsed.loc[sync_rows[1], "value"] = "HIGH"
+        parsed.loc[sync_rows[1], "value"] = "UNKNOWN"
     elif fault == "speed_nan":
         parsed.loc[speed_rows[0], "value"] = "nan"
     elif fault == "no_speed":
