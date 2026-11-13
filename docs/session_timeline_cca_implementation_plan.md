@@ -20,16 +20,16 @@ Update at assignment, RED/test-commit, GREEN/review, interruption, and data gate
 
 | Field | Current value |
 | --- | --- |
-| Observation | 2026-11-13; branch `refactor`; input/config HEAD `a383bb4`. Recheck on resumption; this is not a reset target. |
+| Observation | 2026-11-13; branch `refactor`; archive HEAD `1203545`. Recheck on resumption; this is not a reset target. |
 | Authority | User approved implementation: "Begin implementation". WP1-WP7 authorized; WP8 still needs a designated session. |
-| Feature state | WP1/WP2 accepted; 86 CCA tests pass. WP3 persistence/discovery RED in progress. |
+| Feature state | WP1-WP3 accepted, 115 CCA tests pass; WP4 runner/CLI/batch RED in progress. |
 | Orchestrator | Current lead; owns this handoff, review, integration, and Git operations. Record actual runtime identity when available; do not infer it from historical plans. |
-| Active worker / writable scope | `/root/cca_worker`, WP3 RED only: new `src/tests/neural_analysis/session_cca/test_results.py`; source frozen. |
+| Active worker / writable scope | `/root/cca_worker`, WP4 RED only: new `src/tests/neural_analysis/session_cca/test_scripts.py`; numerical/input/archive source and existing tests frozen. |
 | Existing work | Eleven pre-existing modified tracked files, including prediction/spec/view work, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve them. |
 | Current feature files | Spec/approved plan committed as `9e48e76`; current live-handoff changes belong to the orchestrator. Worker owns WP1 tests. |
 | Tests / processes | Numerical core 50 passed; baseline 86 passed, 1 Node-dependent skip. Connectivity-only Streamlit server exec 73923 at loopback 8527; see latest evidence. No experimental analysis running. |
 | Experimental validation | User designated CT026 2026-08-28 after synthetic/browser gates; metadata path recorded below. No further session authorized. |
-| Next action | Review/commit WP3 persistence tests before IO schema/discovery implementation. |
+| Next action | Review WP4 runner tests/RED, commit tests before creating main/batch source. |
 
 ### 0.2 Work-package ledger
 
@@ -41,11 +41,11 @@ or waiting for a named external decision. Worker completion is not acceptance.
 | WP0 spec/plan | Orchestrator | Approved / complete | Not applicable | Baseline 86 passed, 1 skipped; Section 9 |
 | WP1 numerical CCA | Sole worker `/root/cca_worker` | Accepted | `ed25401`, rank-one `65b676f`; missing-module RED reproduced | `3166892`; lead 50 passed/0.77 s, worker 50 + 55 regressions, Ruff passed; source read |
 | WP2 paired inputs/identity | Same worker | Accepted | `6592449`; missing-IO RED, lead 0.73 s | `a383bb4`; lead 36 passed/2.08 s; worker accumulated 154 passed; source/Ruff reviewed |
-| WP3 persistence/discovery | Same worker | RED in progress | Pending | Not run |
-| WP4 session/batch runners | Same worker | Not started / WP3 accepted | Not run | Not run |
+| WP3 persistence/discovery | Same worker | Accepted | `d599397`; review `41d6fbb`, four failures/1.46 s | `1203545`; lead 115 CCA passed/3.22 s, worker accumulated 171 passed; source/Ruff read |
+| WP4 session/batch runners | Same worker | RED in progress | Pending | Not run |
 | WP5 scientific figure | Same worker | Not started / WP4 accepted | Not run | Not run |
 | WP6 app integration | Same worker | Not started / WP5 accepted | Not run | Not run |
-| WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Not started / WP6 accepted | Not run | Not run |
+| WP7 synthetic/browser/usage | Orchestrator; bounded same-worker fixes | Usage outline drafted; acceptance awaits WP6 | Not run | Usage draft not yet verified against final UI/CLI |
 | WP8 designated-session/performance | Orchestrator and user | Not started / synthetic acceptance and session designation | Not applicable unless a defect needs a regression | Not run; later user inspection precedes batches |
 
 ### 0.3 Resume procedure
@@ -99,6 +99,11 @@ Localized existing changes: `webapp/session_inputs.py` (route/availability),
 `webapp/app.py` (early dispatch), neural README/timeline links, and a new short
 `src/neural_analysis/SESSION_CCA.md` usage guide. Read callers before changing
 any shared helper. Existing PCA and synchrony public interfaces stay intact.
+
+Benchmark dependency: WP4 measures preparation, saved loading, bytes and memory.
+WP5 adds figure/serialization measurements to the same benchmark helper after
+its plotter tests are committed. No early plot implementation or fake measured
+figure timings are needed to accept the runner package.
 
 ```mermaid
 flowchart LR
@@ -606,3 +611,51 @@ Next exact action, owner, and outstanding user decision if any:
   Section 3 plus explicit fit/unavailable_reason. Header metadata-only discovery
   and shared `load_latest_cca_result(session_root, configuration_id)` fallback
   are frozen before tests. No schema source yet; no experimental processing.
+
+### 2026-11-13 - WP3 RED reviewed / GREEN dispatch
+
+- Lead reviewed all archive tests, including mixed/missing/duplicate trial-ID
+  preservation and named-array/projection replay. Focused `test_results.py`
+  command reproduced the intended missing CCAResultInfo import RED in 1.13 s.
+  Tests committed `d599397`; worker's RED was 1.18 s.
+- Same worker now owns IO persistence/result/discovery source only. No numerical
+  or input behavior/test changes. Flat scientific meta plus region unit/rank
+  metadata, named arrays, units/axes and writer provenance are frozen.
+- Orchestrator independently drafted `src/neural_analysis/SESSION_CCA.md` from
+  accepted behavior/commands; worker notified. It is explicitly a usage draft,
+  to be verified against actual UI/CLI at WP7. No source implementation there.
+- No experimental processing; loopback connectivity server remains as recorded.
+
+### 2026-11-13 - WP3 initial GREEN / review regressions
+
+- Original archive suite: 25 passed in 2.15 s after preserving original pandas
+  column dtypes with explicit Series construction. No expectations changed.
+- Worker command: `UV_CACHE_DIR=.pytest_cache/uv uv run --frozen --no-sync pytest
+  src/tests/neural_analysis/session_cca
+  src/tests/neural_analysis/test_session_timeline_io.py
+  src/tests/neural_analysis/test_timeline_scientific_identity.py
+  src/tests/neural_analysis/test_session_timeline_scripts.py
+  src/tests/neural_analysis/test_session_metadata.py`: 167 passed/5.30 s.
+  Ruff/whitespace passed; source ownership released for review.
+- Lead source review found identity metadata could be overridden while retaining
+  an old configuration ID, and nonempty event clocks lacked structural/UTC checks.
+  Added `test_result_integrity.py`: exact focused pytest yielded four real
+  DID NOT RAISE failures in 1.46 s. Committed `41d6fbb` before fixes.
+- Same worker now fixes only those identity/event-clock contracts. Empty events
+  remain valid; no new trial-ID eligibility, sources or covariance refits.
+  WP3 source remains uncommitted/unaccepted until all tests return GREEN.
+
+### 2026-11-13 - WP3 accepted / WP4 RED dispatch
+
+- Review fixes: 29 archive/integrity tests passed/2.29 s. Worker accumulated
+  command from the preceding entry returned 171 passed/4.99 s.
+- Lead independently ran all CCA tests: 115 passed/3.22 s. Full added source
+  reviewed; Ruff all CCA source/tests passed, whitespace passed. Fixture import
+  aliases fixed for Ruff only, without assertion changes. Accepted `1203545`.
+- Sole worker now writes runner/batch/CLI tests only. Main/batch source is absent.
+  Run report fields frozen: status/result_path/configuration_id/elapsed_s and
+  optional batch error. Partial explicit roles remain errors; v3 defaults use
+  the existing public resolver. No signals/writes/process pool in dry-run.
+- Resolved forward dependency: WP4 benchmarks saved-load/preparation/memory/size;
+  WP5 adds real figure/serialization metrics tests-first once the plotter exists.
+  No placeholder timing values or premature plotter implementation.
