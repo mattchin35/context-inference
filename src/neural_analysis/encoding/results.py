@@ -15,14 +15,14 @@ import numpy as np
 import pandas as pd
 
 from src.neural_analysis.encoding.configuration import ANALYSIS_VERSION, EncodingConfig
-from src.neural_analysis.encoding.preparation import PreparedRegion
+from src.neural_analysis.encoding.preparation import PreparedRegion, response_activity
 from src.neural_analysis.interregional.records import RegionalPCATransform
 from src.neural_analysis.population.session_timeline import RegionalTimelinePCA, SessionTimelineResult
 from src.neural_analysis.population import session_timeline_io
 from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 REPOSITORY = Path(__file__).resolve().parents[3]
 PREPARATION_SOURCES = (
     "src/neural_analysis/encoding/configuration.py", "src/neural_analysis/encoding/predictors.py",
@@ -31,7 +31,7 @@ PREPARATION_SOURCES = (
     "src/neural_analysis/population/session_timeline.py", "src/neural_analysis/population/session_timeline_io.py",
     "src/neural_analysis/population/pca.py", "src/neural_analysis/interregional/pca.py",
     "src/neural_analysis/interregional/records.py", "src/neural_analysis/spike_behavior/loading.py",
-    "src/neural_analysis/task_decoding/activity.py",
+    "src/neural_analysis/task_decoding/activity.py", "src/neural_analysis/spike_behavior/binning.py",
 )
 MODELING_SOURCES = (
     "src/neural_analysis/encoding/modeling.py", "src/neural_analysis/encoding/pipeline.py",
@@ -64,9 +64,9 @@ def restore_config(payload: dict) -> EncodingConfig:
     """
     values = dict(payload)
     for name in ("session_metadata", "augmented_trials", "feature_parameters", "session_root",
-                 "intermediate_root", "run_root", "timeline_result"):
+                 "intermediate_root", "run_root"):
         values[name] = None if values.get(name) is None else Path(values[name])
-    for name in ("windows", "timing_modes", "encodings", "estimators", "penalty_modes", "window_s"):
+    for name in ("response_representations", "encodings", "estimators", "penalty_modes", "window_s"):
         values[name] = tuple(values[name])
     return EncodingConfig(**values)
 
@@ -111,17 +111,16 @@ def compute_run_identities(config: EncodingConfig) -> dict:
             continue
         small.update(path for path in (probe.channel_quality_file, probe.cluster_info_file) if path is not None)
         large.update(path for path in (probe.alignment_file, probe.spike_clusters_file) if path is not None)
-    if config.timeline_result is not None:
-        large.add(config.timeline_result)
     records = [_source_record(path, path in small) for path in sorted(small | large)]
     code = numerical_code_identity()
     runtime = numerical_runtime_versions()
-    source_settings = session_timeline_io.timeline_configuration(session, dict(config.probe_roles), config.bin_width_ms / 1000)
+    source_settings = session_timeline_io.timeline_configuration(session, dict(config.probe_roles), config.bin_width_ms / 1000, window_s=config.window_s)
     preparation_id = _digest({"analysis_version": ANALYSIS_VERSION, "code": code["preparation"],
         "inputs": records, "source_settings": source_settings, "runtime_versions": runtime, "window_s": config.window_s,
-        "bin_width_ms": config.bin_width_ms, "probe_roles": dict(config.probe_roles)})
+        "bin_width_ms": config.bin_width_ms, "probe_roles": dict(config.probe_roles),
+        "response_representations": list(config.response_representations)})
     model_settings = {name: getattr(config, name) for name in (
-        "windows", "timing_modes", "encodings", "estimators", "alpha", "penalty_modes")}
+        "response_representations", "encodings", "estimators", "alpha", "penalty_modes")}
     model_id = _digest({"preparation_id": preparation_id, "code": code["modeling"],
                         "runtime_versions": runtime, "settings": model_settings})
     return {"preparation_id": preparation_id, "model_id": model_id, "code_identity": code,
@@ -166,54 +165,64 @@ def load_run_manifest(run_directory: Path | str) -> dict:
     return payload
 
 
+def discover_encoding_runs(run_root: Path | str) -> list[Path]:
+    """Input analysis-run root; return current-version run Paths newest first using metadata only.
+
+    Old or unreadable manifests are omitted without changes. Direct loading
+    retains its explicit unsupported-version error. No activity/source arrays load.
+    """
+    runs=[]
+    for path in sorted(Path(run_root).glob("context_encoding_*"),reverse=True):
+        try:
+            load_run_manifest(path)
+        except (OSError,ValueError,KeyError):
+            continue
+        runs.append(path)
+    return runs
+
+
 def write_progress(run_directory: Path | str, progress: dict) -> None:
     """Atomically replace run progress from Path and JSON dict; return None, no scientific units."""
     _write_json(Path(run_directory) / "progress.json", progress)
 
 
 # Public named-array publication and read-only loading.
-def save_preparation(
-    path: Path | str, trials: pd.DataFrame, behavior: SessionTimelineResult,
-    regions: dict[str, PreparedRegion], meta: dict,
-) -> Path:
-    """Publish one immutable snapshot containing full behavior and regional bases.
+def save_preparation(path: Path | str, trials: pd.DataFrame, behavior: SessionTimelineResult,
+                     regions: dict[str,PreparedRegion], meta: dict) -> Path:
+    """Publish common unit counts(W,B,U), trial/bin geometry and optional fixed PC scores(W,B,K).
 
-    Inputs: new NPZ Path; complete trials (T,C); behavior with choices/events
-    in UTC/elapsed seconds; regions with scores (W,B,K), native unit scaling,
-    original ranks and (W,B) context values; provenance meta dictionary.
-    Return saved Path. Named arrays preserve shapes/units; meta is a dictionary
-    called 'meta'. A temporary sibling is published before any run-index update.
-    Existing files raise FileExistsError and remain unchanged.
+    Input tables retain original identities and UTC/elapsed seconds. path is
+    a new session-local NPZ; meta contains scientific provenance. Return Path.
+    Counts are stored once in counts/bin units, not duplicated as Hz arrays.
+    Absent PCA writes no PCA section. Existing scientific files are preserved.
     """
-    metadata = _archive_meta(meta, "preparation")
-    metadata.update({"session_id": behavior.session_id, "time_origin_s": behavior.time_origin_s,
-        "behavior_meta": behavior.meta, "behavior_unavailable": behavior.unavailable, "regions": {},
-        "units": {"absolute_time": "UTC Unix seconds", "relative_time": "seconds",
-                  "scores": "unwhitened standardized-unit scores", "counts": "spike counts per bin"},
-        "axes": {"scores": ["window", "bin", "original_pc"], "context": ["window", "bin"]}})
-    arrays = {"trials": trials.to_records(index=False), "choices": behavior.choices.to_records(index=False),
-              "events": behavior.events.to_records(index=False)}
-    for role, prepared in regions.items():
-        regional, transform = prepared.timeline, prepared.timeline.transform
-        prefix = role.lower() + "_"
-        metadata["regions"][role] = {"probe_id": regional.probe_id,
-            "retained_unit_ids": transform.retained_unit_ids, "omitted_unit_ids": transform.omitted_unit_ids,
-            "input_unit_ids": transform.input_unit_ids, "n_training_observations": transform.n_training_observations,
-            "total_session_variance": regional.total_session_variance, "color_limit": regional.color_limit,
-            "timings_s": regional.timings_s, "cv_unavailable_reason": prepared.cv_unavailable_reason,
-            "reused": prepared.reused, "meta": prepared.meta, "timing_modes": list(prepared.context_values)}
-        for name in ("scores", "choice_positions", "bin_edges_s", "window_total_variance"):
-            arrays[prefix + name] = getattr(regional, name)
-        for name in ("components", "training_mean", "training_scale", "explained_variance", "explained_variance_ratio"):
-            arrays[prefix + name] = getattr(transform, name)
-        arrays[prefix + "pc_ranks"] = prepared.pc_ranks
-        arrays[prefix + "window_fold_ids"] = prepared.window_fold_ids
-        arrays[prefix + "bin_rows"] = prepared.bin_rows.to_records(index=False)
-        for mode in prepared.context_values:
-            arrays[prefix + mode + "_values"] = prepared.context_values[mode]
-            arrays[prefix + mode + "_valid"] = prepared.context_valid[mode]
-    arrays["meta"] = np.asarray(metadata, dtype=object)
-    return _publish_npz(Path(path), arrays)
+    metadata=_archive_meta(meta,"preparation")
+    metadata.update({"session_id":behavior.session_id,"time_origin_s":behavior.time_origin_s,
+        "behavior_meta":behavior.meta,"behavior_unavailable":behavior.unavailable,"regions":{},
+        "window_s":[-1.,1.],"units":{"absolute_time":"UTC Unix seconds","relative_time":"seconds",
+        "counts":"spike counts per bin","unit_responses":"Hz","scores":"unwhitened standardized-unit scores"},
+        "axes":{"counts":["window","bin","unit"],"scores":["window","bin","original_pc"]}})
+    arrays={"trials":trials.to_records(index=False),"choices":behavior.choices.to_records(index=False),
+            "events":behavior.events.to_records(index=False)}
+    for role,region in regions.items():
+        prefix=role.lower()+"_"
+        info={"probe_id":region.probe_id,"unit_ids":region.unit_ids,"cv_unavailable_reason":region.cv_unavailable_reason,
+            "pca_unavailable_reason":region.pca_unavailable_reason,"meta":region.meta,"pca":None}
+        for name in ("unit_counts","choice_positions","bin_edges_s","window_fold_ids","pc_ranks"):
+            arrays[prefix+name]=getattr(region,name)
+        arrays[prefix+"bin_rows"]=region.bin_rows.to_records(index=False)
+        if region.pca is not None:
+            pc=region.pca; transform=pc.transform
+            info["pca"]={"retained_unit_ids":transform.retained_unit_ids,"omitted_unit_ids":transform.omitted_unit_ids,
+                "input_unit_ids":transform.input_unit_ids,"n_training_observations":transform.n_training_observations,
+                "total_session_variance":pc.total_session_variance,"color_limit":pc.color_limit,"timings_s":pc.timings_s}
+            for name in ("scores","window_total_variance"):
+                arrays[prefix+name]=getattr(pc,name)
+            for name in ("components","training_mean","training_scale","explained_variance","explained_variance_ratio"):
+                arrays[prefix+name]=getattr(transform,name)
+        metadata["regions"][role]=info
+    arrays["meta"]=np.asarray(metadata,dtype=object)
+    return _publish_npz(Path(path),arrays)
 
 
 def load_preparation(path: Path | str) -> dict:
@@ -231,7 +240,7 @@ def load_preparation(path: Path | str) -> dict:
         events = pd.DataFrame.from_records(archive["events"])
         regions = {role: _load_region(archive, role, info) for role, info in meta["regions"].items()}
     behavior = SessionTimelineResult(meta["session_id"], meta["time_origin_s"], choices, events,
-        {role: region.timeline for role, region in regions.items()}, meta["behavior_unavailable"], meta["behavior_meta"])
+        {role: region.pca for role, region in regions.items() if region.pca is not None}, meta["behavior_unavailable"], meta["behavior_meta"])
     return {"trials": trials, "behavior": behavior, "regions": regions, "meta": meta}
 
 
@@ -313,90 +322,125 @@ def load_encoding_run(run_directory: Path | str, cell_ids: Sequence[str] | None 
 
 
 def cell_observations(preparation: dict, cell: dict) -> np.ndarray:
-    """Assemble saved cell responses from one shared preparation without source access.
+    """Resolve observed(N,R) from shared activity with exact original response/bin identity checks.
 
-    Inputs: preparation dict with regions' scores(W,B,K_full) and original
-    pc_ranks(K_fit); raw cell with selected_row_indices(N,) and pc_ranks(K_fit).
-    Return observed(N,K_fit) in fixed unwhitened PC-score units. Original row/PC
-    identities are validated; no input is modified and no model is fitted.
+    Unit counts(W,B,U) convert selected rows to Hz without a PCA dependency;
+    PC scores(W,B,K_full) select original nonzero ranks. Input cell carries
+    selected_row_indices(N,), response_ids(R,) and representation metadata.
+    Return original response units; unavailable PCs return shape(N,0).
+    No file/source loading, fitting or mutation occurs.
     """
-    if cell["meta"]["preparation_id"] != preparation["meta"]["preparation_id"]:
+    if cell["meta"]["preparation_id"]!=preparation["meta"]["preparation_id"]:
         raise ValueError("Cell preparation identity differs from shared activity")
-    region = preparation["regions"][cell["meta"]["settings"]["region"]]
-    scores = region.timeline.scores.reshape(-1, region.timeline.scores.shape[-1])
-    indices, ranks = cell["selected_row_indices"], cell["pc_ranks"]
-    if (indices.ndim != 1 or not np.issubdtype(indices.dtype, np.integer)
-            or np.any(indices < 0) or np.any(indices >= len(scores))
-            or not np.array_equal(ranks, region.pc_ranks)):
-        raise ValueError("Cell observation/PC identity differs from preparation")
-    return scores[indices][:, ranks - 1]
+    region=preparation["regions"][cell["meta"]["settings"]["region"]]
+    indices=cell["selected_row_indices"]
+    total=int(np.prod(region.unit_counts.shape[:2]))
+    if indices.ndim!=1 or not np.issubdtype(indices.dtype,np.integer) or np.any(indices<0) or np.any(indices>=total):
+        raise ValueError("Cell observation row identity differs from preparation")
+    representation=cell["meta"]["settings"]["representation"]
+    if representation=="pcs" and region.pca is None:
+        if len(cell["response_ids"]) or cell["meta"]["available"]:
+            raise ValueError("Cell response identity requires unavailable PCA")
+        return np.empty((len(indices),0))
+    if representation=="units":
+        ids=region.unit_ids
+        data=region.unit_counts.reshape(total,len(ids))[indices]/np.diff(region.bin_edges_s)[0]
+    else:
+        activity,ids,_=response_activity(region,representation)
+        data=activity.reshape(total,len(ids))[indices]
+    if not np.array_equal(cell["response_ids"],ids):
+        raise ValueError("Cell response identity differs from preparation")
+    return data
 
 
-# Small archive/identity helpers.
+# Archive restoration validates common activity independently of optional PCA.
 def _load_region(archive: object, role: str, info: dict) -> PreparedRegion:
-    """Restore one regional NPZ prefix to fixed scores(W,B,K)/native-scale PreparedRegion."""
-    prefix = role.lower() + "_"
-    transform = RegionalPCATransform(
-        retained_unit_ids=tuple(info["retained_unit_ids"]), omitted_unit_ids=tuple(info["omitted_unit_ids"]),
-        input_unit_ids=tuple(info["input_unit_ids"]), n_training_observations=info["n_training_observations"],
-        **{name: archive[prefix + name] for name in ("components", "training_mean", "training_scale",
-            "explained_variance", "explained_variance_ratio")})
-    regional = RegionalTimelinePCA(role, info["probe_id"], archive[prefix + "choice_positions"],
-        archive[prefix + "bin_edges_s"], archive[prefix + "scores"], transform,
-        info["total_session_variance"], archive[prefix + "window_total_variance"], info["color_limit"], info["timings_s"])
-    ranks, folds = archive[prefix + "pc_ranks"], archive[prefix + "window_fold_ids"]
-    rows = pd.DataFrame.from_records(archive[prefix + "bin_rows"])
-    values = {mode: archive[prefix + mode + "_values"] for mode in info["timing_modes"]}
-    valid = {mode: archive[prefix + mode + "_valid"] for mode in info["timing_modes"]}
-    shape = regional.scores.shape
-    if (len(shape) != 3 or not np.isfinite(regional.scores).all() or len(rows) != shape[0] * shape[1]
-            or folds.shape != (shape[0],) or len(regional.bin_edges_s) != shape[1] + 1
-            or shape[2] != transform.actual_components or regional.choice_positions.shape != (shape[0],)
-            or ranks.ndim != 1 or not np.issubdtype(ranks.dtype, np.integer)
-            or np.any(ranks < 1) or np.any(ranks > shape[2])):
-        raise ValueError("Saved preparation regional array shapes/PC identities are invalid")
-    if any(values[mode].shape != shape[:2] or valid[mode].shape != shape[:2] for mode in values):
-        raise ValueError("Saved context shape differs from regional window/bin axes")
-    return PreparedRegion(regional, ranks, rows, values, valid, folds, info["cv_unavailable_reason"], info["reused"], info["meta"])
+    """Restore counts(W,B,U)/IDs/second edges/rows/folds first, then validate an optional fixed PCA."""
+    prefix=role.lower()+"_"
+    counts=archive[prefix+"unit_counts"]
+    ids=tuple(info["unit_ids"])
+    positions,edges=archive[prefix+"choice_positions"],archive[prefix+"bin_edges_s"]
+    rows=pd.DataFrame.from_records(archive[prefix+"bin_rows"])
+    folds,ranks=archive[prefix+"window_fold_ids"],archive[prefix+"pc_ranks"]
+    if counts.ndim!=3 or not np.isfinite(counts).all() or np.any(counts<0):
+        raise ValueError("Saved unit count shape/values are invalid")
+    w,b,u=counts.shape
+    if (u!=len(ids) or len(set(ids))!=u or not w or not b or not u or len(rows)!=w*b
+            or positions.shape!=(w,) or not np.issubdtype(positions.dtype,np.integer)
+            or folds.shape!=(w,) or not np.issubdtype(folds.dtype,np.integer)
+            or not np.isin(folds,[-1,0,1,2,3,4]).all() or edges.shape!=(b+1,)
+            or edges[0]!=-1 or edges[-1]!=1 or not np.all(np.diff(edges)>0)
+            or not np.allclose(np.diff(edges),2/b)):
+        raise ValueError("Saved common activity geometry/identity is invalid")
+    if (not np.array_equal(rows.window_index,np.repeat(np.arange(w),b))
+            or not np.array_equal(rows.bin_index,np.tile(np.arange(b),w))
+            or not np.array_equal(rows.choice_position,np.repeat(positions,b))
+            or not np.array_equal(rows.fold_id,np.repeat(folds,b))):
+        raise ValueError("Saved bin-row/fold identity differs from common activity")
+    pc=None
+    if info["pca"] is not None:
+        details=info["pca"]
+        transform=RegionalPCATransform(retained_unit_ids=tuple(details["retained_unit_ids"]),
+            omitted_unit_ids=tuple(details["omitted_unit_ids"]),input_unit_ids=tuple(details["input_unit_ids"]),
+            n_training_observations=details["n_training_observations"],
+            **{name:archive[prefix+name] for name in ("components","training_mean","training_scale","explained_variance","explained_variance_ratio")})
+        scores=archive[prefix+"scores"]
+        if (scores.shape!=(w,b,transform.actual_components) or not np.isfinite(scores).all()
+                or transform.input_unit_ids!=ids or transform.n_training_observations!=w*b
+                or not np.all(transform.training_scale>0) or ranks.ndim!=1
+                or not np.issubdtype(ranks.dtype,np.integer) or np.any(ranks<1)
+                or np.any(ranks>scores.shape[2]) or len(np.unique(ranks))!=len(ranks)):
+            raise ValueError("Saved PCA shape/scaling/response identity is invalid")
+        pc=RegionalTimelinePCA(role,info["probe_id"],positions,edges,scores,transform,details["total_session_variance"],
+            archive[prefix+"window_total_variance"],details["color_limit"],details["timings_s"])
+    elif len(ranks):
+        raise ValueError("Unavailable PCA cannot supply PC ranks")
+    return PreparedRegion(role,info["probe_id"],counts,ids,positions,edges,rows,folds,info["cv_unavailable_reason"],
+        pc,ranks,info["pca_unavailable_reason"],info["meta"])
 
 
 def _validate_cell(cell: dict) -> None:
     """Validate named cell arrays with N bins/P predictors/K PCs; no units changed, return None."""
     meta = cell["meta"]
     n, p, k = meta["row_count"], meta["predictor_count"], meta["response_count"]
-    if any(type(value) is not int for value in (n, p, k)) or n < 0 or p < 1 or k < 1:
+    if any(type(value) is not int for value in (n, p, k)) or n < 0 or p < 1 or k < 0:
         raise ValueError("Saved cell row/predictor/response counts must be valid integers")
-    shapes = {"selected_row_indices": (n,), "pc_ranks": (k,), "predictors": (n, p),
+    shapes = {"selected_row_indices": (n,), "response_ids": (k,), "predictors": (n, p),
         "reference_slopes": (p, k), "reference_intercept": (k,), "standardized_slopes": (p, k),
         "reference_predictions": (n, k), "held_out_predictions": (n, k),
         "fold_slopes": (5, p, k), "fold_intercepts": (5, k), "fold_ids": (n,),
         "mse": (k,), "r2": (k,), "fold_mse": (5, k), "fold_r2": (5, k),
         "fold_valid": (5,), "fold_train_counts": (5,), "fold_test_counts": (5,),
-        "fold_reasons": (5,), "fold_r2_reason": (5, k), "r2_reason": (k,), "column_names": (p,)}
+        "fold_reasons": (5,), "fold_r2_reason": (5, k), "r2_reason": (k,), "column_names": (p,),
+        "penalty_vector":(p,),"contrasts":(2,k),"contrast_valid":(2,),"contrast_reasons":(2,),
+        "fold_contrasts":(5,2,k),"fold_contrast_valid":(5,2),"fold_contrast_reasons":(5,2),
+        "predictor_supported":(p,),"predictor_nonzero_counts":(p,),
+        "fold_predictor_supported":(5,p),"fold_predictor_nonzero_counts":(5,p)}
     for name, shape in shapes.items():
         if name not in cell or np.asarray(cell[name]).shape != shape:
             raise ValueError(f"Saved cell {name} shape must be {shape}")
-    for name in ("selected_row_indices", "pc_ranks", "fold_ids", "fold_train_counts", "fold_test_counts"):
+    for name in ("selected_row_indices", "fold_ids", "fold_train_counts", "fold_test_counts"):
         if not np.issubdtype(cell[name].dtype, np.integer):
             raise ValueError(f"Saved {name} identities/counts must be integer")
     if (np.any(cell["selected_row_indices"] < 0) or len(np.unique(cell["selected_row_indices"])) != n
-            or np.any(cell["pc_ranks"] < 1) or len(np.unique(cell["pc_ranks"])) != k
+            or cell["response_ids"].dtype.kind not in "US" or len(np.unique(cell["response_ids"])) != k
             or not np.isin(cell["fold_ids"], [-1, 0, 1, 2, 3, 4]).all()):
-        raise ValueError("Saved row/PC/fold identity values are invalid")
-    if cell["fold_valid"].dtype != np.dtype(bool):
-        raise ValueError("Saved fold_valid flags must be Boolean")
+        raise ValueError("Saved row/response/fold identity values are invalid")
+    for name in ("fold_valid","contrast_valid","fold_contrast_valid","predictor_supported","fold_predictor_supported"):
+        if cell[name].dtype != np.dtype(bool):
+            raise ValueError(f"Saved {name} flags must be Boolean")
     for name in ("fold_train_counts", "fold_test_counts"):
         if np.any(cell[name] < 0) or np.any(cell[name] > n):
             raise ValueError(f"Saved {name} must be nonnegative bin counts")
     numeric = ("predictors", "reference_slopes", "reference_intercept", "standardized_slopes",
                "reference_predictions", "held_out_predictions", "fold_slopes", "fold_intercepts",
-               "mse", "r2", "fold_mse", "fold_r2")
+               "mse", "r2", "fold_mse", "fold_r2", "penalty_vector", "contrasts", "fold_contrasts")
     for name in numeric:
         if not np.issubdtype(cell[name].dtype, np.number) or np.isinf(cell[name]).any():
             raise ValueError(f"Saved {name} must be numeric and cannot contain infinite values")
     if not np.isfinite(cell["predictors"]).all():
         raise ValueError("Saved native predictors must be finite")
-    if meta["available"] and (not np.isfinite(cell["reference_slopes"]).all()
+    if meta["available"] and (not n or not k or not np.isfinite(cell["reference_slopes"]).all()
             or not np.isfinite(cell["reference_intercept"]).all()
             or not np.isfinite(cell["reference_predictions"]).all()):
         raise ValueError("Available cell reference predictions/coefficients must be finite")
@@ -426,7 +470,7 @@ def _check_version(meta: dict, kind: str | None = None) -> None:
     """Validate scalar archive/manifest version fields; return None or ValueError, no units."""
     if (not isinstance(meta, dict) or meta.get("schema_version") != SCHEMA_VERSION
             or meta.get("analysis_version") != ANALYSIS_VERSION or (kind is not None and meta.get("kind") != kind)):
-        raise ValueError("Unsupported encoding schema/analysis version or archive kind")
+        raise ValueError("Unsupported encoding schema/analysis version or archive kind; create a new run with the current example configuration")
 
 
 def _publish_npz(path: Path, arrays: dict) -> Path:
