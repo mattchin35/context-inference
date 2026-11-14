@@ -66,6 +66,8 @@ PLOT_VIEW_INTERREGIONAL = "Inter-regional regression results"
 
 PLOT_VIEW_CONTEXT_ENCODING = "Single unit selectivity"
 
+PLOT_VIEW_POPULATION_DECODING = "Population task decoding"
+
 PLOT_VIEW_SESSION_TIMELINE = "Session timeline and PCA"
 
 PLOT_VIEW_SESSION_CCA = "Session timeline and CCA"
@@ -91,6 +93,7 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_CROSS_CONDITION_GENERALIZATION,
     PLOT_VIEW_INTERREGIONAL,
     PLOT_VIEW_CONTEXT_ENCODING,
+    PLOT_VIEW_POPULATION_DECODING,
     PLOT_VIEW_SESSION_TIMELINE,
     PLOT_VIEW_SESSION_CCA,
     PLOT_VIEW_PHASE_SYNCHRONY,
@@ -241,6 +244,7 @@ def metadata_view_availability(
             PLOT_VIEW_CROSS_CONDITION_GENERALIZATION,
             PLOT_VIEW_INTERREGIONAL,
             PLOT_VIEW_CONTEXT_ENCODING,
+            PLOT_VIEW_POPULATION_DECODING,
         }:
             availability[view] = MetadataViewAvailability(True, "available")
         elif view == PLOT_VIEW_SESSION_TIMELINE and discover_prediction_runs(session.session_root):
