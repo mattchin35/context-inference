@@ -64,7 +64,7 @@ PLOT_VIEW_CROSS_CONDITION_GENERALIZATION = "Cross-condition generalization"
 
 PLOT_VIEW_INTERREGIONAL = "Inter-regional regression results"
 
-PLOT_VIEW_CONTEXT_ENCODING = "Context encoding results"
+PLOT_VIEW_CONTEXT_ENCODING = "Single unit selectivity"
 
 PLOT_VIEW_SESSION_TIMELINE = "Session timeline and PCA"
 

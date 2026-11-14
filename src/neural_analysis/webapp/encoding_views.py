@@ -42,7 +42,7 @@ def render_encoding_view(st_module: object, session: ResolvedSession) -> None:
         plot_encoding_timeline,
     )
 
-    st_module.subheader("Context encoding results")
+    st_module.subheader("Single unit selectivity")
     scope = (
         "encoding_"
         + hashlib.sha256(str(session.metadata_path).encode()).hexdigest()[:10]
@@ -54,7 +54,7 @@ def render_encoding_view(st_module: object, session: ResolvedSession) -> None:
         if (path / "config.json").is_file() and (path / "progress.json").is_file()
     ]
     if not options:
-        st_module.info("No saved context encoding runs are available for this session.")
+        st_module.info("No saved single unit selectivity runs are available for this session.")
         return
     directory = Path(
         st_module.sidebar.selectbox(
@@ -88,7 +88,7 @@ def render_encoding_view(st_module: object, session: ResolvedSession) -> None:
         cell = load_cell_cached(str(cell_path), info.st_size, info.st_mtime_ns)
         _check_cell_metadata(cell["meta"], entry["id"], manifest)
     except (OSError, ValueError, KeyError) as error:
-        st_module.error(f"Could not read saved context encoding results: {error}")
+        st_module.error(f"Could not read saved single unit selectivity results: {error}")
         return
 
     region = cell["meta"]["settings"]["region"]

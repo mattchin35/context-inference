@@ -825,7 +825,7 @@ def main(argv: Sequence[str] = ()) -> None:
 
     if plot_view == PLOT_VIEW_CONTEXT_ENCODING:
         st.info(
-            "Context encoding results require a metadata session. Launch this webapp "
+            "Single unit selectivity requires a metadata session. Launch this webapp "
             "with `--session-metadata <session_root>/neural_session.json`."
         )
         return

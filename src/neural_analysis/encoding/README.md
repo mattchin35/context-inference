@@ -81,7 +81,7 @@ Open saved results with:
 uv run streamlit run src/neural_analysis/psth_webapp.py -- --session-metadata /path/to/session/neural_session.json
 ```
 
-Choose **Context encoding results**, then the saved run, region, **Units (Hz)**
+Choose **Single unit selectivity**, then the saved run, region, **Units (Hz)**
 or **PCs**, encoding, estimator and penalty comparison. Select an original
 probe:cluster ID or PC rank for the prediction trace. Ordering can use a model
 coefficient or a raw left/right reward-minus-omission contrast. Unsupported
