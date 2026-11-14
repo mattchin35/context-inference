@@ -43,7 +43,7 @@ def test_configuration_defaults_prefer_pfc_and_same_numeric_over_file_hash_order
     entries = []
     for region, mode in (("HPC", "matched_context"), ("PFC", "matched_context"), ("PFC", "same_numeric")):
         entries.append({"id": region + mode, "meta": {"settings": {"region": region,
-            "window": "whole", "timing_mode": "choice_updated", "encoding": "separate_context",
+            "representation": "units", "encoding": "separate_context",
             "estimator": "ridge", "penalty_mode": mode}, "penalty_aliases": [mode]}})
     fake = SimpleNamespace(sidebar=SimpleNamespace(selectbox=choose_first))
     entry, mode = encoding_views._configuration_controls(fake, entries, "fixture")
@@ -115,10 +115,10 @@ def test_controls_reuse_saved_activity_and_preserve_time_revision(
     assert standardized["layout"]["meta"]["coefficient_scale"] == "standardized"
     assert standardized["layout"]["uirevision"] == first["layout"]["uirevision"]
     next(item for item in view.selectbox if item.label == "Order responses").select("coefficient_strength").run()
-    next(item for item in view.selectbox if item.label == "Selected PC").select(2).run()
+    next(item for item in view.selectbox if item.label == "Selected response").select("A:8").run()
     assert not view.exception
     selected = figure_spec(view)
-    assert selected["layout"]["meta"]["selected_pc_rank"] == 2
+    assert selected["layout"]["meta"]["selected_response"] == "A:8"
     assert selected["layout"]["uirevision"] == first["layout"]["uirevision"]
     assert view.get("bidi_component")[0].proto.id == component_id
     time_axes = selected["layout"]["meta"]["time_axes"]
@@ -177,3 +177,20 @@ def test_png_export_honors_selected_reference_prediction_scope(
         with Image.open(path) as image:
             caption = image.info["Description"].lower()
             assert "reference" in caption and "held-out predictions" not in caption
+
+
+def test_units_and_pc_selection_uses_original_ids_and_skips_retired_runs(completed_view_run):
+    """Current saved controls switch representations and omit old model directories without migration."""
+    run,metadata=completed_view_run
+    old=run.parent/"context_encoding_retired"; old.mkdir()
+    (old/"config.json").write_text(json.dumps({"analysis_version":"context-encoding-v1","schema_version":1}))
+    (old/"progress.json").write_text("{}")
+    view=AppTest.from_function(render_for_test,args=(str(metadata),)).run()
+    assert not view.exception
+    assert all("retired" not in str(option) for option in next(item for item in view.selectbox if item.label=="Saved encoding run").options)
+    next(item for item in view.selectbox if item.label=="Response representation").select("pcs").run()
+    assert not view.exception
+    assert figure_spec(view)["layout"]["meta"]["representation"]=="pcs"
+    assert str(figure_spec(view)["layout"]["meta"]["selected_response"]).startswith("PC")
+    labels={item.label for item in view.selectbox}
+    assert "Fit window" not in labels and "Predictor timing" not in labels
