@@ -66,7 +66,7 @@ def test_used_source_fields_only(population_config_path):
     augmented = source.copy()
     augmented["unrelated_model_value"] = 123
     validate_trial_tables(augmented, source)
-    augmented.loc[1, "action"] = 1
+    augmented.loc[1, "action"] = "1"
     with pytest.raises(ValueError, match="action"):
         validate_trial_tables(augmented, source)
 
