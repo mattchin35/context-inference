@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -13,8 +14,11 @@ from src.neural_analysis.population.timeline_plotting import (
 
 COLORS = ("#2563eb", "#c2410c", "#08916d", "#a855f7")
 
+if TYPE_CHECKING:
+    from .preparation import PreparedPopulation
 
-def plot_decoding_timeline(prepared: object, cell: dict, representation: str,
+
+def plot_decoding_timeline(prepared: PreparedPopulation, cell: dict, representation: str,
                            time_range_s: tuple[float, float] | None = None,
                            event_tracks: tuple[str, ...] = (), viewport_revision: int = 0) -> go.Figure:
     """Plot saved preparation/cell probabilities with actual labels on elapsed-second axes.
@@ -64,13 +68,13 @@ def plot_decoding_timeline(prepared: object, cell: dict, representation: str,
     figure.add_annotation(text=caption, x=0, y=-.14, xref="paper", yref="paper", showarrow=False, xanchor="left")
     figure.update_layout(template="plotly_white", height=650 + 70*len(tracks), font={"size": 15},
         margin={"b": 100}, uirevision=f"population-{prepared.session_id}-{viewport_revision}",
-        meta={"target": target, "representation": representation, "time_axis": "xaxis",
+        meta={"target": target, "representation": representation, "primary_time_axis": "xaxis",
               "time_axes": ["xaxis" if i == 1 else f"xaxis{i}" for i in range(1, probability_row+1)],
               "loaded_range_s": list(loaded), "caption": caption})
     return figure
 
 
-def export_png(path: Path, prepared: object, cell: dict, representation: str,
+def export_png(path: Path, prepared: PreparedPopulation, cell: dict, representation: str,
                time_range_s: tuple[float, float] | None = None) -> None:
     """Export saved probabilities to new scalar PNG Path; axes use elapsed seconds/[0,1].
 
@@ -107,7 +111,7 @@ def export_png(path: Path, prepared: object, cell: dict, representation: str,
         figure.savefig(stream, format="png", dpi=140, facecolor="white", transparent=False)
 
 
-def _step_track(prepared: object, cell: dict, values: np.ndarray,
+def _step_track(prepared: PreparedPopulation, cell: dict, values: np.ndarray,
                  loaded_range_s: tuple[float, float]) -> tuple[list, list, list]:
     """Map saved (W_target,B_scope) values to step vertices and trial/bin/fold hover rows.
 

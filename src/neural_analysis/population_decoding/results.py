@@ -6,6 +6,7 @@ import hashlib
 from io import StringIO
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 import platform
 import pickle
 from importlib.metadata import version
@@ -18,8 +19,11 @@ import sklearn
 
 from .configuration import ANALYSIS_VERSION, SCHEMA_VERSION, PopulationDecodingConfig
 
+if TYPE_CHECKING:
+    from .preparation import PreparedPopulation
 
-def save_preparation(path: Path, prepared: object, identities: dict) -> None:
+
+def save_preparation(path: Path, prepared: PreparedPopulation, identities: dict) -> None:
     """Publish prepared session Hz/identity arrays once at scalar NPZ Path; return None.
 
     Tables are JSON strings with explicit field schemas. meta is a dictionary
@@ -45,7 +49,7 @@ def save_preparation(path: Path, prepared: object, identities: dict) -> None:
     _save_archive(Path(path), arrays, meta)
 
 
-def load_preparation(path: Path) -> object:
+def load_preparation(path: Path) -> PreparedPopulation:
     """Load trusted session-local preparation Path; return self-contained PreparedPopulation.
 
     Rates retain (W,B,U) Hz and source row identities; metadata must match the
@@ -59,19 +63,29 @@ def load_preparation(path: Path) -> object:
     meta = data["meta"]
     tables = {name: pd.read_json(StringIO(str(data[f"{name}_json"].item())), orient="table")
               for name in ("trials", "choices", "events")}
+    n = len(tables["trials"])
+    for name, shape in (("targets", (n, 5)), ("target_valid", (n, 5)), ("target_reasons", (n, 5)),
+                        ("baseline", (n,)), ("fold_ids", (n,))):
+        if data[name].shape != shape:
+            raise ValueError(f"Invalid saved {name} axes")
+    if (data["baseline"].dtype != bool or data["target_valid"].dtype != bool
+            or not np.issubdtype(data["fold_ids"].dtype, np.integer)
+            or not np.isin(data["fold_ids"], [-1, 0, 1, 2, 3, 4]).all()
+            or not np.array_equal(data["target_valid"], data["targets"] >= 0)):
+        raise ValueError("Invalid saved target validity/fold axes")
     regions = {}
     for role, info in meta["regions"].items():
         rates, rows, edges = [data[f"{role}_{name}"] for name in ("rates_hz", "row_positions", "bin_edges_s")]
         if (rates.ndim != 3 or rates.shape != (len(rows), len(edges)-1, len(info["unit_ids"]))
                 or not np.isfinite(rates).all() or (rates < 0).any()
-                or np.any(np.diff(rows) <= 0) or not np.isclose(edges[0], -1) or not np.isclose(edges[-1], 1)):
+                or not np.issubdtype(rows.dtype, np.integer) or np.any((rows < 0) | (rows >= n))
+                or np.any(np.diff(rows) <= 0) or not np.all(np.diff(edges) > 0)
+                or len(set(info["unit_ids"])) != len(info["unit_ids"])
+                or not np.isclose(edges[0], -1) or not np.isclose(edges[-1], 1)):
             raise ValueError("Invalid saved regional activity shape/units/identity")
         bin_rows = pd.read_json(StringIO(str(data[f"{role}_bin_rows_json"].item())), orient="table")
         regions[role] = PreparedPopulationRegion(role, info["probe_id"], rates, tuple(info["unit_ids"]),
                                                  rows, edges, bin_rows, info["meta"])
-    n = len(tables["trials"])
-    if data["targets"].shape != (n, 5) or data["baseline"].shape != (n,) or data["fold_ids"].shape != (n,):
-        raise ValueError("Invalid saved full-trial axes")
     behavior = SessionTimelineResult(meta["session_id"], meta["time_origin_s"], tables["choices"], tables["events"], {}, {}, {})
     return PreparedPopulation(meta["session_id"], tables["trials"], behavior, data["baseline"],
         PopulationTargets(data["targets"], data["target_valid"], data["target_reasons"]), data["fold_ids"],

@@ -1,7 +1,9 @@
-# Population task decoding: implementation plan draft
+# Population task decoding: implementation plan
 
-Status: implementation approved, 2026-11-14. Experimental execution remains a
-separate user-designated-session gate. The execution record below tracks work.
+Status: D1-D7 implemented and synthetically validated, 2026-11-14.
+Implementation was approved on that date. Experimental execution remains a
+separate user-designated-session gate. See the execution record below and
+[usage instructions](../src/neural_analysis/population_decoding/README.md).
 Scientific authority: [population_task_decoding_spec_v1.md](population_task_decoding_spec_v1.md).
 [AGENTS.md](../AGENTS.md) and [SoftwareDesign.md](SoftwareDesign.md) govern
 readability, data contracts, tests-first commits, and experimental run gates.
@@ -411,3 +413,50 @@ label definitions, eligibility, folds, or timing.
 - D1 RED: missing population-decoding package; tests committed as `7dd4372`.
   A pandas string-assignment fixture error was corrected in `1d4c05b`.
 - D1 GREEN: 20 configuration/target/fold tests passed.
+- D2 RED tests: `f581d24`; GREEN source: `8b1ab60`; 28 cumulative tests passed.
+- D3 RED tests: `8d43c80`; the rotation fixture was corrected to use the
+  specified standardized unit vectors in `0af0b8e`, preserving its assertion
+  tolerance. GREEN source: `df1ec0b`; 15 model/scoring tests passed.
+- D4 RED tests: `cd488aa`; GREEN source: `1e7c4c1`; 49 cumulative tests passed.
+- D5 RED tests: `789d731`; GREEN source: `76c3845`; 56 cumulative tests passed,
+  including two actual spawned session workers and source-free resume.
+- D6 RED tests: `3dbe8c3`; GREEN source: `7ef47f5`; 61 cumulative tests passed.
+- D7 scientific/provenance/axis tests: `d4c7c85`; full Poisson-spike source
+  validation: `e2e62f8`. Browser review prompted compact outcome summaries,
+  explicit time-axis metadata, and logged fold reasons, tested in `529846b`.
+  A broad-suite Streamlit main-module leak was reproduced in `e67ed11` and
+  isolated inside this package's test fixtures, without changing other analyses.
+- Final focused integration: 317 tests passed: 75 new population-decoding
+  tests, two Node-backed timeline-component tests, and 240 existing PPC
+  parallel/runtime tests in a fresh process. Single-unit regression checks
+  also passed in the combined 342-test check before the final additions.
+- Broad neural-analysis check before the last integration repairs: 5,135
+  passed, 13 failed, one skipped. Eleven failures involved leaked Streamlit
+  `__main__` state in spawned-worker tests (including the new batch test);
+  affected parallel/runtime tests pass in the focused run above. The other
+  two failures are unchanged SLURM job-name and Open Ephys `sample_rate`
+  expectations outside this implementation. The Node skip was covered by
+  rerunning with the installed Node binary. This is not an all-green broad
+  suite claim; no unrelated source/test failures were edited away.
+
+### Synthetic validation evidence
+
+Seed 81 generated 240 trials with mixed context/action/reward and both choice
+switches, across 20 behavioral blocks. Seed 20261114 generated actual Poisson
+spike archives for two eight-unit probes. The raw loaders, good/mua/channel
+selection, IRIG coverage, binning, all five models, both representations,
+publication and saved viewing were exercised at 500-ms resolution. Pooled
+held-out balanced accuracies ranged from 0.9446 to 0.9954 across those controlled
+signals; raw-unit and all-PC predictions agreed. These are artificial-data
+correctness checks, not experimental findings or significance tests.
+
+Side-only and generic post-choice controls did not establish within-side reward
+discrimination or solve the post-only outcome task. Missing labels, training
+class absence, constants, regional coverage, saved-data corruption, partial
+resume, code/runtime mismatch and held-out preprocessing leakage are covered.
+Measured timings and peak process RSS are saved by the synthetic entry-point
+runs; interpreter/test-process overhead is included in RSS. Production-session
+performance remains unmeasured.
+
+No experimental session has been run for this new analysis. User session
+designation and inspection remain the next gate before any wider batch.

@@ -1,14 +1,28 @@
 """Seeded source-session fixtures; all experimental-like files are temporary."""
 
 import json
+import sys
 import numpy as np
 import pandas as pd
 import pytest
 
-from src.tests.neural_analysis.encoding.conftest import (
-    encoding_session,
-    restore_process_main_module,
-)
+from src.tests.neural_analysis.encoding.conftest import encoding_session
+
+_PYTEST_MAIN = sys.modules["__main__"]
+
+
+@pytest.fixture(autouse=True)
+def restore_process_main_module():
+    """Restore collection-time pytest entry point during each test; return no data.
+
+    Earlier unrelated AppTest modules can leak their generated __main__ before
+    these tests start. Spawn workers must see pytest, not that browser script.
+    Preserve the incoming module on teardown to keep this fix local to our tests.
+    """
+    incoming = sys.modules["__main__"]
+    sys.modules["__main__"] = _PYTEST_MAIN
+    yield
+    sys.modules["__main__"] = incoming
 
 
 @pytest.fixture

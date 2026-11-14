@@ -7,7 +7,7 @@ from src.neural_analysis.task_decoding.pooled.decoding import stack_training_win
 
 from .configuration import REPRESENTATIONS
 from .features import fit_unit_scaling, transform_unit_activity, fit_fold_pca, transform_pc_activity
-from .modeling import fit_classifier, predict_probabilities
+from .modeling import LOGISTIC_PARAMETERS, fit_classifier, predict_probabilities
 from .preparation import PreparedPopulation
 from .scoring import score_predictions, conditional_outcome_scores
 from .targets import TARGET_NAMES, CLASS_NAMES
@@ -45,6 +45,13 @@ def fit_target(prepared: PreparedPopulation, region_name: str, target_name: str)
             "fold_ids": folds, "class_codes": np.asarray(classes),
             "meta": {"region": region_name, "target": target_name, "class_names": list(CLASS_NAMES[target]),
                 "supervised_interval_s": [0 if target_name == "outcome" else -1, 1],
+                "bin_width_ms": prepared.meta["bin_width_ms"],
+                "estimator": {**LOGISTIC_PARAMETERS, "class_name": "sklearn.linear_model.LogisticRegression",
+                    "family": "multinomial" if len(classes) == 4 else "binary",
+                    "sample_weight": "1 / supervised_bins_per_trial"},
+                "preprocessing": {"unit_scaling": "training-only Hz mean and population SD", "ddof": 0,
+                    "pca_solver": "full", "whiten": False, "pc_score_scaling": False,
+                    "rank_rule": "max(training_observations,variable_units)*float64_epsilon*largest_singular_value"},
                 "representations": {}, "unit_ids": list(region.unit_ids) if region else [],
                 "unavailable_reason": prepared.unavailable.get(region_name, "")}}
     for representation in REPRESENTATIONS:

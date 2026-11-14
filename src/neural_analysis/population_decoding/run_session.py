@@ -182,6 +182,10 @@ def _execute(directory: Path, preparation_s: float = 0.0) -> dict:
             _append_log(directory, f"ERROR {entry}: {type(error).__name__}: {error}")
             raise
         _append_log(directory, f"{entry}: {perf_counter()-cell_start:.3f}s; unavailable={cell['meta']['unavailable_reason']}")
+        for representation, summary in cell["meta"]["representations"].items():
+            for fold in summary["folds"]:
+                if not fold["available"]:
+                    _append_log(directory, f"WARNING {entry} {representation} fold={fold['fold']}: {fold['reason']}")
         progress = results.inspect_run_status(directory)
         results.write_json(directory / "progress.json", progress)
     progress = results.inspect_run_status(directory)

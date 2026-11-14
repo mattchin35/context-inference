@@ -297,5 +297,8 @@ The requested scientific choices and accepted defaults are recorded above.
 The [implementation-plan draft](population_task_decoding_implementation_plan.md)
 covers audited reuse boundaries, the separate dropdown view, data contracts,
 dependencies, tests written first, and performance/storage considerations.
-Implementation of that revised plan is approved. An experimental session must
-still be designated before running this new analysis on experimental data.
+Implementation of that revised plan is complete through D1-D7, with synthetic
+validation and a separate saved-results dropdown view. See the plan's execution
+record and [usage instructions](../src/neural_analysis/population_decoding/README.md).
+An experimental session must still be designated before running this new
+analysis on experimental data.

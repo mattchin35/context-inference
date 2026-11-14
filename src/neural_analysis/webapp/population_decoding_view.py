@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -14,9 +16,13 @@ from src.neural_analysis.population_decoding.plotting import plot_decoding_timel
 from src.neural_analysis.population.timeline_plotting import available_event_tracks
 from src.neural_analysis.webapp.timeline_view import render_timeline_navigation
 from src.neural_analysis.webapp.timeline_chart import render_timeline_chart
+from src.neural_analysis.session_metadata import ResolvedSession
+
+if TYPE_CHECKING:
+    from src.neural_analysis.population_decoding.preparation import PreparedPopulation
 
 
-def render_population_decoding_view(st_module: object, session: object) -> None:
+def render_population_decoding_view(st_module: object, session: ResolvedSession) -> None:
     """Render saved population probabilities/metrics for a resolved metadata session.
 
     session supplies only session_root/metadata_path. File-stat-keyed caches load
@@ -71,10 +77,20 @@ def render_population_decoding_view(st_module: object, session: object) -> None:
     st_module.dataframe(pd.DataFrame(score["confusion"], index=cell["meta"]["class_names"], columns=cell["meta"]["class_names"]))
     if target.endswith("choice_switch"):
         st_module.caption(f"Always-negative accuracy: {score['always_negative_accuracy']}. "
-                          "The full window includes post-choice activity; this is an offline next-choice label readout.")
+                          "This offline readout includes current-port and post-choice information; "
+                          "it does not isolate switching information from the current choice.")
     if target == "outcome":
         st_module.caption("Four-class decoding can reflect chosen side. Reward/no-reward discrimination within actual side:")
-        st_module.json(summary["conditional_outcomes"])
+        side_rows = []
+        for side, rewarded, absent in (("left", 0, 2), ("right", 1, 3)):
+            conditional = summary["conditional_outcomes"][side]
+            side_rows.append({"Side": side.capitalize(),
+                "Reward trials": int(np.sum(cell["labels"] == rewarded)),
+                "No-reward trials": int(np.sum(cell["labels"] == absent)),
+                "Balanced accuracy": conditional["balanced_accuracy"], "Log loss": conditional["log_loss"],
+                "Reward ROC-AUC": conditional["roc_auc"][1],
+                "Reward average precision": conditional["average_precision"][1]})
+        st_module.dataframe(pd.DataFrame(side_rows), hide_index=True)
     if score["metric_reasons"]:
         st_module.json({"Unavailable metrics": score["metric_reasons"]})
     with st_module.expander("Fold support and fit diagnostics"):
@@ -91,7 +107,7 @@ def render_population_decoding_view(st_module: object, session: object) -> None:
 
 
 @st.cache_data(show_spinner=False, max_entries=2)
-def load_preparation_cached(path: str, size_bytes: int, mtime_ns: int) -> object:
+def load_preparation_cached(path: str, size_bytes: int, mtime_ns: int) -> PreparedPopulation:
     """Load saved scalar NPZ path, keyed by file bytes/mtime; return native-Hz preparation."""
     return results.load_preparation(Path(path))
 

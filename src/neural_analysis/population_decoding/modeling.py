@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 import warnings
 import numpy as np
 from scipy.special import logsumexp
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
+
+LOGISTIC_PARAMETERS = MappingProxyType({"C": 1.0, "l1_ratio": 0.0, "solver": "lbfgs",
+    "fit_intercept": True, "class_weight": None, "tol": 1e-4, "max_iter": 5000})
 
 
 @dataclass(frozen=True)
@@ -44,8 +48,7 @@ def fit_classifier(matrix: np.ndarray, labels: np.ndarray, weights: np.ndarray,
     empty = ClassifierFit(np.empty((0, x.shape[1])), np.empty(0), classes, False, "training_class_missing")
     if set(np.unique(y)) != set(classes):
         return empty
-    estimator = LogisticRegression(C=1.0, l1_ratio=0.0, solver="lbfgs", fit_intercept=True,
-                                   class_weight=None, tol=1e-4, max_iter=5000)
+    estimator = LogisticRegression(**LOGISTIC_PARAMETERS)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", ConvergenceWarning)
