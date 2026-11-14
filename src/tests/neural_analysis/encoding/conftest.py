@@ -1,6 +1,7 @@
 """Small seeded source sessions shared by context-encoding scientific tests."""
 
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -9,6 +10,18 @@ import pandas as pd
 import pytest
 
 from src.neural_analysis.encoding.configuration import EncodingConfig, load_encoding_config
+
+
+@pytest.fixture(autouse=True)
+def restore_process_main_module():
+    """Restore pytest's main module after Streamlit replaces it during AppTest.
+
+    No data inputs or return values. Prevent a later spawned session worker
+    from executing Streamlit's generated test script as its process entry point.
+    """
+    original = sys.modules["__main__"]
+    yield
+    sys.modules["__main__"] = original
 
 
 @pytest.fixture
