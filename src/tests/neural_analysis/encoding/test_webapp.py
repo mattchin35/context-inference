@@ -122,6 +122,16 @@ def test_controls_reuse_saved_activity_and_preserve_time_revision(
     assert selected["layout"]["meta"]["selected_response"] == "A:8"
     assert selected["layout"]["uirevision"] == first["layout"]["uirevision"]
     assert view.get("bidi_component")[0].proto.id == component_id
+    next(item for item in view.selectbox if item.label == "Heatmap scale").select("within_unit_zscore").run()
+    assert not view.exception
+    zscored = figure_spec(view)
+    assert zscored["layout"]["meta"]["heatmap_scale"] == "within_unit_zscore"
+    assert zscored["layout"]["uirevision"] == first["layout"]["uirevision"]
+    next(item for item in view.number_input if item.label == "Heatmap limit (SD)").set_value(2.5).run()
+    assert figure_spec(view)["layout"]["meta"]["zscore_limit"] == 2.5
+    next(item for item in view.selectbox if item.label == "Response representation").select("pcs").run()
+    assert not view.exception
+    assert figure_spec(view)["layout"]["meta"]["heatmap_scale"] == "native"
     time_axes = selected["layout"]["meta"]["time_axes"]
     categorical = [name for name, value in selected["layout"].items()
                    if name.startswith("xaxis") and isinstance(value, dict) and value.get("type") == "category"]
@@ -139,6 +149,7 @@ def test_explicit_navigation_and_prediction_scope_are_saved_display_choices(
     next(item for item in view.number_input if item.label == "Visible duration (s)").set_value(10.0).run()
     next(item for item in view.number_input if item.label == "Window start (s)").set_value(30.0).run()
     next(item for item in view.selectbox if item.label == "Prediction scope").select("reference").run()
+    next(item for item in view.selectbox if item.label == "Heatmap scale").select("within_unit_zscore").run()
     assert not view.exception
     changed = figure_spec(view)
     primary = changed["layout"]["meta"]["primary_time_axis"]
@@ -170,6 +181,7 @@ def test_png_export_honors_selected_reference_prediction_scope(
     run, metadata = completed_view_run
     view = AppTest.from_function(render_for_test, args=(str(metadata),)).run()
     next(item for item in view.selectbox if item.label == "Prediction scope").select("reference").run()
+    next(item for item in view.selectbox if item.label == "Heatmap scale").select("within_unit_zscore").run()
     next(item for item in view.button if item.label.startswith("Export PNGs for ")).click().run()
     assert not view.exception
     paths = list((run / "figures").rglob("*.png"))
@@ -178,6 +190,7 @@ def test_png_export_honors_selected_reference_prediction_scope(
         with Image.open(path) as image:
             caption = image.info["Description"].lower()
             assert "reference" in caption and "held-out predictions" not in caption
+            assert "within-unit z-score" in caption and "traces remain hz" in caption
 
 
 def test_units_and_pc_selection_uses_original_ids_and_skips_retired_runs(completed_view_run):

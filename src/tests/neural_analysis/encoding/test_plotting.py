@@ -172,3 +172,98 @@ def test_colorbars_do_not_share_the_joint_predictor_label_band(plotting_data):
     bounds = figure.layout[activity.yaxis.replace("y", "yaxis")].domain
     assert trace(figure, "Coefficients").colorbar.y < bounds[0]
     assert bounds[0] <= activity.colorbar.y <= bounds[1]
+
+
+def test_shared_activity_zscore_is_per_response_over_full_window_pool():
+    """Normalize activity(W,B,R) along window/bin axes with population SD; constants are zero and inputs unchanged."""
+    values = np.array([[[1., 10., 5.], [2., 20., 5.]], [[3., 30., 5.], [6., 60., 5.]]])
+    original = values.copy()
+    actual = timeline_plotting.zscore_window_activity(values)
+    expected = (values[:, :, :2] - values[:, :, :2].mean(axis=(0, 1))) / values[:, :, :2].std(axis=(0, 1))
+    np.testing.assert_allclose(actual[:, :, :2], expected)
+    np.testing.assert_allclose(actual[:, :, 0], actual[:, :, 1])
+    np.testing.assert_allclose(actual[:, :, :2].mean(axis=(0, 1)), 0, atol=1e-15)
+    np.testing.assert_allclose(actual[:, :, :2].std(axis=(0, 1)), 1)
+    np.testing.assert_array_equal(actual[:, :, 2], 0)
+    np.testing.assert_array_equal(values, original)
+
+
+def test_unit_zscore_heatmap_uses_full_saved_pool_and_preserves_native_traces(plotting_data):
+    """Horizontal normalization excludes real gaps and survives viewport/order changes; traces and coefficients stay native."""
+    prep, make = plotting_data
+    cell = make("units")
+    region = prep["regions"]["PFC"]
+    original = region.unit_counts.copy()
+    raw = plotting.plot_encoding_timeline(prep, cell, selected_response="A:7", time_range_s=(0, 250))
+    scaled = plotting.plot_encoding_timeline(prep, cell, selected_response="A:7", time_range_s=(0, 250),
+        heatmap_scale="within_unit_zscore")
+    bounded = plotting.plot_encoding_timeline(prep, cell, selected_response="A:7", time_range_s=(0, 20),
+        loaded_range_s=(0, 20), heatmap_scale="within_unit_zscore", zscore_limit=2.25)
+    rates = original[:, :, :10] / .5
+    expected = (rates - rates.mean(axis=(0, 1))) / rates.std(axis=(0, 1))
+    np.testing.assert_allclose(np.asarray(trace(scaled, "Neural activity").z)[:, :4], expected[0].T)
+    np.testing.assert_allclose(trace(bounded, "Neural activity").z, expected[0].T)
+    assert np.isnan(np.asarray(trace(scaled, "Neural activity").z)[:, 4]).all()
+    assert trace(scaled, "Neural activity").zmin == -3 and trace(scaled, "Neural activity").zmax == 3
+    assert trace(bounded, "Neural activity").zmin == -2.25 and trace(bounded, "Neural activity").zmax == 2.25
+    assert "z-score" in trace(scaled, "Neural activity").colorbar.title.text
+    assert "z-score" in trace(scaled, "Neural activity").hovertemplate
+    for name in ("Observed A:7", "Held-out prediction A:7"):
+        np.testing.assert_array_equal(trace(raw, name).y, trace(scaled, name).y)
+        assert "Hz" in trace(scaled, name).hovertemplate
+    np.testing.assert_array_equal(trace(raw, "Coefficients").z, trace(scaled, "Coefficients").z)
+    assert raw.layout.uirevision == scaled.layout.uirevision
+    assert scaled.layout.meta["heatmap_scale"] == "within_unit_zscore"
+    assert scaled.layout.meta["zscore_limit"] == 3
+    np.testing.assert_array_equal(region.unit_counts, original)
+
+
+def test_silent_and_constant_unit_zscores_work_without_pca(plotting_data):
+    """An absent PCA and zero unit SD do not prevent plotting or create NaNs inside available bins."""
+    prep, make = plotting_data
+    cell = make("units")
+    counts = prep["regions"]["PFC"].unit_counts.copy()
+    counts[:, :, 0], counts[:, :, 1] = 0, 5
+    prep["regions"]["PFC"] = replace(prep["regions"]["PFC"], unit_counts=counts, pca=None, pc_ranks=np.array([], dtype=int))
+    figure = plotting.plot_encoding_timeline(prep, cell, row_count=2, heatmap_scale="within_unit_zscore", time_range_s=(0, 250))
+    activity = np.asarray(trace(figure, "Neural activity").z)
+    assert np.isfinite(activity[:, :4]).all()
+    np.testing.assert_array_equal(activity[:, :4], 0)
+    assert np.isnan(activity[:, 4]).all()
+
+
+@pytest.mark.parametrize("limit", [0, -1, np.nan, np.inf, True])
+def test_unit_zscore_color_limit_must_be_positive_finite(plotting_data, limit):
+    """Color clipping is a positive scalar number of SDs, never a nonfinite range or Boolean."""
+    prep, make = plotting_data
+    with pytest.raises(ValueError, match="limit"):
+        plotting.plot_encoding_timeline(prep, make("units"), heatmap_scale="within_unit_zscore", zscore_limit=limit)
+
+
+def test_heatmap_scale_rejects_unknown_modes_and_unit_scaling_for_pcs(plotting_data):
+    """Unit-specific visualization is explicit and does not silently reinterpret the fixed PC display."""
+    prep, make = plotting_data
+    with pytest.raises(ValueError, match="scale"):
+        plotting.plot_encoding_timeline(prep, make("units"), heatmap_scale="log")
+    with pytest.raises(ValueError, match="unit"):
+        plotting.plot_encoding_timeline(prep, make("pcs"), heatmap_scale="within_unit_zscore")
+
+
+def test_zscore_exports_identify_normalization_and_keep_native_files(plotting_data, tmp_path):
+    """Z-score PNG captions state the full saved pool, population SD, clipping and native-Hz traces; filenames do not collide."""
+    prep, make = plotting_data
+    cell = make("units")
+    native = plotting.save_inspection_figures(tmp_path, prep, cell, selected_response="A:7")
+    original = [path.read_bytes() for path in native]
+    scaled = plotting.save_inspection_figures(tmp_path, prep, cell, selected_response="A:7",
+        heatmap_scale="within_unit_zscore", zscore_limit=2.5)
+    assert not set(native).intersection(scaled)
+    for path in scaled:
+        with Image.open(path) as picture:
+            caption = picture.info["Description"]
+            assert "within-unit z-score" in caption and "all saved" in caption
+            assert "ddof=0" in caption and "2.5" in caption and "traces remain Hz" in caption
+    assert [path.read_bytes() for path in native] == original
+    with pytest.raises(FileExistsError):
+        plotting.save_inspection_figures(tmp_path, prep, cell, selected_response="A:7",
+            heatmap_scale="within_unit_zscore", zscore_limit=2.5)
