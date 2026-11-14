@@ -3,7 +3,8 @@
 Status: scientific choices confirmed, 2026-11-14. The user selected both raw
 unit and PC population inputs and accepted the remaining defaults. This is a
 scientific specification; an implementation plan and implementation approval
-remain separate. No new decoder or experimental run has been requested.
+remain separate. Implementation of the revised plan was approved on 2026-11-14;
+an experimental run is not yet authorized.
 
 Related contracts:
 
@@ -11,6 +12,7 @@ Related contracts:
 - [Existing population decoding specification](task_variable_spec_v5.md).
 - [Existing session prediction specification](condition_prediction_generalization_spec_v1.md).
 - [Software design guidance](SoftwareDesign.md).
+- [Implementation-plan draft](population_task_decoding_implementation_plan.md).
 
 ## 1. Goal and direction
 
@@ -171,16 +173,20 @@ Run both population representations on matched eligible rows and folds:
   numerically nonzero training PCs; do not impose an unrequested leading-PC cap.
 
 For each region, target model and fold, estimate preprocessing from that
-model's eligible training bins within its supervised interval only. Apply the
-saved means, scales, retained-unit mask and optional PCA unchanged to held-out
-bins. Training-constant units are omitted from both representations for that
+model's eligible training bins within its supervised interval only. Fit one
+unit scaler and retained-unit mask shared by both representations, then fit
+PCA on those standardized training vectors. Apply the saved means, scales,
+retained-unit mask and optional PCA unchanged to held-out bins.
+Training-constant units are omitted from both representations for that
 fit, with their original IDs and exclusion reasons saved. All-constant inputs
 make the affected fit unavailable. Held-out activity must not change feature
 selection, scaling, PC rank or axes.
 
 Do not reuse descriptive session-wide PCA as the held-out decoder input.
-Compatible saved raw count tensors may be reused after identity/geometry
-validation. Fold-local PC ranks and orientations can differ across targets
+V1 reuses only this decoder's own compatible saved preparation after
+identity/geometry validation. Importing other analyses' saved count tensors
+is deferred until preparation costs justify the additional adapter.
+Fold-local PC ranks and orientations can differ across targets
 and folds; they are not the existing fixed session PCs. With all nonzero PCs
 retained, the PC comparison does not claim deliberate dimensionality reduction
 and may closely match the standardized-unit linear decoder.
@@ -257,6 +263,11 @@ train/test transforms, trial/bin/time mappings, labels/masks, fold assignments,
 class counts, parameters, code/input identities and randomness provenance.
 Outputs remain session-local, versioned and non-overwriting.
 
+Expose this analysis as **Population task decoding**, a separate entry in the
+webapp's **Plot view** dropdown. Keep **Single unit selectivity** as its own
+separate view, with independent controls and saved-result discovery. This is
+a routed view within the existing app, not a mode inside the single-unit view.
+
 The viewer should show actual labels and held-out probability tracks on real
 session time, preserve gaps, and expose confusion/performance summaries.
 Within-unit display z-scores may be available for a neural heatmap, but they
@@ -266,7 +277,7 @@ be labeled as the same fixed session-PC basis in a contribution plot.
 Existing decoding modules already support population matrices, grouped
 evaluation, logistic readouts and saved probability/contribution views. The
 existing `next_choice_switch_stay` target uses adjacent actions rather than
-contexts. Reuse should be audited in a later implementation plan: current
+contexts. The implementation-plan draft records the reuse audit: current
 session-prediction targets are trial-level, whereas new target-specific timing,
 directional switch indicators and broad no-reward labels require explicit
 contracts. Do not change existing analyses' omission meanings or introduce a
@@ -283,7 +294,8 @@ for this new analysis yet.
 ## 8. Readiness
 
 The requested scientific choices and accepted defaults are recorded above.
-The next step is a short implementation plan covering audited reuse boundaries,
-data contracts, dependencies, tests written first, and performance/storage
-considerations. This specification does not authorize implementation or a new
-experimental run.
+The [implementation-plan draft](population_task_decoding_implementation_plan.md)
+covers audited reuse boundaries, the separate dropdown view, data contracts,
+dependencies, tests written first, and performance/storage considerations.
+Implementation of that revised plan is approved. An experimental session must
+still be designated before running this new analysis on experimental data.
