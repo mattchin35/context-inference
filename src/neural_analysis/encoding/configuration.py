@@ -12,10 +12,11 @@ from types import MappingProxyType
 from src.neural_analysis.session_metadata import SessionMetadata, load_session_metadata
 
 
-ANALYSIS_VERSION = "context-encoding-v1"
+ANALYSIS_VERSION = "joint-task-encoding-v2"
 SUPPORTED_BIN_WIDTH_MS = (500, 100, 50, 20)
-WINDOWS = ("before", "after", "whole")
-TIMING_MODES = ("choice_updated", "trial_window")
+WINDOWS = ("whole",)
+TIMING_MODES = ("trial_window",)
+RESPONSE_REPRESENTATIONS = ("units", "pcs")
 ENCODINGS = ("signed_context", "separate_context")
 ESTIMATORS = ("ridge", "ols")
 PENALTY_MODES = ("same_numeric", "matched_context")
@@ -40,17 +41,16 @@ class EncodingConfig:
     intermediate_root: Path
     run_root: Path
     probe_roles: Mapping[str, str]
-    timeline_result: Path | None = None
     bin_width_ms: int = 500
-    windows: tuple[str, ...] = WINDOWS
-    timing_modes: tuple[str, ...] = TIMING_MODES
+    response_representations: tuple[str, ...] = RESPONSE_REPRESENTATIONS
     encodings: tuple[str, ...] = ENCODINGS
     estimators: tuple[str, ...] = ESTIMATORS
     alpha: float = 1.0
     penalty_modes: tuple[str, ...] = ("same_numeric",)
     alignment: str = "choice_time"
     fold_count: int = 5
-    window_s: tuple[float, float] = (-2.0, 2.0)
+    window_s: tuple[float, float] = (-1.0, 1.0)
+    analysis_version: str = ANALYSIS_VERSION
 
 
 # Public loading entry point.
@@ -72,17 +72,19 @@ def load_encoding_config(path: Path | str) -> EncodingConfig:
     """
     config_path = Path(path).expanduser().resolve()
     payload = _read_json_object(config_path, "configuration")
-    required = {"session_metadata", "augmented_trials", "feature_parameters"}
-    optional = {"probe_roles", "timeline_result", "bin_width_ms", "windows",
-                "timing_modes", "encodings", "estimators", "alpha", "penalty_modes"}
+    required = {"analysis_version", "session_metadata", "augmented_trials", "feature_parameters"}
+    optional = {"probe_roles", "bin_width_ms", "response_representations",
+                "encodings", "estimators", "alpha", "penalty_modes"}
     unknown = set(payload) - required - optional
     if unknown:
-        raise ValueError(f"Unsupported configuration fields: {sorted(unknown)}")
+        raise ValueError(f"Unsupported configuration fields: {sorted(unknown)}; use docs/examples/neural_analysis/context_encoding_config.json")
     missing = required - set(payload)
     if missing:
-        raise ValueError(f"Missing configuration fields: {sorted(missing)}")
+        raise ValueError(f"Missing configuration fields: {sorted(missing)}; use docs/examples/neural_analysis/context_encoding_config.json")
+    if payload["analysis_version"] != ANALYSIS_VERSION:
+        raise ValueError(f"analysis_version must be {ANALYSIS_VERSION}; create a new config from docs/examples/neural_analysis/context_encoding_config.json")
 
-    inputs = {field: _input_path(config_path.parent, payload[field], field) for field in required}
+    inputs = {field: _input_path(config_path.parent, payload[field], field) for field in required - {"analysis_version"}}
     metadata = load_session_metadata(inputs["session_metadata"])
     _read_json_object(inputs["feature_parameters"], "feature_parameters")
     roles = _probe_roles(payload.get("probe_roles"), metadata)
@@ -94,21 +96,18 @@ def load_encoding_config(path: Path | str) -> EncodingConfig:
         raise ValueError("alpha must be a finite positive number")
     selections = {}
     for field, allowed, default in (
-        ("windows", WINDOWS, WINDOWS),
-        ("timing_modes", TIMING_MODES, TIMING_MODES),
+        ("response_representations", RESPONSE_REPRESENTATIONS, RESPONSE_REPRESENTATIONS),
         ("encodings", ENCODINGS, ENCODINGS),
         ("estimators", ESTIMATORS, ESTIMATORS),
         ("penalty_modes", PENALTY_MODES, ("same_numeric",)),
     ):
         selections[field] = _selection(payload.get(field, list(default)), field, allowed)
 
-    timeline = payload.get("timeline_result")
-    timeline_path = None if timeline is None else _input_path(config_path.parent, timeline, "timeline_result")
     root = inputs["session_metadata"].parent
     return EncodingConfig(
         **inputs, session_root=root,
         intermediate_root=root / "processed/context_encoding", run_root=root / "analysis_runs",
-        probe_roles=MappingProxyType(roles), timeline_result=timeline_path,
+        probe_roles=MappingProxyType(roles),
         bin_width_ms=width, alpha=float(alpha), **selections,
     )
 

@@ -12,7 +12,85 @@ from src.behavior_analysis.project_utils import (
     make_no_choice_action_mask,
     normalize_experimenter_reward_column,
 )
-from src.neural_analysis.encoding.configuration import ENCODINGS, TIMING_MODES
+from src.neural_analysis.encoding.configuration import ENCODINGS
+
+
+OUTCOME_COLUMNS = ("left_reward", "right_reward", "left_omission", "right_omission", "left_incorrect", "right_incorrect")
+
+
+def classify_choice_outcomes(actions, rewards, correctness) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Classify aligned (T,) source vectors, using 0=right/1=left and binary reward/correctness.
+
+    Return string codes, Boolean validity and reason strings, each (T,).
+    Known rewards do not require correctness; unrewarded choices require 0/1
+    correctness. Unknown values remain unavailable, never negative outcomes.
+    Inputs are dimensionless one-dimensional arrays/Series and are unchanged.
+    """
+    arrays = [np.asarray(values) for values in (actions, rewards, correctness)]
+    if any(values.ndim != 1 or values.shape != arrays[0].shape for values in arrays):
+        raise ValueError("Outcome source vectors must have matching one-dimensional shapes")
+    action, reward, correct = [_numeric(pd.Series(values)) for values in arrays]
+    codes = np.full(len(action), "", dtype="U24")
+    reasons = np.full(len(action), "", dtype="U64")
+    for i in range(len(action)):
+        if action[i] not in (0, 1):
+            reasons[i] = "invalid_action"
+        elif reward[i] not in (0, 1):
+            reasons[i] = "unknown_reward"
+        elif reward[i] == 0 and correct[i] not in (0, 1):
+            reasons[i] = "unknown_correctness"
+        else:
+            side = "left" if action[i] == 1 else "right"
+            outcome = "reward" if reward[i] == 1 else "omission" if correct[i] == 1 else "incorrect"
+            codes[i] = f"{side}_{outcome}"
+    return codes, reasons == "", reasons
+
+
+def build_joint_predictors(trials: pd.DataFrame, row_positions: np.ndarray,
+                           relative_bin_edges_s: np.ndarray, encoding: str) -> dict:
+    """Build native trial-major X(W*B,P) for the exact choice-relative [-1,+1) second window.
+
+    trials is the complete chronological source DataFrame, with action/reward/
+    correct/context and baseline flags; source times are UTC seconds.
+    row_positions(W,) are original integer trial positions, not index labels.
+    edges(B+1,) must be uniform supported-width second edges including zero.
+    Return predictors, valid(N,), invalid_reason(N,), column_names(P,),
+    condition_counts (trial counts), and outcome_codes(W,). Fixed context and
+    current choice occupy all bins; six indicators are active only in [0,1).
+    Invalid trials have unavailable X and are excluded as whole windows.
+    """
+    _validate_trial_sequence(trials)
+    _require_columns(trials, {"action", "reward", "correct"})
+    positions = np.asarray(row_positions)
+    if (positions.ndim != 1 or not np.issubdtype(positions.dtype, np.integer)
+            or np.any(positions < 0) or np.any(positions >= len(trials))
+            or len(np.unique(positions)) != len(positions)):
+        raise ValueError("row_positions must contain distinct original integer trial positions")
+    edges = np.asarray(relative_bin_edges_s, dtype=float)
+    if (edges.ndim != 1 or len(edges) < 3 or not np.isfinite(edges).all()
+            or edges[0] != -1 or edges[-1] != 1 or not np.any(edges == 0)
+            or not np.all(np.diff(edges) > 0)
+            or not np.allclose(np.diff(edges), edges[1]-edges[0])
+            or not np.any(np.isclose(edges[1]-edges[0], [.5,.1,.05,.02]))):
+        raise ValueError("bin edges must uniformly span window [-1,+1), include zero, and use a supported bin width")
+    baseline = select_baseline_trials(trials).iloc[positions]
+    codes, known, outcome_reasons = classify_choice_outcomes(trials.action, trials.reward, trials.correct)
+    context, context_valid, names = encode_context(_numeric(trials.state_int)[positions], encoding)
+    bins = len(edges)-1
+    names = names + ("signed_choice",) + OUTCOME_COLUMNS
+    matrix = np.zeros((len(positions), bins, len(names)), dtype=float)
+    matrix[:, :, :context.shape[1]] = context[:, None, :]
+    matrix[:, :, context.shape[1]] = (2*_numeric(trials.action)[positions]-1)[:, None]
+    for column, code in enumerate(OUTCOME_COLUMNS):
+        matrix[:, :, context.shape[1]+1+column] = (codes[positions] == code)[:, None] * (edges[:-1] >= 0)[None, :]
+    valid = baseline.baseline_valid.to_numpy() & known[positions] & context_valid
+    reasons = np.asarray([";".join(filter(None, (base, outcome_reasons[pos])))
+                          for base, pos in zip(baseline.baseline_invalid_reason, positions)], dtype=str)
+    matrix[~valid] = np.nan
+    return {"predictors": matrix.reshape(-1, len(names)), "valid": np.repeat(valid, bins),
+            "invalid_reason": np.repeat(reasons, bins), "column_names": names,
+            "condition_counts": {code: int(np.sum((codes[positions] == code) & valid)) for code in OUTCOME_COLUMNS},
+            "outcome_codes": codes[positions]}
 
 
 # Public computations retain source row positions independently of index labels.
@@ -65,49 +143,6 @@ def select_baseline_trials(trials: pd.DataFrame) -> pd.DataFrame:
         "baseline_valid": ~(manual | no_choice | missing_choice | dark | invalid_context),
         "baseline_invalid_reason": reasons,
     })
-
-
-def build_context_values(
-    trials: pd.DataFrame, relative_bin_edges_s: np.ndarray, timing_mode: str,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Assign context before any filtering using entering and immediate next states.
-
-    Parameters
-    ----------
-    trials : pd.DataFrame
-        Complete (W,C) chronological trial table, including excluded rows. Required
-        columns are cur_trial, start_time, choice_time (UTC seconds), state_int.
-    relative_bin_edges_s : np.ndarray
-        Finite strictly increasing (B+1,) edges in choice-relative seconds, with
-        zero as an edge. Each bin is half-open; bins starting at zero are post.
-    timing_mode : str
-        choice_updated uses state_int[i] before zero and state_int[i+1] after;
-        trial_window repeats state_int[i] for all bins.
-
-    Returns
-    -------
-    tuple[np.ndarray, np.ndarray]
-        Float64 context values and Boolean validity, each (W,B), axes trial/bin.
-        Only 0=right and 1=left are valid. Unavailable values are NaN. Terminal
-        choice_updated post bins stay unavailable; no events or carry-forward
-        inference are used. This function does not apply baseline exclusions.
-    """
-    _validate_trial_sequence(trials)
-    if timing_mode not in TIMING_MODES:
-        raise ValueError(f"timing_mode must be one of {TIMING_MODES}")
-    edges = np.asarray(relative_bin_edges_s, dtype=float)
-    if (edges.ndim != 1 or len(edges) < 3 or not np.isfinite(edges).all()
-            or not np.all(np.diff(edges) > 0) or not np.any(edges == 0)
-            or edges[0] >= 0 or edges[-1] <= 0):
-        raise ValueError("bin edges must increase, span zero, and include zero as an edge")
-    states = _numeric(trials["state_int"])
-    entering = np.where(np.isin(states, [0, 1]), states, np.nan)
-    values = np.repeat(entering[:, None], len(edges) - 1, axis=1)
-    if timing_mode == "choice_updated":
-        following = np.full(len(entering), np.nan)
-        following[:-1] = entering[1:]
-        values[:, edges[:-1] >= 0] = following[:, None]
-    return values, np.isfinite(values)
 
 
 def encode_context(values: np.ndarray, encoding: str) -> tuple[np.ndarray, np.ndarray, tuple[str, ...]]:
@@ -166,7 +201,9 @@ def validate_trial_tables(augmented: pd.DataFrame, source: pd.DataFrame) -> None
     _validate_trial_sequence(source)
     if len(augmented) != len(source):
         raise ValueError("Complete trial tables have different row counts")
-    for column in ("cur_trial", "start_time", "choice_time", "state_int"):
+    for column in ("cur_trial", "start_time", "choice_time", "state_int", "action", "reward", "correct"):
+        _require_columns(augmented, {column})
+        _require_columns(source, {column})
         first = _numeric(augmented[column])
         second = _numeric(source[column])
         if not np.array_equal(first, second, equal_nan=True):

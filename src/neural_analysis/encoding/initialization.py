@@ -7,7 +7,7 @@ from pathlib import Path
 from src.neural_analysis.session_metadata import load_session_metadata
 
 from .configuration import (
-    ENCODINGS, ESTIMATORS, PENALTY_MODES, SUPPORTED_BIN_WIDTH_MS, TIMING_MODES, WINDOWS,
+    ANALYSIS_VERSION, ENCODINGS, ESTIMATORS, PENALTY_MODES, SUPPORTED_BIN_WIDTH_MS, RESPONSE_REPRESENTATIONS,
     _input_path, _probe_roles, _read_json_object,
 )
 
@@ -58,11 +58,12 @@ def initialize_encoding_config(
                            else task.get("trial_feature_parameter_path"), "--feature-parameters")
     _read_json_object(features, "feature_parameters (--feature-parameters)")
     payload = {
+        "analysis_version": ANALYSIS_VERSION,
         "session_metadata": metadata_path.name,
         "augmented_trials": _portable_locator(augmented, root),
         "feature_parameters": _portable_locator(features, root),
-        "probe_roles": roles, "timeline_result": None, "bin_width_ms": bin_width_ms,
-        "windows": list(WINDOWS), "timing_modes": list(TIMING_MODES),
+        "probe_roles": roles, "bin_width_ms": bin_width_ms,
+        "response_representations": list(RESPONSE_REPRESENTATIONS),
         "encodings": list(ENCODINGS), "estimators": list(ESTIMATORS),
         "alpha": 1.0, "penalty_modes": list(PENALTY_MODES),
     }
