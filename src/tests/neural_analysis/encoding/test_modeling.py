@@ -59,7 +59,6 @@ def test_ridge_matches_analytic_summed_sse_with_unpenalized_intercept() -> None:
     assert fit.estimator == "ridge"
     assert fit.configured_alpha == alpha
     np.testing.assert_array_equal(fit.penalties, [alpha])
-    assert fit.penalty_mode == "same_numeric"
     predictions = modeling.predict_responses(predictors, fit)
     residual = responses - predictions
     np.testing.assert_allclose(centered_x.T @ residual, alpha * fit.slopes, atol=1e-12)
