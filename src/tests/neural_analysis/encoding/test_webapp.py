@@ -70,10 +70,11 @@ def test_encoding_view_is_available_without_live_behavior_or_spikes(
                  config.session_root / "B/aligned.npz"):
         path.unlink()
     session = session_inputs.load_webapp_session(metadata)
-    assert session_inputs.PLOT_VIEW_CONTEXT_ENCODING == "Context encoding results"
+    assert session_inputs.PLOT_VIEW_CONTEXT_ENCODING == "Single unit selectivity"
     assert session_inputs.metadata_view_availability(session)[session_inputs.PLOT_VIEW_CONTEXT_ENCODING].available
     view = AppTest.from_function(render_for_test, args=(str(metadata),)).run()
     assert not view.exception
+    assert any(item.value == "Single unit selectivity" for item in view.subheader)
     assert view.get("bidi_component")
 
 
