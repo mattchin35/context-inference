@@ -41,6 +41,10 @@ def test_create_config_from_metadata_and_task_locators(initialization_session, m
     config = load_encoding_config(destination)
     assert config.probe_roles == {"PFC": "ProbeA", "HPC": "ProbeB"}
     assert config.penalty_modes == ("same_numeric", "matched_context")
+    assert payload["analysis_version"] == "joint-task-encoding-v2"
+    assert config.response_representations == ("units", "pcs")
+    assert "windows" not in payload and "timing_modes" not in payload
+    assert "timeline_result" not in payload
     assert not config.run_root.exists() and not config.intermediate_root.exists()
     assert all(path.read_bytes() == content for path, content in original.items())
 

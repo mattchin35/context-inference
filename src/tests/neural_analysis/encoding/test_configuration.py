@@ -41,6 +41,7 @@ def config_file(tmp_path: Path) -> Path:
     (session / "processed/trial_feature_params.json").write_text("{}", encoding="ascii")
     path = session / "context_encoding.json"
     path.write_text(json.dumps({
+        "analysis_version": "joint-task-encoding-v2",
         "session_metadata": "neural_session.json",
         "augmented_trials": "processed/augmented.csv",
         "feature_parameters": "processed/trial_feature_params.json",
@@ -60,17 +61,15 @@ def test_defaults_are_the_approved_scientific_contract(config_file: Path) -> Non
     config = load_encoding_config(config_file)
 
     assert config.bin_width_ms == 500
-    assert config.windows == ("before", "after", "whole")
-    assert config.timing_modes == ("choice_updated", "trial_window")
+    assert config.response_representations == ("units", "pcs")
     assert config.encodings == ("signed_context", "separate_context")
     assert config.estimators == ("ridge", "ols")
     assert config.alpha == 1.0
     assert config.penalty_modes == ("same_numeric",)
     assert config.probe_roles == {"PFC": "ProbeA", "HPC": "ProbeB"}
-    assert config.timeline_result is None
     assert config.alignment == "choice_time"
     assert config.fold_count == 5
-    assert config.window_s == (-2.0, 2.0)
+    assert config.window_s == (-1.0, 1.0)
 
 
 def test_paths_resolve_relative_to_config_without_loading_spikes(config_file: Path) -> None:
@@ -91,15 +90,14 @@ def test_paths_resolve_relative_to_config_without_loading_spikes(config_file: Pa
 @pytest.mark.parametrize("width", [500, 100, 50, 20])
 def test_supported_bin_widths_and_selected_settings(config_file: Path, width: int) -> None:
     """Input width is integer milliseconds and config Path; return None."""
-    update_config(config_file, {"bin_width_ms": width, "windows": ["after"],
-                  "timing_modes": ["trial_window"], "encodings": ["separate_context"],
+    update_config(config_file, {"bin_width_ms": width, "response_representations": ["units"],
+                  "encodings": ["separate_context"],
                   "estimators": ["ols"], "alpha": 2.5,
                   "penalty_modes": ["same_numeric", "matched_context"]})
     config = load_encoding_config(config_file)
 
     assert config.bin_width_ms == width
-    assert config.windows == ("after",)
-    assert config.timing_modes == ("trial_window",)
+    assert config.response_representations == ("units",)
     assert config.encodings == ("separate_context",)
     assert config.estimators == ("ols",)
     assert config.alpha == 2.5
@@ -117,6 +115,9 @@ def test_supported_bin_widths_and_selected_settings(config_file: Path, width: in
     ("fold_count", 3), ("alignment", "start_time"), ("pc_count", 10),
     ("predictors", ["FQlearning_rel_value"]), ("output_root", "elsewhere"),
     ("unknown", 1),
+    ("windows", ["whole"]), ("timing_modes", ["trial_window"]),
+    ("response_representations", []), ("response_representations", ["units", "units"]),
+    ("response_representations", ["spikes"]), ("analysis_version", "context-encoding-v1"),
 ])
 def test_invalid_or_unapproved_controls_fail_before_neural_loading(
     config_file: Path, field: str, value: object,
@@ -135,12 +136,17 @@ def test_required_paths_must_name_existing_files(config_file: Path, field: str) 
         load_encoding_config(config_file)
 
 
-def test_optional_timeline_path_is_resolved(config_file: Path) -> None:
-    """Input config Path resolves a saved NPZ Path without opening it; return None."""
-    saved = config_file.parent / "processed/timeline.npz"
-    saved.write_bytes(b"not read during configuration")
-    update_config(config_file, {"timeline_result": "processed/timeline.npz"})
-    assert load_encoding_config(config_file).timeline_result == saved
+def test_old_timeline_and_unversioned_config_require_a_new_config(config_file: Path) -> None:
+    """Input config Path; retired controls/version cannot silently select old scientific behavior."""
+    update_config(config_file, {"timeline_result": None})
+    with pytest.raises(ValueError, match="timeline_result"):
+        load_encoding_config(config_file)
+    payload = json.loads(config_file.read_text())
+    payload.pop("timeline_result")
+    payload.pop("analysis_version")
+    config_file.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="analysis_version"):
+        load_encoding_config(config_file)
 
 
 @pytest.mark.parametrize("text", ["[]", "null", '"text"', "{"])

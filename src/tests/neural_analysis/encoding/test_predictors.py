@@ -1,336 +1,115 @@
-"""Pure context timing, source identity, and baseline-pool contracts."""
+"""Joint trial-fixed context/choice and choice-aligned outcome contracts."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from src.neural_analysis.encoding.predictors import (
-    build_context_values,
-    diagnose_context_events,
-    encode_context,
-    select_baseline_trials,
-    validate_trial_tables,
+    build_joint_predictors, classify_choice_outcomes, encode_context,
+    select_baseline_trials, validate_trial_tables, diagnose_context_events,
 )
 
 
 @pytest.fixture
-def trials() -> pd.DataFrame:
-    """Return a (6,7) full chronological table; times are UTC seconds.
-
-    No inputs. Trial IDs begin at 10 and are irregular; index labels are neither
-    trial IDs nor row positions. Context codes are 0=right, 1=left, 2=dark.
-    """
+def trials():
+    """Return six ordinary outcome categories, irregular trial IDs, UTC seconds, and nontrivial index labels."""
     return pd.DataFrame({
-        "cur_trial": [10, 12, 17, 19, 24, 30],
-        "cur_block": [4, 4, 5, 5, 6, 6],
-        "start_time": [100.0, 110.0, 120.0, 130.0, 140.0, 150.0],
-        "choice_time": [105.0, 115.0, np.nan, 135.0, 145.0, 155.0],
-        "state_int": [0, 1, 0, 2, 1, 0],
-        "action": [0, 1, "no_choice", 0, 1, 0],
-        "experimenter_reward_given": [0, 1, 0, 0, 0, 0],
+        "cur_trial": [10, 12, 17, 19, 24, 30], "cur_block": [0, 1, 2, 3, 4, 5],
+        "start_time": 100. + 10*np.arange(6), "choice_time": 104. + 10*np.arange(6),
+        "state_int": [1, 0, 1, 0, 0, 1], "action": [1, 0, 1, 0, 1, 0],
+        "reward": [1, 1, 0, 0, 0, 0], "correct": [1, 1, 1, 1, 0, 0],
+        "experimenter_reward_given": np.zeros(6, dtype=int),
     }, index=[90, 5, 33, 8, 12, 1])
 
 
-@pytest.fixture
-def bin_edges_s() -> np.ndarray:
-    """Return (9,) float choice-relative edges in seconds for eight 500-ms bins."""
-    return np.arange(-2.0, 2.5, 0.5)
+def test_classification_uses_chosen_side_and_distinguishes_all_six_outcomes(trials):
+    """Input six source rows; return no data, assert six native outcome names and no mutation."""
+    before = trials.copy(deep=True)
+    codes, valid, reasons = classify_choice_outcomes(trials.action, trials.reward, trials.correct)
+    assert codes.tolist() == ["left_reward", "right_reward", "left_omission", "right_omission", "left_incorrect", "right_incorrect"]
+    assert valid.all() and not reasons.any()
+    pd.testing.assert_frame_equal(trials, before)
 
 
-def test_native_encodings_preserve_values_and_column_order() -> None:
-    """No inputs; (3,) states yield native float64 (3,P) X/mask/names; return None."""
-    states = np.array([0.0, 1.0, 0.0])
-    signed, signed_valid, signed_names = encode_context(states, "signed_context")
-    separate, separate_valid, separate_names = encode_context(states, "separate_context")
-
-    np.testing.assert_array_equal(signed, [[-1.0], [1.0], [-1.0]])
-    np.testing.assert_array_equal(separate, [[0.0, 1.0], [1.0, 0.0], [0.0, 1.0]])
-    np.testing.assert_array_equal(signed_valid, [True, True, True])
-    np.testing.assert_array_equal(separate_valid, signed_valid)
-    assert signed.dtype == separate.dtype == np.dtype("float64")
-    assert signed_names == ("signed_context",)
-    assert separate_names == ("left_context", "right_context")
-
-
+@pytest.mark.parametrize("width", [0.5, 0.1, 0.05, 0.02])
 @pytest.mark.parametrize("encoding", ["signed_context", "separate_context"])
-def test_encoding_keeps_invalid_context_unavailable(encoding: str) -> None:
-    """Input encoding string; invalid dimensionless states yield NaN rows, return None."""
-    states = np.array([0, 1, 2, np.nan, 9, -1, 0.5, np.inf])
-    original = states.copy()
-    matrix, valid, _ = encode_context(states, encoding)
-
-    np.testing.assert_array_equal(valid, [True, True, False, False, False, False, False, False])
-    assert np.isnan(matrix[~valid]).all()
-    np.testing.assert_array_equal(states, original)
-
-
-@pytest.mark.parametrize("states,encoding", [
-    (np.array([[0, 1]]), "signed_context"),
-    (np.array([0, 1]), "current_action"),
-])
-def test_encoding_rejects_implicit_reshape_and_unknown_predictors(
-    states: np.ndarray, encoding: str,
-) -> None:
-    """Input state ndarray and encoding string; invalid axis/name raises, return None."""
-    with pytest.raises(ValueError, match="one-dimensional|shape|encoding|context"):
-        encode_context(states, encoding)
-
-
-def test_baseline_excludes_manual_no_choice_and_dark_without_renumbering(trials: pd.DataFrame) -> None:
-    """Input full (6,7) table in UTC seconds; assert row-position masks, return None."""
-    original = trials.copy(deep=True)
-    selected = select_baseline_trials(trials)
-
-    np.testing.assert_array_equal(selected.row_position, np.arange(6))
-    np.testing.assert_array_equal(selected.trial_id, [10, 12, 17, 19, 24, 30])
-    np.testing.assert_array_equal(selected.block_id, [4, 4, 5, 5, 6, 6])
-    np.testing.assert_array_equal(selected.baseline_valid, [True, False, False, False, True, True])
-    assert "manual_reward" in selected.baseline_invalid_reason.iloc[1]
-    assert "no_animal_choice" in selected.baseline_invalid_reason.iloc[2]
-    assert "dark_context" in selected.baseline_invalid_reason.iloc[3]
-    assert selected.baseline_invalid_reason.iloc[0] == ""
-    pd.testing.assert_frame_equal(trials, original)
-
-
-@pytest.mark.parametrize("action", [None, np.nan, "None", "none", "no_choice", ""])
-def test_baseline_uses_existing_no_choice_sentinels(trials: pd.DataFrame, action: object) -> None:
-    """Input UTC-second table and scalar action sentinel; mask row 0, return None."""
-    trials["action"] = trials.action.astype(object)
-    trials.iloc[0, trials.columns.get_loc("action")] = action
-    assert not select_baseline_trials(trials).baseline_valid.iloc[0]
-
-
-@pytest.mark.parametrize("state", [np.nan, "None", 9, 0.5])
-def test_missing_or_invalid_entering_context_excludes_baseline(
-    trials: pd.DataFrame, state: object,
-) -> None:
-    """Input full UTC table and dimensionless state; invalid pool row, return None."""
-    trials["state_int"] = trials.state_int.astype(object)
-    trials.iloc[0, trials.columns.get_loc("state_int")] = state
-    assert not select_baseline_trials(trials).baseline_valid.iloc[0]
-
-
-def test_choice_updated_uses_immediate_unfiltered_next_row(
-    trials: pd.DataFrame, bin_edges_s: np.ndarray,
-) -> None:
-    """Input (6,7) UTC table/(9,) relative-second edges; assert (6,8) states, return None."""
-    original = trials.copy(deep=True)
-    values, valid = build_context_values(trials, bin_edges_s, "choice_updated")
-
-    assert values.shape == valid.shape == (6, 8)
-    np.testing.assert_array_equal(values[0], [0, 0, 0, 0, 1, 1, 1, 1])
-    # The next manual trial supplies known left; the next no-choice row supplies right.
-    np.testing.assert_array_equal(values[1], [1, 1, 1, 1, 0, 0, 0, 0])
-    assert valid[0].all() and valid[1].all()
-    assert not valid[2, 4:].any()  # Immediate next context is dark, not later left.
-    assert np.isnan(values[2, 4:]).all()
-    assert not valid[3, :4].any()
-    np.testing.assert_array_equal(values[3, 4:], [1, 1, 1, 1])
-    assert valid[5, :4].all()
-    assert not valid[5, 4:].any()
-    assert np.isnan(values[5, 4:]).all()
-    pd.testing.assert_frame_equal(trials, original)
-
-
-@pytest.mark.parametrize("next_state", [np.nan, "None", 2, 9, 0.5, np.inf])
-def test_invalid_next_state_masks_post_bins_without_carry_forward(
-    trials: pd.DataFrame, bin_edges_s: np.ndarray, next_state: object,
-) -> None:
-    """Input UTC table/(9,) second edges/state scalar; assert post mask, return None."""
-    trials["state_int"] = trials.state_int.astype(object)
-    trials.iloc[1, trials.columns.get_loc("state_int")] = next_state
-    values, valid = build_context_values(trials, bin_edges_s, "choice_updated")
-
-    np.testing.assert_array_equal(values[0, :4], [0, 0, 0, 0])
-    assert valid[0, :4].all()
-    assert not valid[0, 4:].any()
-    assert np.isnan(values[0, 4:]).all()
-
-
-def test_trial_window_keeps_entering_state_including_terminal_post_bins(
-    trials: pd.DataFrame, bin_edges_s: np.ndarray,
-) -> None:
-    """Input UTC table/(9,) second edges; (6,8) states hold entering value, return None."""
-    values, valid = build_context_values(trials, bin_edges_s, "trial_window")
-    np.testing.assert_array_equal(values[0], np.zeros(8))
-    np.testing.assert_array_equal(values[1], np.ones(8))
-    assert valid[5].all()
-    np.testing.assert_array_equal(values[5], np.zeros(8))
-    assert not valid[3].any()
-    assert np.isnan(values[3]).all()
-
-
-@pytest.mark.parametrize("edges,mode", [
-    (np.array([-2.0, -0.25, 0.25, 2.0]), "choice_updated"),
-    (np.array([-2.0, 0.0, 0.0, 2.0]), "choice_updated"),
-    (np.array([-2.0, np.nan, 2.0]), "choice_updated"),
-    (np.array([-2.0, 0.0, 2.0]), "reward_updated"),
-])
-def test_invalid_bin_geometry_or_timing_is_rejected(
-    trials: pd.DataFrame, edges: np.ndarray, mode: str,
-) -> None:
-    """Input UTC table/relative-second edges/mode; ambiguous update fails, return None."""
-    with pytest.raises(ValueError, match="bin|zero|edge|timing"):
-        build_context_values(trials, edges, mode)
-
-
-def test_complete_trial_tables_match_irregular_ids_despite_index_labels(trials: pd.DataFrame) -> None:
-    """Input full UTC table; equal source identities ignore DataFrame index, return None."""
-    source = trials.copy(deep=True).reset_index(drop=True)
-    source["irrelevant_source_column"] = "unused"
-    validate_trial_tables(trials, source)
-
-
-@pytest.mark.parametrize("column,new_value", [
-    ("cur_trial", 999), ("start_time", 110.01),
-    ("choice_time", 115.01), ("state_int", 0),
-])
-def test_trial_table_identity_time_and_state_conflicts_are_errors(
-    trials: pd.DataFrame, column: str, new_value: float,
-) -> None:
-    """Input UTC table/column/scalar (state and ID unitless); mismatch fails, return None."""
-    source = trials.copy(deep=True)
-    source.iloc[1, source.columns.get_loc(column)] = new_value
-    with pytest.raises(ValueError, match=column):
-        validate_trial_tables(trials, source)
-
-
-@pytest.mark.parametrize("failure", ["duplicate_id", "reversed_time", "missing_row", "missing_column"])
-def test_ambiguous_or_nonchronological_sources_cannot_be_joined_by_position(
-    trials: pd.DataFrame, failure: str,
-) -> None:
-    """Input (6,7) UTC table/failure name; reject ambiguous complete mapping, return None."""
-    source = trials.copy(deep=True)
-    if failure == "duplicate_id":
-        source.iloc[1, source.columns.get_loc("cur_trial")] = 10
-    elif failure == "reversed_time":
-        source = source.iloc[[1, 0, 2, 3, 4, 5]]
-    elif failure == "missing_row":
-        source = source.iloc[:-1]
+def test_entire_one_second_halves_hold_trial_values_and_gate_only_outcomes(trials, width, encoding):
+    """Input trials/seconds/native encoding; assert trial-major X(N,P) with exactly half its bins post-choice."""
+    edges = np.linspace(-1, 1, round(2/width)+1)
+    result = build_joint_predictors(trials, np.arange(6), edges, encoding)
+    names = result["column_names"]
+    x = result["predictors"].reshape(6, len(edges)-1, -1)
+    post = edges[:-1] >= 0
+    assert result["valid"].all() and x.shape[-1] == (8 if encoding == "signed_context" else 9)
+    np.testing.assert_array_equal(x[:, :, names.index("signed_choice")], np.repeat([1,-1,1,-1,1,-1], len(post)).reshape(6,-1))
+    if encoding == "signed_context":
+        np.testing.assert_array_equal(x[:, :, 0], np.repeat([1,-1,1,-1,-1,1], len(post)).reshape(6,-1))
     else:
-        source = source.drop(columns="state_int")
-    with pytest.raises(ValueError, match="trial|chronolog|start_time|state_int"):
+        np.testing.assert_array_equal(x[:, :, 0]+x[:, :, 1], np.ones((6, len(post))))
+    for row, name in enumerate(["left_reward", "right_reward", "left_omission", "right_omission", "left_incorrect", "right_incorrect"]):
+        outcomes = x[row, :, -6:]
+        np.testing.assert_array_equal(outcomes[~post], np.zeros((sum(~post),6)))
+        np.testing.assert_array_equal(outcomes[post].sum(axis=1), np.ones(sum(post)))
+        np.testing.assert_array_equal(x[row,:,names.index(name)], post.astype(float))
+        assert result["condition_counts"][name] == 1
+    assert result["valid"].reshape(6,-1)[-1].all()  # Terminal trial needs no next state.
+
+
+@pytest.mark.parametrize("field,value", [("reward", np.nan), ("reward", 3), ("correct", np.nan), ("correct", 9)])
+def test_unknown_outcome_excludes_both_halves_not_an_all_zero_negative(trials, field, value):
+    """Input source field/value; unknown unrewarded outcome masks the complete window with a reason."""
+    trials.iloc[2, trials.columns.get_loc(field)] = value
+    result = build_joint_predictors(trials, np.arange(6), np.array([-1,-.5,0,.5,1]), "signed_context")
+    assert not result["valid"].reshape(6,4)[2].any()
+    assert all(result["invalid_reason"].reshape(6,4)[2])
+
+
+def test_recorded_reward_does_not_require_inferred_correctness(trials):
+    """Known rewarded choice remains reward-classified when correctness is unavailable."""
+    trials.iloc[0, trials.columns.get_loc("correct")] = np.nan
+    codes, valid, _ = classify_choice_outcomes(trials.action, trials.reward, trials.correct)
+    assert valid[0] and codes[0] == "left_reward"
+
+
+@pytest.mark.parametrize("edges", [np.array([-2,-1,0,1,2]), np.array([-1,-.1,.1,1]), np.array([-1,0,0,1]), np.array([-1,0,.9])])
+def test_joint_geometry_is_exact_and_cannot_straddle_choice(trials, edges):
+    """Input malformed relative-second edges; reject a different or ambiguous scientific window."""
+    with pytest.raises(ValueError, match="edge|window|zero|bin"):
+        build_joint_predictors(trials, np.arange(6), edges, "signed_context")
+
+
+@pytest.mark.parametrize("field,value,reason", [("experimenter_reward_given",1,"manual"), ("state_int",2,"dark"), ("action","no_choice","choice")])
+def test_baseline_exclusion_precedes_predictor_eligibility(trials, field, value, reason):
+    """Manual/dark/no-choice trials cannot become joint observations through outcome coding."""
+    trials[field] = trials[field].astype(object)
+    trials.iloc[0,trials.columns.get_loc(field)] = value
+    baseline = select_baseline_trials(trials)
+    assert not baseline.baseline_valid.iloc[0]
+    assert reason in baseline.baseline_invalid_reason.iloc[0]
+    result = build_joint_predictors(trials, np.arange(6), np.array([-1,-.5,0,.5,1]), "signed_context")
+    assert not result["valid"][:4].any()
+
+
+@pytest.mark.parametrize("field", ["action","reward","correct","state_int","cur_trial","choice_time","start_time"])
+def test_complete_source_correspondence_includes_every_joint_field(trials, field):
+    """Input source field name; mismatched source/augmented values cannot silently define a new design."""
+    source = trials.copy(deep=True)
+    source.iloc[0,source.columns.get_loc(field)] += 1
+    with pytest.raises(ValueError, match=field):
         validate_trial_tables(trials, source)
 
 
-def test_context_event_diagnostics_allow_delayed_logs_and_preserve_times() -> None:
-    """No inputs; ordered (4,2) UTC events may lag choices; return None."""
-    trial_table = pd.DataFrame({"cur_trial": [10, 11, 12, 13],
-        "start_time": [100.0, 110.0, 120.0, 130.0],
-        "choice_time": [105.0, 115.0, 125.0, 135.0], "state_int": [0, 0, 1, 1]})
-    events = pd.DataFrame({"Time": [99.0, 106.0, 115.2, 136.0],
-        "Event": ["enter_right_patch", "reward", "enter_left_patch", "choice"]})
-    original = events.copy(deep=True)
-
-    assert diagnose_context_events(trial_table, events) == []
-    pd.testing.assert_frame_equal(events, original)
+def test_matching_tables_ignore_index_labels_and_retain_native_context_encoding(trials):
+    """Index labels do not change original positions; separate context retains native 0/1 coding."""
+    validate_trial_tables(trials, trials.reset_index(drop=True))
+    x, valid, names = encode_context(np.array([0,1,2,np.nan]), "separate_context")
+    np.testing.assert_array_equal(x[:2], [[0,1],[1,0]])
+    assert valid.tolist() == [True,True,False,False] and np.isnan(x[2:]).all()
+    assert names == ("left_context","right_context")
 
 
-def test_conflicting_event_order_is_advisory_and_never_changes_context_values(
-    trials: pd.DataFrame, bin_edges_s: np.ndarray,
-) -> None:
-    """Input UTC table/relative-second edges; diagnostics list is advisory, return None."""
-    before_values, before_valid = build_context_values(trials, bin_edges_s, "choice_updated")
-    events = pd.DataFrame({"Time": [99.0, 106.0, 116.0],
-        "Event": ["enter_left_patch", "enter_right_patch", "enter_dark_period"]})
-
-    diagnostics = diagnose_context_events(trials, events)
-    assert diagnostics and all(isinstance(message, str) for message in diagnostics)
-    assert any("state" in message.lower() or "context" in message.lower() for message in diagnostics)
-    after_values, after_valid = build_context_values(trials, bin_edges_s, "choice_updated")
-    np.testing.assert_array_equal(before_values, after_values)
-    np.testing.assert_array_equal(before_valid, after_valid)
-
-
-def test_absent_events_are_reported_without_terminal_fallback(
-    trials: pd.DataFrame, bin_edges_s: np.ndarray,
-) -> None:
-    """Input UTC table/relative-second edges; absent events advisory, terminal NaN, return None."""
-    diagnostics = diagnose_context_events(trials, pd.DataFrame(columns=["Time", "Event"]))
-    assert diagnostics
-    values, valid = build_context_values(trials, bin_edges_s, "choice_updated")
-    assert not valid[-1, 4:].any()
-    assert np.isnan(values[-1, 4:]).all()
-
-
-@pytest.fixture
-def context_sequence() -> pd.DataFrame:
-    """Return four trials with right/right/left/left contexts and UTC-second boundaries."""
-    return pd.DataFrame({"cur_trial": [10, 11, 12, 13],
-                         "start_time": [100., 110., 120., 130.],
-                         "choice_time": [105., 115., 125., 135.],
-                         "state_int": [0, 0, 1, 1]})
-
-
-@pytest.mark.parametrize("terminal_states", [["enter_right_patch"], ["enter_right_patch", "enter_left_patch", "enter_dark_period"]])
-def test_unused_terminal_switches_are_silent_without_changing_predictors(context_sequence, bin_edges_s, terminal_states):
-    """Matching context prefixes allow surplus events after the final represented trial/choice."""
-    events = pd.DataFrame({"Time": [99., 115.2] + [139.2 + index for index in range(len(terminal_states))],
-                           "Event": ["enter_right_patch", "enter_left_patch", *terminal_states]})
-    original_trials, original_events = context_sequence.copy(deep=True), events.copy(deep=True)
-    before = {mode: build_context_values(context_sequence, bin_edges_s, mode)
-              for mode in ("choice_updated", "trial_window")}
-    assert diagnose_context_events(context_sequence, events) == []
-    for mode, (values, valid) in before.items():
-        after_values, after_valid = build_context_values(context_sequence, bin_edges_s, mode)
-        np.testing.assert_array_equal(values, after_values)
-        np.testing.assert_array_equal(valid, after_valid)
-    assert not before["choice_updated"][1][-1, 4:].any()
-    pd.testing.assert_frame_equal(context_sequence, original_trials)
-    pd.testing.assert_frame_equal(events, original_events)
-
-
-@pytest.mark.parametrize("event_time, warn", [(134.9, True), (135., True), (135.1, False)])
-def test_terminal_switch_must_follow_last_choice(context_sequence, event_time, warn):
-    """A matching prefix does not hide extra state changes during the represented trials."""
-    events = pd.DataFrame({"Time": [99., 115.2, event_time],
-                           "Event": ["enter_right_patch", "enter_left_patch", "enter_right_patch"]})
-    assert bool(diagnose_context_events(context_sequence, events)) is warn
-
-
-@pytest.mark.parametrize("event_time, warn", [(138., True), (141., False)])
-def test_incomplete_final_trial_still_extends_the_represented_boundary(context_sequence, event_time, warn):
-    """A final trial without a choice remains represented through its start time."""
-    trials = pd.concat([context_sequence, pd.DataFrame({"cur_trial": [14], "start_time": [140.],
-                                                      "choice_time": [np.nan], "state_int": [1]})], ignore_index=True)
-    events = pd.DataFrame({"Time": [99., 115.2, event_time],
-                           "Event": ["enter_right_patch", "enter_left_patch", "enter_right_patch"]})
-    assert bool(diagnose_context_events(trials, events)) is warn
-
-
-def test_delayed_last_matching_entry_is_not_removed_by_terminal_filter(context_sequence):
-    """Matching entries may lag trial boundaries; only surplus terminal segments are ignored."""
-    events = pd.DataFrame({"Time": [99., 135.5, 139.2],
-                           "Event": ["enter_right_patch", "enter_left_patch", "enter_right_patch"]})
-    assert diagnose_context_events(context_sequence, events) == []
-
-
-@pytest.mark.parametrize("names, times", [
-    (["enter_right_patch"], [99.]),
-    (["enter_left_patch", "enter_right_patch"], [99., 115.2]),
-    (["enter_right_patch", "enter_dark_period", "enter_left_patch"], [99., 110., 115.2]),
-    (["enter_right_patch", "enter_left_patch", "enter_right_patch", "enter_left_patch"], [99., 115.2, 120., 125.]),
-    (["enter_left_patch", "enter_right_patch", "enter_left_patch"], [99., 139.2, 140.]),
-])
-def test_genuine_context_mismatches_keep_a_short_actionable_message(context_sequence, names, times):
-    """Missing/wrong/internal-extra states, including bad prefixes, still identify the first discrepancy."""
-    diagnostics = diagnose_context_events(context_sequence, pd.DataFrame({"Time": times, "Event": names}))
-    assert len(diagnostics) == 1
-    assert "segment" in diagnostics[0].lower()
-    assert "trial" in diagnostics[0].lower() and "logged" in diagnostics[0].lower()
-    assert len(diagnostics[0]) < 240
-    assert "[" not in diagnostics[0]
-
-
-def test_long_sequence_mismatch_reports_counts_not_full_state_lists():
-    """Session-length sequences yield a bounded diagnostic with the first differing segment."""
-    rows = np.arange(200)
-    trials = pd.DataFrame({"cur_trial": rows, "start_time": 100. + 10 * rows,
-                           "choice_time": 105. + 10 * rows, "state_int": rows % 2})
-    names = np.where(rows % 2 == 0, "enter_right_patch", "enter_left_patch").astype(object)
-    names[100] = "enter_dark_period"
-    events = pd.DataFrame({"Time": 99. + 10 * rows, "Event": names})
-    message = diagnose_context_events(trials, events)[0]
-    assert "101" in message and "200" in message
-    assert "right" in message and "dark" in message
-    assert len(message) < 240 and "[" not in message
+def test_context_event_diagnostics_remain_advisory(trials):
+    """A mismatching logged event is diagnosed and never overwrites the fixed trial context."""
+    result = build_joint_predictors(trials,np.arange(6),np.array([-1,-.5,0,.5,1]),"signed_context")
+    messages = diagnose_context_events(trials,pd.DataFrame({"Time":[99.],"Event":["enter_dark_period"]}))
+    assert messages and result["predictors"][0,0] == 1

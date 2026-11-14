@@ -33,6 +33,7 @@ def encoding_session(tmp_path: Path) -> EncodingConfig:
         "action": [0, 0, 1, "no_choice", 0, 1, 0, 1, 0, 1, 0, 1],
         "experimenter_reward_given": [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         "reward": [1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1],
+        "correct": [1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1],
     })
     trials.to_csv(root / "trials.csv", index=False)
     trials.to_csv(root / "processed/augmented.csv", index=False)
@@ -68,7 +69,8 @@ def encoding_session(tmp_path: Path) -> EncodingConfig:
         "probes": probes, "site_pairs": []}
     (root / "neural_session.json").write_text(json.dumps(metadata), encoding="ascii")
     config_path = root / "encoding.json"
-    config_path.write_text(json.dumps({"session_metadata": "neural_session.json",
+    config_path.write_text(json.dumps({"analysis_version": "joint-task-encoding-v2",
+        "session_metadata": "neural_session.json",
         "augmented_trials": "processed/augmented.csv",
         "feature_parameters": "processed/trial_feature_params.json",
         "probe_roles": {"PFC": "A", "HPC": "B"}}), encoding="ascii")
