@@ -464,7 +464,7 @@ def _saved_cell_metadata(directory: Path, progress: dict) -> list[dict]:
     return entries
 
 
-def _representative_cells(entries: list[dict]) -> dict[str, dict]:
+def _representative_cells(entries: list[dict]) -> dict[tuple[str, str], dict]:
     """Input completed cell metadata/path entries; return one deterministic example per region/representation, no units changed."""
     chosen = {}
     for entry in sorted(entries, key=_example_priority):

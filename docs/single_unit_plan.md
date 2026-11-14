@@ -1,12 +1,22 @@
 # PC-First Context Encoding Implementation Plan
 
+Implemented revision, 2026-11-13:
+[single_unit_joint_plan_v2.md](single_unit_joint_plan_v2.md) describes joint
+context/choice/outcome regression for units and PCs over `[-1,+1)` seconds.
+J1-J6 are implemented and synthetically validated. The completed v1 plan and execution record below
+retain their original scope and timing conventions as historical records.
+The user confirmed that the old encoding model need not persist; the revised
+plan replaces its execution/configuration/schema support while preserving
+existing files and unrelated session-timeline functionality.
+
 Status: Implementation approved 2026-11-02. P1-P6 are complete;
 P7 awaits a user-designated experimental session and authorization.
 No experimental run is authorized by implementation approval.
 The execution record below tracks tests-first commits and validation gates.
 
-Scientific authority:
-[single_unit_ridge_spec_v1.md](single_unit_ridge_spec_v1.md).
+Current scientific authority:
+[single_unit_ridge_spec_v1.md](single_unit_ridge_spec_v1.md), now revised to the
+joint model. The original v1 scientific decisions below are historical.
 [single_unit_spec_v6.md](single_unit_spec_v6.md) is historical reference, not the
 response, estimator, or inference contract for this work.
 [../AGENTS.md](../AGENTS.md) and [SoftwareDesign.md](SoftwareDesign.md) govern

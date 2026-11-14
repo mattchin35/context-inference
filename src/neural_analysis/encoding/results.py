@@ -412,9 +412,9 @@ def load_preparation(path: Path | str) -> dict:
 def save_cell(path: Path | str, cell: dict) -> Path:
     """Publish new cell NPZ from named arrays and meta dict; return Path without overwriting.
 
-    Cell arrays use N selected bins, P native predictor columns and K original
-    Responses; slopes(P,R), predictions(N,R), fold slopes(5,P,R). Raw activity
-    remain in shared preparation. Undefined outputs stay NaN with meta reasons.
+    Cell arrays use N selected bins, P native predictor columns and R original
+    responses; slopes(P,R), predictions(N,R), fold slopes(5,P,R). Raw activity
+    remains in shared preparation. Undefined outputs stay NaN with meta reasons.
     """
     arrays = {name: value for name, value in cell.items() if name != "meta"}
     meta = _archive_meta(cell["meta"], "cell")

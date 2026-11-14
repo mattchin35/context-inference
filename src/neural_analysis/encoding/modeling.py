@@ -79,7 +79,7 @@ def fit_ols_responses(predictors: np.ndarray, responses: np.ndarray) -> LinearFi
     Returns
     -------
     LinearFit
-        Slopes (P,K), intercept (K,), penalties None. LinearRegression's dense
+        Slopes (P,K), intercept (K,), zero penalties (P,). LinearRegression's dense
         centered solve minimizes slope norm, then recovers the unpenalized
         intercept. Redundant indicators are retained. Inputs are not changed.
     """
