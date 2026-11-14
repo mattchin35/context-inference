@@ -162,3 +162,13 @@ def test_shared_window_geometry_requires_no_pca(plotting_data):
     data=timeline_plotting.build_window_heatmap_data(region.unit_counts[:,:,:2],prep["behavior"].choices,region.choice_positions,region.bin_edges_s)
     assert data["z"].shape==(2,19) and len(data["x"])==20 and data["customdata"].shape==(2,19,7)
     np.testing.assert_array_equal(data["z"][:,:4],region.unit_counts[0,:,:2].T)
+
+
+def test_colorbars_do_not_share_the_joint_predictor_label_band(plotting_data):
+    """Coefficient scale belongs below its categorical labels; activity scale stays inside the activity panel height."""
+    prep, make = plotting_data
+    figure = plotting.plot_encoding_timeline(prep, make("units"), event_tracks=("LED",))
+    activity = trace(figure, "Neural activity")
+    bounds = figure.layout[activity.yaxis.replace("y", "yaxis")].domain
+    assert trace(figure, "Coefficients").colorbar.y < bounds[0]
+    assert bounds[0] <= activity.colorbar.y <= bounds[1]
