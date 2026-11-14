@@ -178,9 +178,20 @@ def zscore_pc_scores(scores: np.ndarray) -> np.ndarray:
     Return a new float64 array in dimensionless PC-SD units. Constant PCs
     become zero; no input is modified and no gaps are included in the pool.
     """
-    values = np.asarray(scores, dtype=np.float64)
+    return zscore_window_activity(scores)
+
+
+def zscore_window_activity(activity: np.ndarray) -> np.ndarray:
+    """Return per-response z-scores with unchanged (windows,bins,responses) axes.
+
+    Input is a nonempty finite native-activity array. Each response uses its
+    own mean and population SD (ddof=0) over all supplied windows/bins, before
+    inserting display gaps or selecting a viewport. Return new float64 values
+    in dimensionless SD units. Constant responses become zero. No mutation.
+    """
+    values = np.asarray(activity, dtype=np.float64)
     if values.ndim != 3 or not all(values.shape):
-        raise ValueError("PC scores must have nonempty (windows, bins, PCs) axes.")
+        raise ValueError("Activity must have nonempty (windows, bins, responses) axes.")
     means = values.mean(axis=(0, 1))
     scales = values.std(axis=(0, 1), ddof=0)
     # Explicitly detect constants even if floating-point mean rounding leaves a tiny SD.

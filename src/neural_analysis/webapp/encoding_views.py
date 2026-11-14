@@ -54,7 +54,9 @@ def render_encoding_view(st_module: object, session: ResolvedSession) -> None:
         if (path / "config.json").is_file() and (path / "progress.json").is_file()
     ]
     if not options:
-        st_module.info("No saved single unit selectivity runs are available for this session.")
+        st_module.info(
+            "No saved single unit selectivity runs are available for this session."
+        )
         return
     directory = Path(
         st_module.sidebar.selectbox(
@@ -88,7 +90,9 @@ def render_encoding_view(st_module: object, session: ResolvedSession) -> None:
         cell = load_cell_cached(str(cell_path), info.st_size, info.st_mtime_ns)
         _check_cell_metadata(cell["meta"], entry["id"], manifest)
     except (OSError, ValueError, KeyError) as error:
-        st_module.error(f"Could not read saved single unit selectivity results: {error}")
+        st_module.error(
+            f"Could not read saved single unit selectivity results: {error}"
+        )
         return
 
     region = cell["meta"]["settings"]["region"]
@@ -99,6 +103,25 @@ def render_encoding_view(st_module: object, session: ResolvedSession) -> None:
     ids = cell["response_ids"].tolist()
     representation = meta["settings"]["representation"]
     row_key = f"{key}_{region}_{representation}"
+    heatmap_scale = "native"
+    zscore_limit = 3.0
+    if representation == "units":
+        heatmap_scale = st_module.sidebar.selectbox(
+            "Heatmap scale",
+            ["native", "within_unit_zscore"],
+            format_func=_control_label,
+            key=f"{row_key}_heatmap_scale",
+        )
+        if heatmap_scale == "within_unit_zscore":
+            zscore_limit = float(
+                st_module.sidebar.number_input(
+                    "Heatmap limit (SD)",
+                    min_value=0.1,
+                    value=3.0,
+                    step=0.5,
+                    key=f"{row_key}_zscore_limit",
+                )
+            )
     coefficient_scale = st_module.sidebar.selectbox(
         "Coefficient scale",
         ["raw", "standardized"],
@@ -178,6 +201,8 @@ def render_encoding_view(st_module: object, session: ResolvedSession) -> None:
         prepared,
         cell,
         coefficient_scale=coefficient_scale,
+        heatmap_scale=heatmap_scale,
+        zscore_limit=zscore_limit,
         ordering=ordering,
         sorting_predictor=sorting_predictor,
         row_start=first - 1,
@@ -208,9 +233,15 @@ def render_encoding_view(st_module: object, session: ResolvedSession) -> None:
             "PC regression is conditional on fixed descriptive session PCA, which includes test-block neural activity."
         )
     st_module.caption(
-        "Coefficient scaling changes coefficients and their strength ordering; activity retains its native scale. "
+        "Coefficient scaling changes coefficients and their strength ordering. "
         "Reward-minus-omission contrasts always use raw response units. Positive outcome slopes alone do not establish reward selectivity."
     )
+    if heatmap_scale == "within_unit_zscore":
+        st_module.caption(
+            "Each unit's heatmap uses its own mean and population SD over all saved [-1,+1) bins, "
+            "excluding gaps. Constant units display zero. Panning preserves normalization; "
+            f"colors saturate outside +/-{zscore_limit:g} SD. Prediction traces remain Hz."
+        )
     if not meta["cv_available"]:
         st_module.warning(f"Primary five-fold scores unavailable: {meta['cv_reason']}")
     ordered = order_responses(
@@ -262,6 +293,8 @@ def render_encoding_view(st_module: object, session: ResolvedSession) -> None:
             time_range_s=visible,
             selected_response=selected,
             coefficient_scale=coefficient_scale,
+            heatmap_scale=heatmap_scale,
+            zscore_limit=zscore_limit,
             prediction_scope=prediction_scope,
             inspection_penalty_mode=penalty_mode,
         )
@@ -370,6 +403,8 @@ def _run_label(path: str) -> str:
 def _control_label(identifier: str) -> str:
     """Input saved categorical identifier; return a readable selector label, no physical units."""
     return {
+        "native": "Hz",
+        "within_unit_zscore": "Within-unit z-score",
         "raw": "Raw coefficients",
         "standardized": "Standardized coefficients",
         "original": "Original response order",

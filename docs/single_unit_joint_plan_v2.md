@@ -1,7 +1,8 @@
 # Joint Context, Choice, and Outcome Encoding: Revision Plan
 
 Status: J1-J6 implemented and synthetically validated, 2026-11-13, following
-user approval. Experimental numerical execution remains a separate gate.
+user approval. The user subsequently authorized CT026 2026-08-28, which has
+completed; user inspection remains required before a wider batch.
 Revised after SoftwareDesign review: the user confirmed that the old encoding
 model does not need to persist. This plan replaces it with one current joint
 model; existing files are preserved without legacy execution or reader support.
@@ -506,3 +507,21 @@ existing input paths is in `.pytest_cache/ct026_joint_encoding_review.json`.
 The existing session config/results are unchanged. No experimental neural
 arrays were loaded or fitted; the next gate remains the authorized real-session
 run and user inspection, followed by any authorized wider batch.
+
+2026-11-14 follow-up: the user approved optional within-unit z-score heatmaps.
+RED tests `094e85c` failed on the absent scale controls/helper before source
+changes. The existing per-PC z-score computation now delegates to a generic
+window-activity helper, preserving its public interface and shared geometry.
+The unit-only control uses all saved windows/bins per unit (ddof=0), excludes
+gaps, displays constants as zero, defaults to +/-3 SD with adjustable limits,
+and applies only to the heatmap. Native-Hz prediction traces and all fits stay
+unchanged. Only displayed unit columns are transformed. PNG captions and
+filenames identify scaling and limits, preserving native exports.
+
+GREEN: 345 focused encoding/timeline/frontend tests passed in 46.31 seconds.
+Real 8/28 browser inspection verified the selector, signed scale, native traces,
+pan persistence and limit changes. Shared preparation and all 20 cell NPZs
+retained identical SHA256 hashes; numerical code identity also stayed equal to
+the completed run. New PFC/HPC PNGs were saved under its
+`figures/within_unit_zscore_20261114_002638_156499/` directory. The viewer on
+127.0.0.1:8766 was restarted and left on Within-unit z-score for user inspection.

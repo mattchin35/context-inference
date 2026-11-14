@@ -89,6 +89,16 @@ conditions/contrasts appear unavailable. Raw/standardized coefficient controls
 never rescale activity. Coefficient and activity rows share the same identities
 and order; time panels pan together and the coefficient axis stays categorical.
 
+For units, **Heatmap scale** offers **Hz** or **Within-unit z-score**. The latter
+subtracts each unit's mean and divides by its population SD (`ddof=0`) over all
+saved `[-1,+1)` bins, excluding gaps. Constant/silent units display zero.
+Normalization stays fixed while panning or reordering; only displayed units
+are transformed. The signed heatmap defaults to +/-3 SD, adjustable with
+**Heatmap limit (SD)**. Values outside that range saturate in color but keep
+their actual z-score in hover. Prediction traces, coefficients, scores and
+saved arrays retain their native units. PNG exports follow the heatmap control
+and label its normalization. Existing fitted results work without rerunning.
+
 Held-out predictions are the default. Select reference-fit predictions explicitly
 when desired. Unavailable held-out values stay blank. At 20 ms, bounded neural
 loading defaults on; time controls and Jump load another interval. Display

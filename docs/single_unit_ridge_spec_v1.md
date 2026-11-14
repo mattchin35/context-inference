@@ -170,8 +170,13 @@ standardized coefficients, coefficient/raw-contrast ordering, visible rows,
 selected-response prediction scope, and elapsed range. Coefficient/activity
 rows share identical identities/order. Unit heatmaps are nonnegative Hz with
 fixed regional limits; PCs retain fixed signed score limits. Preserve actual
-time, blank gaps, pan/zoom and categorical coefficient axes. Show fixed
-context/choice and all six gated outcome tracks with included-bin status.
+time, blank gaps, pan/zoom and categorical coefficient axes. An optional
+within-unit heatmap z-score uses each unit's mean/population SD over all saved
+two-second bins, excluding gaps; constant units display zero. Its adjustable
+signed color range defaults to +/-3 SD and stays fixed across navigation.
+This visualization leaves prediction traces in Hz and never changes fitted
+responses, coefficients or saved products. Show fixed context/choice and all
+six gated outcome tracks with included-bin status.
 No display control loads spikes, bins, refits PCA or fits regression.
 
 Export light opaque PNGs for each available region/representation. Captions
@@ -190,9 +195,10 @@ Include balanced/imbalanced frequencies, fold fits, missing conditions,
 unavailable PCA, source-free resume, saved UI and exports. Verify unrelated
 timeline defaults. Use existing dependencies, uv, and session-level workers.
 
-CT026 2026-08-04 is the designated candidate for one-session inspection.
-Implementation approval authorizes the synthetic delivery; experimental
-numerical execution follows the separate session gate in the approved plan.
-The user inspects that output before wider batch processing. Poisson,
+The user subsequently designated CT026 2026-08-28 and authorized its numerical
+run, which completed with all 20 cells and five-fold scores available. CT026
+2026-08-04 was dry-run only. The user inspects the 8/28 output before wider
+batch processing. The 2026-11-14 z-score visualization addition uses the same
+saved fits without reprocessing. Poisson,
 selectivity-index methods, causal claims, automatic alpha tuning, permutation
 significance and fraction-selective summaries remain outside this revision.

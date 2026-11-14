@@ -69,6 +69,8 @@ def plot_encoding_timeline(
     cell: dict,
     *,
     coefficient_scale: str = "raw",
+    heatmap_scale: str = "native",
+    zscore_limit: float = 3.0,
     ordering: str = "original",
     sorting_predictor: str | None = None,
     row_start: int = 0,
@@ -90,9 +92,13 @@ def plot_encoding_timeline(
     or PC rank text. Row controls are zero-based offsets/counts; time ranges
     are elapsed seconds. Controls consume saved arrays only. Return a Plotly
     Figure with identical response rows and time-axis pixel domains. Activity
-    stays Hz or PC scores; coefficient scaling never rescales neural activity.
+    defaults to Hz or PC scores. heatmap_scale='within_unit_zscore' optionally
+    normalizes each displayed unit over all its saved windows/bins (ddof=0),
+    excluding gaps. zscore_limit is a positive color limit in SD units; data
+    are not clipped. Prediction traces remain native Hz. No refitting occurs.
     """
     region = _region_for_cell(preparation, cell)
+    low, high, colors = _activity_scale(region, cell, heatmap_scale, zscore_limit)
     behavior = preparation["behavior"]
     display = order_responses(
         cell,
@@ -134,13 +140,16 @@ def plot_encoding_timeline(
     specs = [[{"colspan": 2}, None] for _ in range(detail_row)]
     specs[activity_row - 1] = [{}, {}]
     units = cell["meta"]["response_units"]
+    heatmap_units = (
+        "Within-unit z-score (SD)" if heatmap_scale == "within_unit_zscore" else units
+    )
     titles = ["Choices and logged context"] + [
         timeline_plotting.EVENT_LABELS[track] for track in tracks
     ]
     titles += [
         "Native joint predictors and fit bins",
         "Coefficients",
-        f"Neural activity ({units})",
+        f"Neural activity ({heatmap_units})",
         f"Selected response: {selected}",
     ]
     figure = make_subplots(
@@ -190,7 +199,9 @@ def plot_encoding_timeline(
         row=activity_row,
         col=1,
     )
-    data = _bin_data(preparation, cell, _response_values(region, cell, display), loaded)
+    data = _bin_data(
+        preparation, cell, _heatmap_values(region, cell, display, heatmap_scale), loaded
+    )
     custom = np.empty((*data["customdata"].shape[:2], 9), dtype=object)
     custom[:, :, :7], custom[:, :, 7] = data["customdata"], ids[:, None]
     custom[:, :, 8] = _bin_data(preparation, cell, _fit_mask(region, cell), loaded)[
@@ -208,7 +219,6 @@ def plot_encoding_timeline(
         )
         custom = expanded
         variance = " - %{customdata[9]:.2f}% session variance"
-    low, high, colors = _activity_scale(region, cell)
     figure.add_trace(
         go.Heatmap(
             x=data["x"],
@@ -224,7 +234,7 @@ def plot_encoding_timeline(
             connectgaps=False,
             hoverongaps=False,
             colorbar={
-                "title": {"text": units, "side": "right"},
+                "title": {"text": heatmap_units, "side": "right"},
                 "y": sum(panel.yaxis.domain) / 2,
                 "len": panel.yaxis.domain[1] - panel.yaxis.domain[0],
                 "thickness": 16,
@@ -234,7 +244,7 @@ def plot_encoding_timeline(
             "<br>UTC [%{customdata[1]:.6f}, %{customdata[2]:.6f}) s"
             "<br>Choice-relative [%{customdata[3]:.3f}, %{customdata[4]:.3f}) s"
             "<br>Selected for fit: %{customdata[8]}<br>Activity %{z:.6g} "
-            + units
+            + heatmap_units
             + "<extra></extra>",
         ),
         row=activity_row,
@@ -317,6 +327,10 @@ def plot_encoding_timeline(
             "selected_response": selected,
             "representation": representation,
             "coefficient_scale": coefficient_scale,
+            "heatmap_scale": heatmap_scale,
+            "zscore_limit": float(zscore_limit)
+            if heatmap_scale == "within_unit_zscore"
+            else None,
             "prediction_scope": prediction_scope,
             "inspection_penalty_mode": inspection_penalty_mode
             or cell["meta"]["settings"]["penalty_mode"],
@@ -334,6 +348,8 @@ def save_inspection_figures(
     time_range_s: tuple[float, float] | None = None,
     selected_response: str | None = None,
     coefficient_scale: str = "raw",
+    heatmap_scale: str = "native",
+    zscore_limit: float = 3.0,
     inspection_penalty_mode: str | None = None,
     prediction_scope: str = "held_out",
 ) -> tuple[Path, Path]:
@@ -343,11 +359,15 @@ def save_inspection_figures(
     response_ids(R,), coefficients(P,R), elapsed-second bounds and explicit
     prediction scope. Return two new Paths (coefficient summary and coupled
     coefficients/activity/prediction). Existing filenames raise FileExistsError.
-    No fitting or raw input loading occurs. Captions state native units/scope.
+    Optional within_unit_zscore heatmaps use each displayed unit's complete
+    saved window/bin pool (ddof=0), with a positive SD color limit. Traces and
+    coefficients remain native. No fitting/raw loading occurs; captions state
+    both heatmap normalization and native trace units. Defaults stay native.
     """
     import matplotlib.pyplot as plt
 
     region = _region_for_cell(preparation, cell)
+    low, high, _ = _activity_scale(region, cell, heatmap_scale, zscore_limit)
     order = order_responses(
         cell, coefficient_scale=coefficient_scale, ordering="coefficient_strength"
     )[:10]
@@ -364,6 +384,8 @@ def save_inspection_figures(
     directory = Path(output_directory)
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", selected)
     stem = f"{cell['meta']['cell_id']}_{coefficient_scale}_{safe_id}_{prediction_scope}"
+    if heatmap_scale == "within_unit_zscore":
+        stem += f"_within_unit_zscore_limit{float(zscore_limit)}"
     paths = (
         directory / f"{stem}_coefficients.png",
         directory / f"{stem}_timeline_prediction.png",
@@ -372,6 +394,9 @@ def save_inspection_figures(
         raise FileExistsError("Refusing to overwrite existing inspection PNGs")
     directory.mkdir(parents=True, exist_ok=True)
     units = cell["meta"]["response_units"]
+    heatmap_units = (
+        "Within-unit z-score (SD)" if heatmap_scale == "within_unit_zscore" else units
+    )
     scope_label = (
         "held-out predictions"
         if prediction_scope == "held_out"
@@ -387,13 +412,19 @@ def save_inspection_figures(
     )
     if cell["meta"]["settings"]["representation"] == "pcs":
         caption += " Fixed descriptive session PCA includes test-block neural activity."
+    if heatmap_scale == "within_unit_zscore":
+        caption += (
+            f" Heatmap: within-unit z-score over all saved [-1,+1) bins per unit (ddof=0); "
+            f"color limits +/-{float(zscore_limit):g} SD; traces remain Hz. Values beyond the color limits saturate visually."
+        )
     if not cell["meta"]["cv_available"]:
         caption += f" Complete CV unavailable: {cell['meta'].get('cv_reason', 'see saved fit details')}."
     slopes = _display_slopes(cell, coefficient_scale)[:, order].T
     ids = cell["response_ids"][order]
     limit = _symmetric_limit(_display_slopes(cell, coefficient_scale))
-    data = _bin_data(preparation, cell, _response_values(region, cell, order), visible)
-    low, high, _ = _activity_scale(region, cell)
+    data = _bin_data(
+        preparation, cell, _heatmap_values(region, cell, order, heatmap_scale), visible
+    )
     with plt.rc_context(
         {
             "font.size": 14,
@@ -457,14 +488,18 @@ def save_inspection_figures(
                 data["x"],
                 np.arange(len(ids) + 1),
                 np.ma.masked_invalid(data["z"]),
-                cmap="viridis" if units == "Hz" else "RdBu_r",
+                cmap="viridis"
+                if units == "Hz" and heatmap_scale == "native"
+                else "RdBu_r",
                 vmin=low,
                 vmax=high,
             )
-            figure.colorbar(image, cax=figure.add_subplot(grid[0, 3]), label=units)
+            figure.colorbar(
+                image, cax=figure.add_subplot(grid[0, 3]), label=heatmap_units
+            )
         activity.set_yticks(np.arange(len(ids)) + 0.5, ids)
         activity.set_ylim(len(ids), 0)
-        activity.set_title(f"Neural activity ({units})")
+        activity.set_title(f"Neural activity ({heatmap_units})")
         detail.plot(*_steps(observed), label=f"Observed {selected}", color="#2563eb")
         detail.plot(
             *_steps(predicted), label=scope_label, color="#b91c1c", linestyle="--"
@@ -514,8 +549,45 @@ def _response_values(region: object, cell: dict, columns: np.ndarray) -> np.ndar
     return region.pca.scores[:, :, region.pc_ranks[columns] - 1]
 
 
-def _activity_scale(region: object, cell: dict) -> tuple[float, float, object]:
-    """Input saved activity/cell; return fixed full-regional native lower/upper limits and colorscale."""
+def _heatmap_values(
+    region: object, cell: dict, columns: np.ndarray, scale: str
+) -> np.ndarray:
+    """Return display values(W,B,R_selected), native units or per-unit SD units.
+
+    columns selects original response indices before allocating rates. Z-score
+    statistics use every saved window/bin for each selected unit, before the
+    viewport/gap geometry is applied. Input counts/scores are never modified.
+    """
+    values = _response_values(region, cell, columns)
+    return (
+        timeline_plotting.zscore_window_activity(values)
+        if scale == "within_unit_zscore"
+        else values
+    )
+
+
+def _activity_scale(
+    region: object, cell: dict, heatmap_scale: str = "native", zscore_limit: float = 3.0
+) -> tuple[float, float, object]:
+    """Return fixed color bounds/colors from saved activity and display controls.
+
+    Native bounds retain Hz/PC units. within_unit_zscore is unit-only and uses
+    a finite positive scalar SD limit; it changes colors, not stored values.
+    Return lower/upper floats and a Plotly colorscale. Invalid modes/limits raise.
+    """
+    if heatmap_scale not in ("native", "within_unit_zscore"):
+        raise ValueError("heatmap_scale must be native or within_unit_zscore")
+    if heatmap_scale == "within_unit_zscore":
+        if cell["meta"]["settings"]["representation"] != "units":
+            raise ValueError("Within-unit z-score heatmaps require unit responses")
+        if (
+            isinstance(zscore_limit, (bool, np.bool_))
+            or not isinstance(zscore_limit, (int, float, np.integer, np.floating))
+            or not np.isfinite(zscore_limit)
+            or zscore_limit <= 0
+        ):
+            raise ValueError("zscore_limit must be a finite positive number of SDs")
+        return -float(zscore_limit), float(zscore_limit), SIGNED_COLORS
     if cell["meta"]["settings"]["representation"] == "units":
         high = float(region.unit_counts.max(initial=0)) / np.diff(region.bin_edges_s)[0]
         return 0.0, max(1.0, high), "Viridis"
