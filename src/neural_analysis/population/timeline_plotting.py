@@ -68,26 +68,71 @@ def build_timeline_heatmap_data(
         ranks = np.arange(first, last + 1)
     else:
         ranks = np.asarray(pc_order)
-        if (pc_range is not None or ranks.ndim != 1 or not len(ranks)
-                or not np.issubdtype(ranks.dtype, np.integer)
-                or len(np.unique(ranks)) != len(ranks) or np.any(ranks < 1)
-                or np.any(ranks > component_count)):
-            raise ValueError("PC order must contain unique available one-based integer ranks")
+        if (
+            pc_range is not None
+            or ranks.ndim != 1
+            or not len(ranks)
+            or not np.issubdtype(ranks.dtype, np.integer)
+            or len(np.unique(ranks)) != len(ranks)
+            or np.any(ranks < 1)
+            or np.any(ranks > component_count)
+        ):
+            raise ValueError(
+                "PC order must contain unique available one-based integer ranks"
+            )
     scores = (
-        regional.scores[:, :, ranks - 1]
-        if display_scores is None
-        else display_scores
+        regional.scores[:, :, ranks - 1] if display_scores is None else display_scores
     )
     if scores.shape != (*regional.scores.shape[:2], len(ranks)):
         raise ValueError(
             "Display scores must match the windows, bins, and selected PCs."
         )
+    data = build_window_heatmap_data(
+        scores, choices, regional.choice_positions, regional.bin_edges_s, loaded_range_s
+    )
+    custom = np.empty((*data["customdata"].shape[:2], 8), dtype=object)
+    custom[:, :, :7] = data["customdata"]
+    custom[:, :, 7] = regional.transform.explained_variance_ratio[ranks - 1, None] * 100
+    custom[np.isnan(data["z"])] = None
+    return {**data, "y": ranks, "customdata": custom}
+
+
+def build_window_heatmap_data(
+    values: np.ndarray,
+    choices: pd.DataFrame,
+    choice_positions: np.ndarray,
+    bin_edges_s: np.ndarray,
+    loaded_range_s: tuple[float, float] | None = None,
+) -> dict[str, np.ndarray]:
+    """Map saved activity to actual-time edges without requiring a PCA object.
+
+    values has (windows, bins, responses) axes and retains its native units;
+    NaNs are allowed for unavailable predictions. choices has trial_id,
+    choice_time (UTC seconds), and elapsed_s. choice_positions(W,) indexes its
+    rows; bin_edges_s(B+1,) is choice-relative seconds. loaded_range_s selects
+    intersecting windows in elapsed seconds. Return x(M+1,), z(R,M), and
+    customdata(R,M,7): trial ID, UTC start/end, relative start/end, elapsed
+    start/end. Each real inter-window gap contributes one blank NaN column.
+    """
+    values = np.asarray(values)
+    positions = np.asarray(choice_positions)
+    relative_edges = np.asarray(bin_edges_s)
+    if (
+        values.ndim != 3
+        or positions.shape != (values.shape[0],)
+        or relative_edges.shape != (values.shape[1] + 1,)
+        or not np.all(np.diff(relative_edges) > 0)
+    ):
+        raise ValueError(
+            "Activity, choice positions, and bin edges must have matching geometry"
+        )
+    response_count = values.shape[2]
     edges = []
     columns = []
     custom = []
-    for window_index, choice_position in enumerate(regional.choice_positions):
+    for window_index, choice_position in enumerate(positions):
         choice = choices.iloc[int(choice_position)]
-        elapsed_edges = float(choice.elapsed_s) + regional.bin_edges_s
+        elapsed_edges = float(choice.elapsed_s) + relative_edges
         if loaded_range_s is not None:
             if (
                 elapsed_edges[-1] <= loaded_range_s[0]
@@ -96,34 +141,32 @@ def build_timeline_heatmap_data(
                 continue
         if edges and elapsed_edges[0] > edges[-1]:
             edges.append(float(elapsed_edges[0]))
-            columns.append(np.full((len(ranks), 1), np.nan))
-            custom.append(np.full((len(ranks), 1, 8), None, dtype=object))
+            columns.append(np.full((response_count, 1), np.nan))
+            custom.append(np.full((response_count, 1, 7), None, dtype=object))
         if not edges:
             edges.extend(elapsed_edges.tolist())
         else:
             edges.extend(elapsed_edges[1:].tolist())
-        values = scores[window_index].T
-        columns.append(values)
-        bin_count = values.shape[1]
-        info = np.empty((len(ranks), bin_count, 8), dtype=object)
+        window_values = values[window_index].T
+        columns.append(window_values)
+        bin_count = window_values.shape[1]
+        info = np.empty((response_count, bin_count, 7), dtype=object)
         info[:, :, 0] = choice.trial_id
-        info[:, :, 1] = float(choice.choice_time) + regional.bin_edges_s[:-1]
-        info[:, :, 2] = float(choice.choice_time) + regional.bin_edges_s[1:]
-        info[:, :, 3] = regional.bin_edges_s[:-1]
-        info[:, :, 4] = regional.bin_edges_s[1:]
+        info[:, :, 1] = float(choice.choice_time) + relative_edges[:-1]
+        info[:, :, 2] = float(choice.choice_time) + relative_edges[1:]
+        info[:, :, 3] = relative_edges[:-1]
+        info[:, :, 4] = relative_edges[1:]
         info[:, :, 5] = elapsed_edges[:-1]
         info[:, :, 6] = elapsed_edges[1:]
-        info[:, :, 7] = (
-            regional.transform.explained_variance_ratio[ranks - 1, None] * 100
-        )
         custom.append(info)
     return {
         "x": np.asarray(edges),
-        "y": ranks,
-        "z": np.concatenate(columns, axis=1) if columns else np.empty((len(ranks), 0)),
+        "z": np.concatenate(columns, axis=1)
+        if columns
+        else np.empty((response_count, 0)),
         "customdata": np.concatenate(custom, axis=1)
         if custom
-        else np.empty((len(ranks), 0, 8), dtype=object),
+        else np.empty((response_count, 0, 7), dtype=object),
     }
 
 
