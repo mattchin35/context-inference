@@ -38,6 +38,7 @@ def test_all_pc_predictions_match_unit_rotation():
     """No inputs; an orthogonal full-PC basis preserves L2 readout predictions."""
     rng = np.random.default_rng(4)
     x = rng.normal(size=(100, 5))
+    x = (x - x.mean(axis=0)) / x.std(axis=0)
     y = (x[:, 0] + rng.normal(size=100) > 0).astype(int)
     pca = fit_fold_pca(x)
     pc = transform_pc_activity(x, pca)
