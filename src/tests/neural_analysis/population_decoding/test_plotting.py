@@ -20,6 +20,7 @@ def test_outcomes_are_post_choice_and_real_gaps_remain(synthetic_population, tmp
         custom = [row for row in trace.customdata if row[0] is not None]
         assert all(row[1] >= 0 for row in custom)
     assert figure.layout.meta["target"] == "outcome"
+    assert figure.layout.meta["primary_time_axis"] == "xaxis"
     other = plot_decoding_timeline(synthetic_population, cell, "pcs", viewport_revision=2)
     assert figure.layout.uirevision == other.layout.uirevision
     path = tmp_path / "outcome.png"

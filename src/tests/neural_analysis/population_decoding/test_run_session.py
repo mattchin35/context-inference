@@ -79,3 +79,10 @@ def test_corrupt_existing_cell_is_not_overwritten(population_config_path):
     with pytest.raises(ValueError):
         run_session(command="resume", run_directory=run)
     assert cell.read_bytes() == b"corrupt"
+
+
+def test_unavailable_fold_reasons_are_recorded_in_run_log(population_config_path):
+    """Input small class-limited session; log records the scientific fit-support reason."""
+    report = run_session(population_config_path)
+    text = (Path(report["run_directory"]) / "run.log").read_text()
+    assert "training_class_missing" in text

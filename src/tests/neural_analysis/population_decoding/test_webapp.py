@@ -69,3 +69,15 @@ def test_empty_view_explains_how_to_compute(population_config_path):
     assert not view.exception
     assert any("No saved" in item.value for item in view.info)
     assert view.code
+
+
+def test_outcome_reward_summary_is_a_compact_side_table(population_config_path):
+    """Input saved source session; side-conditional reward summaries use two readable rows."""
+    run_session(population_config_path)
+    metadata = population_config_path.parent / "neural_session.json"
+    view = AppTest.from_function(render_for_test, args=(str(metadata),)).run()
+    next(item for item in view.selectbox if item.label == "Target").select("outcome").run()
+    tables = [item.value for item in view.dataframe if "Side" in item.value.columns]
+    assert len(tables) == 1
+    assert tables[0].Side.tolist() == ["Left", "Right"]
+    assert {"Reward trials", "No-reward trials", "Reward ROC-AUC"} <= set(tables[0])
