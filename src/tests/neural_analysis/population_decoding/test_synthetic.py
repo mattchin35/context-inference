@@ -3,6 +3,7 @@
 from dataclasses import replace
 from pathlib import Path
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.neural_analysis.population_decoding import pipeline, results
@@ -94,3 +95,42 @@ def test_saved_fold_axis_corruption_is_rejected(synthetic_population, tmp_path):
     np.savez_compressed(path, **data)
     with pytest.raises(ValueError, match="axes"):
         results.load_preparation(path)
+
+
+def test_full_spike_pipeline_recovers_signals(population_config_path, synthetic_population):
+    """Input seeded rate signals/source fixture; generate Poisson spikes, run/save both regions.
+
+    Source units are spike UTC seconds and cluster IDs. Eight good/mua units
+    span two good channels; bin-specific counts use seed=20261114. The entire
+    raw loader/IRIG/binning/CV/publication path is exercised on synthetic data.
+    """
+    root = population_config_path.parent
+    trials = synthetic_population.trials
+    trials.to_csv(root / "trials.csv", index=False)
+    trials.to_csv(root / "processed/augmented.csv", index=False)
+    rng = np.random.default_rng(20261114)
+    rates = synthetic_population.regions["PFC"].rates_hz
+    for probe in ("A", "B"):
+        pd.DataFrame({"cluster_id": np.arange(7, 15), "ch": np.arange(8) % 2,
+            "group": ["good", "mua"]*4, "KSLabel": ["good"]*8}).to_csv(root / probe / "cluster_info.tsv", sep="\t", index=False)
+        times, assignments = [], []
+        for trial in range(len(trials)):
+            choice = float(trials.choice_time.iloc[trial])
+            for bin_index in range(4):
+                for unit in range(8):
+                    count = rng.poisson(rates[trial, bin_index, unit] * .5)
+                    times.extend(choice - 1 + .5*bin_index + rng.uniform(.001, .499, count))
+                    assignments.extend([unit + 7]*count)
+        times = np.asarray(times)
+        order = np.argsort(times)
+        np.save(root / probe / "spike_clusters.npy", np.asarray(assignments)[order])
+        np.savez(root / probe / "aligned.npz", spike_utc_unix=times[order],
+            irig_utc_unix=np.arange(trials.start_time.iloc[0], trials.choice_time.iloc[-1] + 3))
+    report = run_session(population_config_path)
+    assert report["status"] == "complete"
+    directory = Path(report["run_directory"])
+    for region in ("PFC", "HPC"):
+        for target in TARGET_NAMES:
+            cell = results.load_cell(directory / "cells" / f"{region}_{target}.npz")
+            for representation in ("units", "pcs"):
+                assert cell["meta"]["representations"][representation]["pooled"]["balanced_accuracy"] > .8
