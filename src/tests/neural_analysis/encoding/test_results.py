@@ -18,6 +18,27 @@ def forbid_source_access(*args: object, **kwargs: object) -> None:
     raise AssertionError("Saved inspection must not load live sources or fit activity")
 
 
+@pytest.mark.parametrize("failure", ["negative_count", "fractional_count", "excess_count", "negative_penalty", "invalid_contrast"])
+def test_saved_support_and_penalty_values_are_validated(prepared_encoding_run, failure):
+    """Native support bin counts, feature penalties, and declared valid contrasts cannot contain corrupt values."""
+    progress = pipeline.run_prepared_encoding(prepared_encoding_run)
+    cell = results.load_cell(prepared_encoding_run / next(iter(progress["completed_cells"].values())))
+    if failure == "negative_count":
+        cell["predictor_nonzero_counts"][0] = -1
+    elif failure == "fractional_count":
+        cell["fold_predictor_nonzero_counts"] = cell["fold_predictor_nonzero_counts"].astype(float)
+        cell["fold_predictor_nonzero_counts"][0, 0] = .5
+    elif failure == "excess_count":
+        cell["predictor_nonzero_counts"][0] = cell["meta"]["row_count"] + 1
+    elif failure == "negative_penalty":
+        cell["penalty_vector"][0] = -1
+    else:
+        cell["contrast_valid"][0] = True
+        cell["contrasts"][0] = np.nan
+    with pytest.raises(ValueError, match="count|penalt|contrast"):
+        results.save_cell(prepared_encoding_run / "invalid_support.npz", cell)
+
+
 def test_preparation_round_trip_retains_full_behavior_basis_and_row_identity(prepared_encoding_run: Path) -> None:
     """Input run Path; saved (W,B,K) axes/scales, original UTC origin and rows survive, return None."""
     manifest = results.load_run_manifest(prepared_encoding_run)
