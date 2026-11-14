@@ -1,1 +1,1 @@
-"""Offline context encoding on fixed descriptive regional neural PC axes."""
+"""Joint context, choice and outcome encoding on units and descriptive regional PCs."""

@@ -7,14 +7,24 @@ from pathlib import Path
 from src.neural_analysis.session_metadata import load_session_metadata
 
 from .configuration import (
-    ANALYSIS_VERSION, ENCODINGS, ESTIMATORS, PENALTY_MODES, SUPPORTED_BIN_WIDTH_MS, RESPONSE_REPRESENTATIONS,
-    _input_path, _probe_roles, _read_json_object,
+    ANALYSIS_VERSION,
+    ENCODINGS,
+    ESTIMATORS,
+    PENALTY_MODES,
+    SUPPORTED_BIN_WIDTH_MS,
+    RESPONSE_REPRESENTATIONS,
+    _input_path,
+    _probe_roles,
+    _read_json_object,
 )
 
 
 def initialize_encoding_config(
-    metadata_path: Path | str, *, augmented_trials: Path | str | None = None,
-    feature_parameters: Path | str | None = None, bin_width_ms: int = 500,
+    metadata_path: Path | str,
+    *,
+    augmented_trials: Path | str | None = None,
+    feature_parameters: Path | str | None = None,
+    bin_width_ms: int = 500,
     probe_roles: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Create sibling context_encoding_config.json or preserve an existing file.
@@ -50,22 +60,39 @@ def initialize_encoding_config(
     if augmented_trials is None or feature_parameters is None:
         task_path = root / "task_decoding_config.json"
         if not task_path.is_file():
-            raise ValueError("No task_decoding_config.json; supply --augmented-trials and --feature-parameters")
-        task = _read_json_object(task_path, "task_decoding_config.json (or supply explicit input paths)")
-    augmented = _input_path(root, str(augmented_trials) if augmented_trials is not None
-                            else task.get("augmented_trial_path"), "--augmented-trials")
-    features = _input_path(root, str(feature_parameters) if feature_parameters is not None
-                           else task.get("trial_feature_parameter_path"), "--feature-parameters")
+            raise ValueError(
+                "No task_decoding_config.json; supply --augmented-trials and --feature-parameters"
+            )
+        task = _read_json_object(
+            task_path, "task_decoding_config.json (or supply explicit input paths)"
+        )
+    augmented = _input_path(
+        root,
+        str(augmented_trials)
+        if augmented_trials is not None
+        else task.get("augmented_trial_path"),
+        "--augmented-trials",
+    )
+    features = _input_path(
+        root,
+        str(feature_parameters)
+        if feature_parameters is not None
+        else task.get("trial_feature_parameter_path"),
+        "--feature-parameters",
+    )
     _read_json_object(features, "feature_parameters (--feature-parameters)")
     payload = {
         "analysis_version": ANALYSIS_VERSION,
         "session_metadata": metadata_path.name,
         "augmented_trials": _portable_locator(augmented, root),
         "feature_parameters": _portable_locator(features, root),
-        "probe_roles": roles, "bin_width_ms": bin_width_ms,
+        "probe_roles": roles,
+        "bin_width_ms": bin_width_ms,
         "response_representations": list(RESPONSE_REPRESENTATIONS),
-        "encodings": list(ENCODINGS), "estimators": list(ESTIMATORS),
-        "alpha": 1.0, "penalty_modes": list(PENALTY_MODES),
+        "encodings": list(ENCODINGS),
+        "estimators": list(ESTIMATORS),
+        "alpha": 1.0,
+        "penalty_modes": list(PENALTY_MODES),
     }
     encoded = json.dumps(payload, indent=2, ensure_ascii=True) + "\n"
     try:
@@ -79,4 +106,8 @@ def initialize_encoding_config(
 # Path formatting is separate from input validation and exclusive publication.
 def _portable_locator(path: Path, session_root: Path) -> str:
     """Return a session-relative POSIX locator when contained, otherwise an absolute path string."""
-    return path.relative_to(session_root).as_posix() if path.is_relative_to(session_root) else str(path)
+    return (
+        path.relative_to(session_root).as_posix()
+        if path.is_relative_to(session_root)
+        else str(path)
+    )

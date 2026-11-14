@@ -180,8 +180,8 @@ def plot_encoding_timeline(
                 "orientation": "h",
                 "x": sum(panel.xaxis.domain) / 2,
                 "xanchor": "center",
-                "y": panel.yaxis.domain[1] + 0.025,
-                "yanchor": "bottom",
+                "y": panel.yaxis.domain[0] - 0.14,
+                "yanchor": "top",
                 "thickness": 10,
                 "len": panel.xaxis.domain[1] - panel.xaxis.domain[0],
             },
@@ -223,7 +223,12 @@ def plot_encoding_timeline(
             zsmooth=False,
             connectgaps=False,
             hoverongaps=False,
-            colorbar={"title": units, "len": 0.25},
+            colorbar={
+                "title": {"text": units, "side": "right"},
+                "y": sum(panel.yaxis.domain) / 2,
+                "len": panel.yaxis.domain[1] - panel.yaxis.domain[0],
+                "thickness": 16,
+            },
             hovertemplate="%{customdata[7]}" + variance + "<br>Trial %{customdata[0]}"
             "<br>Elapsed [%{customdata[5]:.3f}, %{customdata[6]:.3f}) s"
             "<br>UTC [%{customdata[1]:.6f}, %{customdata[2]:.6f}) s"

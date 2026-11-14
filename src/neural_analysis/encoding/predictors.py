@@ -15,10 +15,19 @@ from src.behavior_analysis.project_utils import (
 from src.neural_analysis.encoding.configuration import ENCODINGS
 
 
-OUTCOME_COLUMNS = ("left_reward", "right_reward", "left_omission", "right_omission", "left_incorrect", "right_incorrect")
+OUTCOME_COLUMNS = (
+    "left_reward",
+    "right_reward",
+    "left_omission",
+    "right_omission",
+    "left_incorrect",
+    "right_incorrect",
+)
 
 
-def classify_choice_outcomes(actions, rewards, correctness) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def classify_choice_outcomes(
+    actions, rewards, correctness
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Classify aligned (T,) source vectors, using 0=right/1=left and binary reward/correctness.
 
     Return string codes, Boolean validity and reason strings, each (T,).
@@ -28,7 +37,9 @@ def classify_choice_outcomes(actions, rewards, correctness) -> tuple[np.ndarray,
     """
     arrays = [np.asarray(values) for values in (actions, rewards, correctness)]
     if any(values.ndim != 1 or values.shape != arrays[0].shape for values in arrays):
-        raise ValueError("Outcome source vectors must have matching one-dimensional shapes")
+        raise ValueError(
+            "Outcome source vectors must have matching one-dimensional shapes"
+        )
     action, reward, correct = [_numeric(pd.Series(values)) for values in arrays]
     codes = np.full(len(action), "", dtype="U24")
     reasons = np.full(len(action), "", dtype="U64")
@@ -41,13 +52,23 @@ def classify_choice_outcomes(actions, rewards, correctness) -> tuple[np.ndarray,
             reasons[i] = "unknown_correctness"
         else:
             side = "left" if action[i] == 1 else "right"
-            outcome = "reward" if reward[i] == 1 else "omission" if correct[i] == 1 else "incorrect"
+            outcome = (
+                "reward"
+                if reward[i] == 1
+                else "omission"
+                if correct[i] == 1
+                else "incorrect"
+            )
             codes[i] = f"{side}_{outcome}"
     return codes, reasons == "", reasons
 
 
-def build_joint_predictors(trials: pd.DataFrame, row_positions: np.ndarray,
-                           relative_bin_edges_s: np.ndarray, encoding: str) -> dict:
+def build_joint_predictors(
+    trials: pd.DataFrame,
+    row_positions: np.ndarray,
+    relative_bin_edges_s: np.ndarray,
+    encoding: str,
+) -> dict:
     """Build native trial-major X(W*B,P) for the exact choice-relative [-1,+1) second window.
 
     trials is the complete chronological source DataFrame, with action/reward/
@@ -62,35 +83,69 @@ def build_joint_predictors(trials: pd.DataFrame, row_positions: np.ndarray,
     _validate_trial_sequence(trials)
     _require_columns(trials, {"action", "reward", "correct"})
     positions = np.asarray(row_positions)
-    if (positions.ndim != 1 or not np.issubdtype(positions.dtype, np.integer)
-            or np.any(positions < 0) or np.any(positions >= len(trials))
-            or len(np.unique(positions)) != len(positions)):
-        raise ValueError("row_positions must contain distinct original integer trial positions")
+    if (
+        positions.ndim != 1
+        or not np.issubdtype(positions.dtype, np.integer)
+        or np.any(positions < 0)
+        or np.any(positions >= len(trials))
+        or len(np.unique(positions)) != len(positions)
+    ):
+        raise ValueError(
+            "row_positions must contain distinct original integer trial positions"
+        )
     edges = np.asarray(relative_bin_edges_s, dtype=float)
-    if (edges.ndim != 1 or len(edges) < 3 or not np.isfinite(edges).all()
-            or edges[0] != -1 or edges[-1] != 1 or not np.any(edges == 0)
-            or not np.all(np.diff(edges) > 0)
-            or not np.allclose(np.diff(edges), edges[1]-edges[0])
-            or not np.any(np.isclose(edges[1]-edges[0], [.5,.1,.05,.02]))):
-        raise ValueError("bin edges must uniformly span window [-1,+1), include zero, and use a supported bin width")
+    if (
+        edges.ndim != 1
+        or len(edges) < 3
+        or not np.isfinite(edges).all()
+        or edges[0] != -1
+        or edges[-1] != 1
+        or not np.any(edges == 0)
+        or not np.all(np.diff(edges) > 0)
+        or not np.allclose(np.diff(edges), edges[1] - edges[0])
+        or not np.any(np.isclose(edges[1] - edges[0], [0.5, 0.1, 0.05, 0.02]))
+    ):
+        raise ValueError(
+            "bin edges must uniformly span window [-1,+1), include zero, and use a supported bin width"
+        )
     baseline = select_baseline_trials(trials).iloc[positions]
-    codes, known, outcome_reasons = classify_choice_outcomes(trials.action, trials.reward, trials.correct)
-    context, context_valid, names = encode_context(_numeric(trials.state_int)[positions], encoding)
-    bins = len(edges)-1
+    codes, known, outcome_reasons = classify_choice_outcomes(
+        trials.action, trials.reward, trials.correct
+    )
+    context, context_valid, names = encode_context(
+        _numeric(trials.state_int)[positions], encoding
+    )
+    bins = len(edges) - 1
     names = names + ("signed_choice",) + OUTCOME_COLUMNS
     matrix = np.zeros((len(positions), bins, len(names)), dtype=float)
-    matrix[:, :, :context.shape[1]] = context[:, None, :]
-    matrix[:, :, context.shape[1]] = (2*_numeric(trials.action)[positions]-1)[:, None]
+    matrix[:, :, : context.shape[1]] = context[:, None, :]
+    matrix[:, :, context.shape[1]] = (2 * _numeric(trials.action)[positions] - 1)[
+        :, None
+    ]
     for column, code in enumerate(OUTCOME_COLUMNS):
-        matrix[:, :, context.shape[1]+1+column] = (codes[positions] == code)[:, None] * (edges[:-1] >= 0)[None, :]
+        matrix[:, :, context.shape[1] + 1 + column] = (codes[positions] == code)[
+            :, None
+        ] * (edges[:-1] >= 0)[None, :]
     valid = baseline.baseline_valid.to_numpy() & known[positions] & context_valid
-    reasons = np.asarray([";".join(filter(None, (base, outcome_reasons[pos])))
-                          for base, pos in zip(baseline.baseline_invalid_reason, positions)], dtype=str)
+    reasons = np.asarray(
+        [
+            ";".join(filter(None, (base, outcome_reasons[pos])))
+            for base, pos in zip(baseline.baseline_invalid_reason, positions)
+        ],
+        dtype=str,
+    )
     matrix[~valid] = np.nan
-    return {"predictors": matrix.reshape(-1, len(names)), "valid": np.repeat(valid, bins),
-            "invalid_reason": np.repeat(reasons, bins), "column_names": names,
-            "condition_counts": {code: int(np.sum((codes[positions] == code) & valid)) for code in OUTCOME_COLUMNS},
-            "outcome_codes": codes[positions]}
+    return {
+        "predictors": matrix.reshape(-1, len(names)),
+        "valid": np.repeat(valid, bins),
+        "invalid_reason": np.repeat(reasons, bins),
+        "column_names": names,
+        "condition_counts": {
+            code: int(np.sum((codes[positions] == code) & valid))
+            for code in OUTCOME_COLUMNS
+        },
+        "outcome_codes": codes[positions],
+    }
 
 
 # Public computations retain source row positions independently of index labels.
@@ -118,9 +173,13 @@ def select_baseline_trials(trials: pd.DataFrame) -> pd.DataFrame:
     _require_columns(working, {"cur_block", "action", EXPERIMENTER_REWARD_GIVEN_COLUMN})
     states = _numeric(working["state_int"])
     actions = _numeric(working["action"])
-    no_choice = make_no_choice_action_mask(working["action"]).to_numpy() | ~np.isin(actions, [0, 1])
+    no_choice = make_no_choice_action_mask(working["action"]).to_numpy() | ~np.isin(
+        actions, [0, 1]
+    )
     flags = _numeric(working[EXPERIMENTER_REWARD_GIVEN_COLUMN])
-    flag_present = is_present_value(working[EXPERIMENTER_REWARD_GIVEN_COLUMN]).to_numpy()
+    flag_present = is_present_value(
+        working[EXPERIMENTER_REWARD_GIVEN_COLUMN]
+    ).to_numpy()
     if np.any(flag_present & ~np.isfinite(flags)):
         raise ValueError("experimenter_reward_given must contain finite numeric flags")
     manual = ~is_zero_flag(working[EXPERIMENTER_REWARD_GIVEN_COLUMN]).to_numpy()
@@ -130,22 +189,32 @@ def select_baseline_trials(trials: pd.DataFrame) -> pd.DataFrame:
     reasons = []
     for row in range(len(working)):
         row_reasons = []
-        for mask, reason in ((manual, "manual_reward"), (no_choice, "no_animal_choice"),
-                             (missing_choice, "missing_choice_time"), (dark, "dark_context"),
-                             (invalid_context, "invalid_context")):
+        for mask, reason in (
+            (manual, "manual_reward"),
+            (no_choice, "no_animal_choice"),
+            (missing_choice, "missing_choice_time"),
+            (dark, "dark_context"),
+            (invalid_context, "invalid_context"),
+        ):
             if mask[row]:
                 row_reasons.append(reason)
         reasons.append(";".join(row_reasons))
-    return pd.DataFrame({
-        "row_position": np.arange(len(working)),
-        "trial_id": working["cur_trial"].to_numpy(copy=True),
-        "block_id": working["cur_block"].to_numpy(copy=True),
-        "baseline_valid": ~(manual | no_choice | missing_choice | dark | invalid_context),
-        "baseline_invalid_reason": reasons,
-    })
+    return pd.DataFrame(
+        {
+            "row_position": np.arange(len(working)),
+            "trial_id": working["cur_trial"].to_numpy(copy=True),
+            "block_id": working["cur_block"].to_numpy(copy=True),
+            "baseline_valid": ~(
+                manual | no_choice | missing_choice | dark | invalid_context
+            ),
+            "baseline_invalid_reason": reasons,
+        }
+    )
 
 
-def encode_context(values: np.ndarray, encoding: str) -> tuple[np.ndarray, np.ndarray, tuple[str, ...]]:
+def encode_context(
+    values: np.ndarray, encoding: str
+) -> tuple[np.ndarray, np.ndarray, tuple[str, ...]]:
     """Encode native context values without an intercept column or standardization.
 
     Parameters
@@ -199,9 +268,21 @@ def validate_trial_tables(augmented: pd.DataFrame, source: pd.DataFrame) -> None
     """
     _validate_trial_sequence(augmented)
     _validate_trial_sequence(source)
+    augmented = normalize_experimenter_reward_column(augmented)
+    source = normalize_experimenter_reward_column(source)
     if len(augmented) != len(source):
         raise ValueError("Complete trial tables have different row counts")
-    for column in ("cur_trial", "start_time", "choice_time", "state_int", "action", "reward", "correct"):
+    for column in (
+        "cur_trial",
+        "cur_block",
+        "start_time",
+        "choice_time",
+        "state_int",
+        "action",
+        "reward",
+        "correct",
+        EXPERIMENTER_REWARD_GIVEN_COLUMN,
+    ):
         _require_columns(augmented, {column})
         _require_columns(source, {column})
         first = _numeric(augmented[column])
@@ -237,10 +318,16 @@ def diagnose_context_events(trials: pd.DataFrame, events: pd.DataFrame) -> list[
     _validate_trial_sequence(trials)
     if not {"Time", "Event"}.issubset(events.columns):
         return ["Context event log lacks Time/Event columns"]
-    event_codes = {"enter_right_patch": 0, "enter_left_patch": 1, "enter_dark_period": 2}
+    event_codes = {
+        "enter_right_patch": 0,
+        "enter_left_patch": 1,
+        "enter_dark_period": 2,
+    }
     entries = events.loc[events["Event"].isin(event_codes)].copy()
     if entries.empty:
-        return ["No recorded context-entry events are available for state-order diagnostics"]
+        return [
+            "No recorded context-entry events are available for state-order diagnostics"
+        ]
     times = _numeric(entries["Time"])
     if not np.isfinite(times).all():
         return ["Context event timestamps contain invalid UTC seconds"]
@@ -252,27 +339,47 @@ def diagnose_context_events(trials: pd.DataFrame, events: pd.DataFrame) -> list[
     states = _numeric(trials["state_int"])
     messages = []
     if not np.isin(states, [0, 1, 2]).all():
-        messages.append("Trial context contains unavailable states; event-order comparison is incomplete")
+        messages.append(
+            "Trial context contains unavailable states; event-order comparison is incomplete"
+        )
     expected = _state_order(states[np.isin(states, [0, 1, 2])])
     if logged == expected:
         return messages
     first_difference = 0
-    while (first_difference < min(len(expected), len(logged))
-           and expected[first_difference] == logged[first_difference]):
+    while (
+        first_difference < min(len(expected), len(logged))
+        and expected[first_difference] == logged[first_difference]
+    ):
         first_difference += 1
     # Only an exact trial-context prefix permits ignoring unused terminal events.
     # The last start also protects a represented final trial without a choice.
     choices = _numeric(trials["choice_time"])
-    boundary = max(_numeric(trials["start_time"])[-1], choices[np.isfinite(choices)].max(initial=-np.inf))
-    if (expected and first_difference == len(expected)
-            and np.all(segment_times[first_difference:] > boundary)):
+    boundary = max(
+        _numeric(trials["start_time"])[-1],
+        choices[np.isfinite(choices)].max(initial=-np.inf),
+    )
+    if (
+        expected
+        and first_difference == len(expected)
+        and np.all(segment_times[first_difference:] > boundary)
+    ):
         return messages
     labels = ("right", "left", "dark")
-    trial_state = labels[expected[first_difference]] if first_difference < len(expected) else "missing"
-    logged_state = labels[logged[first_difference]] if first_difference < len(logged) else "missing"
-    messages.append(f"Context state order differs at segment {first_difference + 1}: "
-                    f"trial={trial_state}, logged={logged_state} "
-                    f"({len(expected)} trial segments, {len(logged)} logged segments)")
+    trial_state = (
+        labels[expected[first_difference]]
+        if first_difference < len(expected)
+        else "missing"
+    )
+    logged_state = (
+        labels[logged[first_difference]]
+        if first_difference < len(logged)
+        else "missing"
+    )
+    messages.append(
+        f"Context state order differs at segment {first_difference + 1}: "
+        f"trial={trial_state}, logged={logged_state} "
+        f"({len(expected)} trial segments, {len(logged)} logged segments)"
+    )
     return messages
 
 
@@ -286,7 +393,9 @@ def _require_columns(table: pd.DataFrame, required: set[str]) -> None:
 
 def _numeric(values: pd.Series) -> np.ndarray:
     """Convert (W,) Series to float64 (W,), preserving units; missing/invalid -> NaN."""
-    return pd.to_numeric(values.where(is_present_value(values)), errors="coerce").to_numpy(dtype=float)
+    return pd.to_numeric(
+        values.where(is_present_value(values)), errors="coerce"
+    ).to_numpy(dtype=float)
 
 
 def _validate_trial_sequence(table: pd.DataFrame) -> None:
@@ -295,15 +404,23 @@ def _validate_trial_sequence(table: pd.DataFrame) -> None:
         raise ValueError("Complete trial table must be a nonempty DataFrame")
     _require_columns(table, {"cur_trial", "start_time", "choice_time", "state_int"})
     ids = _numeric(table["cur_trial"])
-    if not np.isfinite(ids).all() or not np.equal(ids, np.floor(ids)).all() or len(np.unique(ids)) != len(ids):
+    if (
+        not np.isfinite(ids).all()
+        or not np.equal(ids, np.floor(ids)).all()
+        or len(np.unique(ids)) != len(ids)
+    ):
         raise ValueError("cur_trial must contain unique finite integer trial IDs")
     starts = _numeric(table["start_time"])
     if not np.isfinite(starts).all() or not np.all(np.diff(starts) > 0):
-        raise ValueError("start_time must contain finite strictly chronological UTC seconds")
+        raise ValueError(
+            "start_time must contain finite strictly chronological UTC seconds"
+        )
     choices = _numeric(table["choice_time"])
     present = is_present_value(table["choice_time"]).to_numpy()
     if np.any(present & ~np.isfinite(choices)) or np.any(choices < starts):
-        raise ValueError("choice_time must be missing or finite UTC seconds at/after start_time")
+        raise ValueError(
+            "choice_time must be missing or finite UTC seconds at/after start_time"
+        )
 
 
 def _state_order(states: np.ndarray) -> list[int]:

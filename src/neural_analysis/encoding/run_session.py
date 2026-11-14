@@ -253,7 +253,7 @@ def _plan(config: EncodingConfig) -> dict:
 
 
 def _publish_preparation(config: EncodingConfig, path: Path, identities: dict) -> float:
-    """Input config/new NPZ Path/identities; save a fixed PCA snapshot and return publication seconds.
+    """Input config/new NPZ Path/identities; save common activity and optional fixed PCA and return publication seconds.
 
     Saved score axes are (window,bin,original PC), with UTC/elapsed/relative
     seconds retained by preparation. Runtime is recorded in elapsed seconds.
@@ -531,7 +531,7 @@ def _append_log(directory: Path, message: str) -> None:
 def _write_summary(directory: Path, config: EncodingConfig, progress: dict) -> None:
     """Input run Path/config/progress; update this run's human-readable summary, return None.
 
-    Bin width is milliseconds; coefficients/predictions preserve PC-score units.
+    Bin width is milliseconds; coefficients/predictions preserve Hz or PC-score units.
     This mutable execution summary never replaces a scientific NPZ product.
     """
     text = (

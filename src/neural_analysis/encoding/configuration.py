@@ -1,4 +1,4 @@
-"""Small portable input configuration for the PC-first context encoding analysis."""
+"""Portable configuration for joint context, choice and outcome encoding."""
 
 from __future__ import annotations
 
@@ -14,8 +14,6 @@ from src.neural_analysis.session_metadata import SessionMetadata, load_session_m
 
 ANALYSIS_VERSION = "joint-task-encoding-v2"
 SUPPORTED_BIN_WIDTH_MS = (500, 100, 50, 20)
-WINDOWS = ("whole",)
-TIMING_MODES = ("trial_window",)
 RESPONSE_REPRESENTATIONS = ("units", "pcs")
 ENCODINGS = ("signed_context", "separate_context")
 ESTIMATORS = ("ridge", "ols")
@@ -72,19 +70,40 @@ def load_encoding_config(path: Path | str) -> EncodingConfig:
     """
     config_path = Path(path).expanduser().resolve()
     payload = _read_json_object(config_path, "configuration")
-    required = {"analysis_version", "session_metadata", "augmented_trials", "feature_parameters"}
-    optional = {"probe_roles", "bin_width_ms", "response_representations",
-                "encodings", "estimators", "alpha", "penalty_modes"}
+    required = {
+        "analysis_version",
+        "session_metadata",
+        "augmented_trials",
+        "feature_parameters",
+    }
+    optional = {
+        "probe_roles",
+        "bin_width_ms",
+        "response_representations",
+        "encodings",
+        "estimators",
+        "alpha",
+        "penalty_modes",
+    }
     unknown = set(payload) - required - optional
     if unknown:
-        raise ValueError(f"Unsupported configuration fields: {sorted(unknown)}; use docs/examples/neural_analysis/context_encoding_config.json")
+        raise ValueError(
+            f"Unsupported configuration fields: {sorted(unknown)}; use docs/examples/neural_analysis/context_encoding_config.json"
+        )
     missing = required - set(payload)
     if missing:
-        raise ValueError(f"Missing configuration fields: {sorted(missing)}; use docs/examples/neural_analysis/context_encoding_config.json")
+        raise ValueError(
+            f"Missing configuration fields: {sorted(missing)}; use docs/examples/neural_analysis/context_encoding_config.json"
+        )
     if payload["analysis_version"] != ANALYSIS_VERSION:
-        raise ValueError(f"analysis_version must be {ANALYSIS_VERSION}; create a new config from docs/examples/neural_analysis/context_encoding_config.json")
+        raise ValueError(
+            f"analysis_version must be {ANALYSIS_VERSION}; create a new config from docs/examples/neural_analysis/context_encoding_config.json"
+        )
 
-    inputs = {field: _input_path(config_path.parent, payload[field], field) for field in required - {"analysis_version"}}
+    inputs = {
+        field: _input_path(config_path.parent, payload[field], field)
+        for field in required - {"analysis_version"}
+    }
     metadata = load_session_metadata(inputs["session_metadata"])
     _read_json_object(inputs["feature_parameters"], "feature_parameters")
     roles = _probe_roles(payload.get("probe_roles"), metadata)
@@ -96,19 +115,29 @@ def load_encoding_config(path: Path | str) -> EncodingConfig:
         raise ValueError("alpha must be a finite positive number")
     selections = {}
     for field, allowed, default in (
-        ("response_representations", RESPONSE_REPRESENTATIONS, RESPONSE_REPRESENTATIONS),
+        (
+            "response_representations",
+            RESPONSE_REPRESENTATIONS,
+            RESPONSE_REPRESENTATIONS,
+        ),
         ("encodings", ENCODINGS, ENCODINGS),
         ("estimators", ESTIMATORS, ESTIMATORS),
         ("penalty_modes", PENALTY_MODES, ("same_numeric",)),
     ):
-        selections[field] = _selection(payload.get(field, list(default)), field, allowed)
+        selections[field] = _selection(
+            payload.get(field, list(default)), field, allowed
+        )
 
     root = inputs["session_metadata"].parent
     return EncodingConfig(
-        **inputs, session_root=root,
-        intermediate_root=root / "processed/context_encoding", run_root=root / "analysis_runs",
+        **inputs,
+        session_root=root,
+        intermediate_root=root / "processed/context_encoding",
+        run_root=root / "analysis_runs",
         probe_roles=MappingProxyType(roles),
-        bin_width_ms=width, alpha=float(alpha), **selections,
+        bin_width_ms=width,
+        alpha=float(alpha),
+        **selections,
     )
 
 
@@ -152,10 +181,16 @@ def _probe_roles(value: object, metadata: SessionMetadata) -> dict[str, str]:
             raise ValueError("probe_roles is required for version-2 metadata")
         roles = metadata.analysis.probe_roles
         value = {"PFC": roles.pfc, "HPC": roles.hpc}
-    if not isinstance(value, dict) or not value or not set(value).issubset({"PFC", "HPC"}):
+    if (
+        not isinstance(value, dict)
+        or not value
+        or not set(value).issubset({"PFC", "HPC"})
+    ):
         raise ValueError("probe_roles must be a nonempty PFC/HPC mapping")
     declared = {probe.probe_id for probe in metadata.probes}
-    if any(not isinstance(probe, str) or probe not in declared for probe in value.values()):
+    if any(
+        not isinstance(probe, str) or probe not in declared for probe in value.values()
+    ):
         raise ValueError("probe_roles must reference declared metadata probes")
     if len(set(value.values())) != len(value):
         raise ValueError("probe_roles must use distinct probes")
