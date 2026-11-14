@@ -11,71 +11,44 @@ from sklearn.linear_model import LinearRegression, Ridge
 
 @dataclass(frozen=True)
 class LinearFit:
-    """One fitted response matrix with an unpenalized intercept.
+    """Numerical fit with slopes(P,R), intercept(R,), and actual slope penalties(P,).
 
-    slopes is float64 (P,K), axes predictor/response; intercept is (K,).
-    Slopes have PC-score units per native predictor unit; intercept has the
-    original PC-score units. estimator and coefficient_convention identify the
-    method. Ridge retains configured_alpha, effective_alpha, penalty_mode and
-    encoding; OLS penalty fields are None. limitations contains descriptive
-    warnings about constant predictors/responses, not fit-rejection rules.
+    Responses retain their supplied physical units; slopes are response units
+    per native predictor unit. configured_alpha is positive for ridge, None
+    for OLS; OLS penalties are zero. No analysis/representation dispatch occurs.
     """
-
     slopes: np.ndarray
     intercept: np.ndarray
     estimator: str
     configured_alpha: float | None
-    effective_alpha: float | None
-    penalty_mode: str | None
+    penalties: np.ndarray
     coefficient_convention: str
-    limitations: tuple[str, ...]
-    encoding: str | None = None
+    limitations: tuple[str,...]
 
 
-# Public numerical computations; inputs are already selected eligible bin rows.
-def fit_ridge_responses(
-    predictors: np.ndarray,
-    responses: np.ndarray,
-    alpha: float = 1.0,
-    *,
-    encoding: str = "signed_context",
-    penalty_mode: str = "same_numeric",
-) -> LinearFit:
-    """Fit summed-SSE ridge with native columns and an unpenalized intercept.
+# Public numerical computations use native arrays and explicit feature penalties.
+def fit_ridge_responses(predictors: np.ndarray, responses: np.ndarray, alpha: float = 1.0,
+                        *, penalty_weights: np.ndarray | None = None) -> LinearFit:
+    """Fit X(N,P), Y(N,R) with summed SSE, an unpenalized intercept and feature penalties.
 
-    Parameters
-    ----------
-    predictors : np.ndarray
-        Finite float-compatible X (N,P), without an explicit ones column.
-        Context values stay native: P=1 signed or P=2 left/right indicators.
-    responses : np.ndarray
-        Finite Y (N,K) in fixed unwhitened PC-score units; no response scaling.
-    alpha : float
-        Positive finite coefficient penalty for summed SSE + alpha*sum(b**2).
-    encoding, penalty_mode : str
-        signed_context/separate_context and same_numeric/matched_context.
-        matched_context halves alpha only for the two-indicator representation.
-
-    Returns
-    -------
-    LinearFit
-        Slopes (P,K), intercept (K,), and actual numeric penalty. Dense SVD
-        fits redundant or constant columns without pruning. Input arrays are
-        unchanged; invalid shapes/nonfinite inputs or outputs raise ValueError.
+    Inputs must be finite two-dimensional arrays in native predictor/response
+    units. alpha is positive; penalty_weights(P,) is positive dimensionless
+    feature weights, default ones. Actual penalties are alpha*weights.
+    Reparameterize X by 1/sqrt(weights) for the existing Ridge SVD solver,
+    then map slopes back to native units. Return LinearFit with slopes(P,R),
+    intercept(R,) and actual penalties(P,). Inputs and their axes are unchanged.
     """
-    x, y = _validate_arrays(predictors, responses)
-    _validate_context_settings(x.shape[1], encoding, penalty_mode)
-    if type(alpha) not in (int, float) or not math.isfinite(alpha) or alpha <= 0:
+    x,y=_validate_arrays(predictors,responses)
+    if type(alpha) not in (int,float) or not math.isfinite(alpha) or alpha<=0:
         raise ValueError("alpha must be a finite positive number")
-    effective_alpha = float(alpha)
-    if penalty_mode == "matched_context" and encoding == "separate_context":
-        effective_alpha /= 2
-    estimator = Ridge(alpha=effective_alpha, fit_intercept=True, solver="svd")
-    estimator.fit(x, y)
-    slopes, intercept = _coefficient_arrays(estimator.coef_, estimator.intercept_, x.shape[1], y.shape[1])
-    return LinearFit(slopes, intercept, "ridge", float(alpha), effective_alpha,
-                     penalty_mode, "L2-penalized slopes; unpenalized intercept",
-                     _fit_limitations(x, y), encoding)
+    weights=_penalty_weights(penalty_weights,x.shape[1])
+    scale=1/np.sqrt(weights)
+    estimator=Ridge(alpha=float(alpha),fit_intercept=True,solver="svd")
+    estimator.fit(x*scale,y)
+    slopes,intercept=_coefficient_arrays(estimator.coef_,estimator.intercept_,x.shape[1],y.shape[1])
+    slopes*=scale[:,None]
+    return LinearFit(slopes,intercept,"ridge",float(alpha),float(alpha)*weights,
+        "Feature-weighted L2 slopes; unpenalized intercept",_fit_limitations(x,y))
 
 
 def fit_ols_responses(predictors: np.ndarray, responses: np.ndarray) -> LinearFit:
@@ -86,7 +59,7 @@ def fit_ols_responses(predictors: np.ndarray, responses: np.ndarray) -> LinearFi
     predictors : np.ndarray
         Finite X (N,P) in native dimensionless predictor units, no ones column.
     responses : np.ndarray
-        Finite Y (N,K) in fixed PC-score units.
+        Finite Y (N,K) in supplied response units.
 
     Returns
     -------
@@ -99,7 +72,7 @@ def fit_ols_responses(predictors: np.ndarray, responses: np.ndarray) -> LinearFi
     estimator = LinearRegression(fit_intercept=True)
     estimator.fit(x, y)
     slopes, intercept = _coefficient_arrays(estimator.coef_, estimator.intercept_, x.shape[1], y.shape[1])
-    return LinearFit(slopes, intercept, "ols", None, None, None,
+    return LinearFit(slopes, intercept, "ols", None, np.zeros(x.shape[1]),
                      "Centered minimum-Euclidean-norm slopes; unpenalized intercept",
                      _fit_limitations(x, y))
 
@@ -117,7 +90,7 @@ def predict_responses(predictors: np.ndarray, fit: LinearFit) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        Float64 predicted responses (N,K), original PC-score units. Nonfinite
+        Float64 predicted responses (N,K), original response units. Nonfinite
         inputs/results and mismatched predictor axes raise ValueError.
     """
     x = np.asarray(predictors, dtype=np.float64)
@@ -169,24 +142,23 @@ def evaluate_block_cv(
     *,
     estimator: str = "ridge",
     alpha: float = 1.0,
-    encoding: str = "signed_context",
-    penalty_mode: str = "same_numeric",
+    penalty_weights: np.ndarray | None = None,
 ) -> dict:
     """Fit reference and five preassigned training folds, scoring pooled held-out bins.
 
     Parameters
     ----------
     predictors, responses : np.ndarray
-        Finite X (N,P), Y (N,K) in native predictor and fixed PC-score units.
+        Finite X (N,P), Y (N,K) in native predictor and supplied response units.
         The caller has already selected the fit window and valid predictors.
     fold_ids : np.ndarray
         Integer (N,) window/block assignments repeated across bins, 0..4.
         -1 marks unavailable assignments: these rows remain in the reference
         fit but enter no training/held-out fold. No reassignment occurs.
     estimator : str
-        ridge or ols. OLS has no penalty mode in its saved fits.
-    alpha, encoding, penalty_mode : float, str, str
-        Same controls as fit_ridge_responses; propagated to every ridge fit.
+        ridge or ols. OLS has zero feature penalties.
+    alpha, penalty_weights : float, np.ndarray or None
+        Positive summed-SSE alpha and (P,) feature weights, propagated to every ridge fit.
 
     Returns
     -------
@@ -202,14 +174,14 @@ def evaluate_block_cv(
         predictions and unavailable primary scores; completed products survive.
     """
     x, y = _validate_arrays(predictors, responses)
-    _validate_context_settings(x.shape[1], encoding, penalty_mode)
+    _penalty_weights(penalty_weights, x.shape[1])
     if estimator not in ("ridge", "ols"):
         raise ValueError("estimator must be ridge or ols")
     folds = np.asarray(fold_ids)
     if (folds.shape != (len(x),) or not np.issubdtype(folds.dtype, np.integer)
             or not np.isin(folds, [-1, 0, 1, 2, 3, 4]).all()):
         raise ValueError("fold_ids must have shape (rows,) and integer values -1..4")
-    reference = _fit_selected(x, y, estimator, alpha, encoding, penalty_mode)
+    reference = _fit_selected(x, y, estimator, alpha, penalty_weights)
     reference_predictions = predict_responses(x, reference)
     if not np.isfinite(reference_predictions).all():
         raise ValueError("reference predictions must be finite")
@@ -217,7 +189,7 @@ def evaluate_block_cv(
     result = {
         "reference_fit": reference, "reference_predictions": reference_predictions,
         "reference_scope": "all-eligible-data reference fit",
-        "score_scope": "held-out regression conditional on fixed descriptive session PCA",
+        "score_scope": "held-out regression on supplied fixed responses",
         "held_out_predictions": np.full_like(y, np.nan),
         "fold_ids": folds.copy(),
         "fold_fits": [None] * 5,
@@ -241,7 +213,7 @@ def evaluate_block_cv(
             result["fold_reasons"][fold] = "Required fold has empty training or held-out rows"
             continue
         try:
-            fitted = _fit_selected(x[train], y[train], estimator, alpha, encoding, penalty_mode)
+            fitted = _fit_selected(x[train], y[train], estimator, alpha, penalty_weights)
             result["fold_fits"][fold] = fitted
             result["fold_slopes"][fold] = fitted.slopes
             result["fold_intercepts"][fold] = fitted.intercept
@@ -264,6 +236,47 @@ def evaluate_block_cv(
     return result
 
 
+
+def compute_reward_contrasts(fit: LinearFit, predictors: np.ndarray, column_names: tuple[str,...]) -> dict:
+    """Compute raw reward-minus-omission values(2,R), support and estimability from one native design.
+
+    Input fit has slopes(P,R), X(N,P) is its exact finite fit pool, and names(P,)
+    identify native columns. Values retain response units; valid(2,) and
+    reasons(2,) describe unpenalized-design estimability, independently of
+    regularized numerical predictions. Also return centered design_rank,
+    predictor_supported(P,) (nonconstant) and nonzero counts(P,). No inference,
+    refitting, standardized-slope subtraction or input mutation occurs.
+    """
+    x=np.asarray(predictors,dtype=float)
+    if x.ndim!=2 or not len(x) or not np.isfinite(x).all() or x.shape[1]!=len(column_names) or fit.slopes.shape[0]!=x.shape[1]:
+        raise ValueError("Contrast design/name/fit shapes must agree and be finite")
+    centered=x-x.mean(0)
+    supported=~_constant_columns(x)
+    centered[:,~supported]=0
+    _,singular,vectors=np.linalg.svd(centered,full_matrices=False)
+    tolerance=max(centered.shape)*np.finfo(float).eps*singular.max(initial=0)
+    basis=vectors[singular>tolerance]
+    values=np.full((2,fit.slopes.shape[1]),np.nan)
+    valid=np.zeros(2,dtype=bool)
+    reasons=[]
+    for index,side in enumerate(("left","right")):
+        reward,omission=f"{side}_reward",f"{side}_omission"
+        if reward not in column_names or omission not in column_names:
+            reasons.append("Required reward/omission columns are absent")
+            continue
+        contrast=np.zeros(x.shape[1])
+        contrast[column_names.index(reward)]=1
+        contrast[column_names.index(omission)]=-1
+        values[index]=contrast@fit.slopes
+        residual=contrast-(contrast@basis.T)@basis
+        valid[index]=np.linalg.norm(residual)<=100*max(x.shape)*np.finfo(float).eps*np.linalg.norm(contrast)
+        reasons.append("" if valid[index] else "Reward/omission contrast unsupported or aliased in this fit pool")
+    return {"values":values,"valid":valid,"reasons":np.asarray(reasons,dtype=str),
+        "names":("left_reward_minus_omission","right_reward_minus_omission"),
+        "design_rank":len(basis),"predictor_supported":supported,
+        "predictor_nonzero_counts":np.count_nonzero(x,axis=0)}
+
+
 # Shape, method-selection and scoring helpers.
 def _validate_arrays(predictors: np.ndarray, responses: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Input native X(N,P)/PC Y(N,K); return finite float64 arrays unchanged in shape/units."""
@@ -277,13 +290,13 @@ def _validate_arrays(predictors: np.ndarray, responses: np.ndarray) -> tuple[np.
     return x, y
 
 
-def _validate_context_settings(columns: int, encoding: str, penalty_mode: str) -> None:
-    """Input column count/encoding/mode; enforce native context shape, return None, no units."""
-    expected = {"signed_context": 1, "separate_context": 2}
-    if encoding not in expected or columns != expected[encoding]:
-        raise ValueError("encoding must match one signed_context or two separate_context columns")
-    if penalty_mode not in ("same_numeric", "matched_context"):
-        raise ValueError("penalty_mode must be same_numeric or matched_context")
+def _penalty_weights(weights: np.ndarray | None, columns: int) -> np.ndarray:
+    """Input optional dimensionless feature vector/column count; return positive finite (P,) weights."""
+    result=np.ones(columns) if weights is None else np.asarray(weights,dtype=float)
+    if result.shape!=(columns,) or not np.isfinite(result).all() or np.any(result<=0):
+        raise ValueError("penalty_weights must be a finite positive feature vector with shape (P,)")
+    return result
+
 
 
 def _coefficient_arrays(
@@ -319,12 +332,12 @@ def _fit_limitations(x: np.ndarray, y: np.ndarray) -> tuple[str, ...]:
 
 
 def _fit_selected(
-    x: np.ndarray, y: np.ndarray, estimator: str, alpha: float, encoding: str, penalty_mode: str,
+    x: np.ndarray, y: np.ndarray, estimator: str, alpha: float, penalty_weights: np.ndarray | None,
 ) -> LinearFit:
     """Input native X(N,P)/PC Y(N,K)/scalar controls; return selected reference-or-training fit."""
     if estimator == "ols":
         return fit_ols_responses(x, y)
-    return fit_ridge_responses(x, y, alpha, encoding=encoding, penalty_mode=penalty_mode)
+    return fit_ridge_responses(x, y, alpha, penalty_weights=penalty_weights)
 
 
 def _prediction_scores(y: np.ndarray, predicted: np.ndarray) -> tuple[np.ndarray, np.ndarray, tuple[str, ...]]:
