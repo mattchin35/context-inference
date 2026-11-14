@@ -116,6 +116,7 @@ def timeline_configuration(
     probe_roles: dict[str, str],
     bin_width_s: float,
     *,
+    window_s: tuple[float, float] = (-2.0, 2.0),
     population_quality: str = "good_mua",
     missing_label_policy: str = "mua",
 ) -> dict:
@@ -124,12 +125,13 @@ def timeline_configuration(
     probe_roles maps PFC/HPC to metadata probe IDs; an absent role is unavailable.
     File identities use resolved paths, byte sizes, and mtime_ns. Display state
     is excluded. The configuration_id is a digest of these actual inputs.
+    window_s is the explicit relative-second window, defaulting to [-2,+2).
     bin_width_s is seconds; the keyword-only scalar quality/policy labels use
     the load_timeline_population contract. Both defaults preserve the previous
     dict/digest exactly; nondefault policies add explicit scientific identity.
     """
     _validate_population_policy(population_quality, missing_label_policy)
-    choice_bin_edges(bin_width_s)
+    choice_bin_edges(bin_width_s, window_s=window_s)
     if not set(probe_roles).issubset({"PFC", "HPC"}):
         raise ValueError("Probe roles must be PFC and/or HPC.")
     if len(set(probe_roles.values())) != len(probe_roles):
@@ -170,7 +172,7 @@ def timeline_configuration(
         "session_id": session.session_id,
         "probe_roles": dict(probe_roles),
         "bin_width_s": bin_width_s,
-        "window_s": [-2.0, 2.0],
+        "window_s": list(window_s),
         "quality_rules": "Phy group good/mua; good inside-brain channels; metadata unit_channels",
         "selection": selection,
         "sources": [_file_identity(path) for path in paths if path is not None],

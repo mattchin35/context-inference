@@ -174,11 +174,13 @@ def trial_identities_match(
 def select_complete_choice_windows(
     choice_times_s: np.ndarray,
     coverage_s: tuple[float, float],
+    *, window_s: tuple[float, float] = WINDOW_S,
 ) -> np.ndarray:
     """Return positions of (N,) UTC-second choices with full [-2,+2) coverage.
 
     coverage_s is the probe's trusted (start, end) UTC-second pair. Return an
     integer (W,) index array; silence and elapsed-session zero are irrelevant.
+    window_s is the explicit relative-second window, defaulting to [-2,+2).
     """
     times = np.asarray(choice_times_s, dtype=float)
     start, end = coverage_s
@@ -187,7 +189,7 @@ def select_complete_choice_windows(
             "Expected one-dimensional times and finite ordered coverage bounds."
         )
     return np.flatnonzero(
-        np.isfinite(times) & (times - 2 >= start) & (times + 2 <= end)
+        np.isfinite(times) & (times + window_s[0] >= start) & (times + window_s[1] <= end)
     )
 
 
@@ -196,6 +198,7 @@ def bin_choice_counts(
     cluster_ids: np.ndarray,
     choice_times_s: np.ndarray,
     bin_width_s: float,
+    *, window_s: tuple[float, float] = WINDOW_S,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Bin a probe's spikes into unsmoothed choice-centered counts.
 
@@ -203,8 +206,9 @@ def bin_choice_counts(
     is (U,) in output unit order and choice_times_s is (W,) UTC seconds.
     Return float64 counts (W,B,U) and relative-second edges (B+1,). The
     existing Hz builder is converted back to counts using the fixed bin width.
+    window_s is relative seconds; its four-second default preserves old callers.
     """
-    edges = choice_bin_edges(bin_width_s)
+    edges = choice_bin_edges(bin_width_s, window_s=window_s)
     choices = pd.DataFrame({"choice_time": np.asarray(choice_times_s, dtype=float)})
     rates, _ = build_trial_unit_rate_tensor_pynapple(
         spike_group,
@@ -212,7 +216,7 @@ def bin_choice_counts(
         choices,
         np.arange(len(choices)),
         "choice_time",
-        WINDOW_S,
+        window_s,
         bin_width_s,
     )
     return rates * bin_width_s, edges
@@ -225,6 +229,7 @@ def fit_timeline_activity(
     region: str,
     probe_id: str,
     bin_width_s: float,
+    *, window_s: tuple[float, float] = WINDOW_S,
 ) -> RegionalTimelinePCA:
     """Fit one full, unwhitened session PCA to count activity (W,B,U).
 
@@ -232,8 +237,9 @@ def fit_timeline_activity(
     choice table. bin_width_s selects B=8/40/80/200. Return the fixed basis,
     float64 scores (W,B,K), and sample-variance totals in standardized space.
     All input activity must be finite; constant units are excluded globally.
+    window_s is the explicit relative-second window, defaulting to [-2,+2).
     """
-    edges = choice_bin_edges(bin_width_s)
+    edges = choice_bin_edges(bin_width_s, window_s=window_s)
     values = np.asarray(counts, dtype=np.float64)
     positions = np.asarray(choice_positions, dtype=int)
     if values.ndim != 3 or values.shape[:2] != (positions.size, edges.size - 1):
@@ -326,11 +332,16 @@ def summarize_session_variance(
     return counts
 
 
-def choice_bin_edges(bin_width_s: float) -> np.ndarray:
+def choice_bin_edges(bin_width_s: float, *, window_s: tuple[float, float] = WINDOW_S) -> np.ndarray:
     """Return (B+1,) half-open-window edges in seconds for a supported width.
 
-    bin_width_s must be one of BIN_WIDTHS_S; the final edge is exactly +2 s.
+    bin_width_s must be one of BIN_WIDTHS_S. window_s bounds are relative
+    seconds on bin edges; the default remains [-2,+2) for existing callers.
     """
     if bin_width_s not in BIN_WIDTHS_S:
         raise ValueError(f"bin width must be one of {BIN_WIDTHS_S} seconds.")
-    return np.linspace(-2.0, 2.0, int(round(4 / bin_width_s)) + 1)
+    bounds = np.asarray(window_s, dtype=float)
+    if (bounds.shape != (2,) or not np.isfinite(bounds).all() or not bounds[0] < 0 < bounds[1]
+            or not np.allclose(bounds / bin_width_s, np.round(bounds / bin_width_s))):
+        raise ValueError("window_s must span zero with bounds on bin edges")
+    return np.linspace(bounds[0], bounds[1], int(round((bounds[1]-bounds[0]) / bin_width_s)) + 1)
