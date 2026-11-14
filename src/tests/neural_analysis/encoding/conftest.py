@@ -88,8 +88,7 @@ def prepared_encoding_run(encoding_session: EncodingConfig) -> Path:
     """
     from src.neural_analysis.encoding import preparation, results
 
-    config = replace(encoding_session, windows=("whole",), timing_modes=("choice_updated",),
-                     penalty_modes=("same_numeric", "matched_context"))
+    config = replace(encoding_session, penalty_modes=("same_numeric", "matched_context"))
     session, trials, behavior = preparation.load_behavior_inputs(config)
     regions, unavailable = preparation.prepare_regional_activity(config, session, trials, behavior)
     identities = results.compute_run_identities(config)

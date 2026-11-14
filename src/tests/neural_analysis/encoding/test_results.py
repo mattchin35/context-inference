@@ -36,15 +36,16 @@ def test_preparation_round_trip_retains_full_behavior_basis_and_row_identity(pre
     for role, expected in original.items():
         observed = loaded["regions"][role]
         for name in ("scores", "bin_edges_s", "choice_positions"):
-            np.testing.assert_array_equal(getattr(observed.timeline, name), getattr(expected.timeline, name))
+            np.testing.assert_array_equal(getattr(observed.pca, name), getattr(expected.pca, name))
         for name in ("components", "training_mean", "training_scale", "explained_variance"):
-            np.testing.assert_array_equal(getattr(observed.timeline.transform, name), getattr(expected.timeline.transform, name))
+            np.testing.assert_array_equal(getattr(observed.pca.transform, name), getattr(expected.pca.transform, name))
         np.testing.assert_array_equal(observed.pc_ranks, expected.pc_ranks)
         np.testing.assert_array_equal(observed.window_fold_ids, expected.window_fold_ids)
         pd.testing.assert_frame_equal(observed.bin_rows, expected.bin_rows)
-        for mode in expected.context_values:
-            np.testing.assert_array_equal(observed.context_values[mode], expected.context_values[mode])
-            np.testing.assert_array_equal(observed.context_valid[mode], expected.context_valid[mode])
+        np.testing.assert_array_equal(observed.unit_counts,expected.unit_counts)
+        assert observed.unit_ids==expected.unit_ids
+        np.testing.assert_array_equal(observed.choice_positions,expected.choice_positions)
+        np.testing.assert_array_equal(observed.bin_edges_s,expected.bin_edges_s)
     with np.load(path, allow_pickle=True) as archive:
         assert isinstance(archive["meta"].item(), dict)
         assert all(not name.startswith("arr_") for name in archive.files)
@@ -81,7 +82,7 @@ def test_preparation_identity_excludes_model_settings_but_model_identity_include
     """Input config; source/bin identity stays fixed across alpha/fit settings, return None."""
     first = results.compute_run_identities(encoding_session)
     changed = results.compute_run_identities(replace(encoding_session, alpha=9,
-        windows=("after",), estimators=("ols",), encodings=("separate_context",)))
+        estimators=("ols",), encodings=("separate_context",)))
     assert first["preparation_id"] == changed["preparation_id"]
     assert first["model_id"] != changed["model_id"]
     narrower = results.compute_run_identities(replace(encoding_session, bin_width_ms=20))
@@ -204,3 +205,30 @@ def test_numeric_runtime_versions_are_provenance_and_scientific_identity(
     assert second["model_id"] != first["model_id"]
     assert second["runtime_versions"] == changed
     assert "python" in first["runtime_versions"]
+
+
+def test_preparation_round_trip_without_any_pca_section(prepared_encoding_run):
+    """Silent unit data and bin geometry save/load without constructing or validating a dummy PCA."""
+    manifest=results.load_run_manifest(prepared_encoding_run)
+    config=results.restore_config(manifest["config"])
+    loaded=results.load_preparation(config.session_root/manifest["preparation_path"])
+    region=loaded["regions"]["PFC"]
+    loaded["regions"]["PFC"]=replace(region,pca=None,pc_ranks=np.array([],dtype=int),pca_unavailable_reason="No variable units")
+    path=config.intermediate_root/"no_pca.npz"
+    results.save_preparation(path,loaded["trials"],loaded["behavior"],loaded["regions"],loaded["meta"])
+    again=results.load_preparation(path)["regions"]["PFC"]
+    assert again.pca is None and again.pca_unavailable_reason=="No variable units"
+    np.testing.assert_array_equal(again.unit_counts,region.unit_counts)
+    with np.load(path,allow_pickle=True) as archive:
+        assert "pfc_unit_counts" in archive.files and "pfc_scores" not in archive.files
+
+
+def test_old_encoding_schema_is_rejected_without_modification(prepared_encoding_run):
+    """A retired model manifest is never restored as a current model or rewritten in place."""
+    import json
+    path=prepared_encoding_run/"config.json"
+    manifest=json.loads(path.read_text()); manifest["analysis_version"]="context-encoding-v1"
+    path.write_text(json.dumps(manifest)); before=path.read_bytes()
+    with pytest.raises(ValueError,match="version|schema"):
+        results.load_run_manifest(prepared_encoding_run)
+    assert path.read_bytes()==before

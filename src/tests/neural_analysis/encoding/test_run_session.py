@@ -40,7 +40,7 @@ def test_dry_run_reports_behavior_and_cells_without_raw_loading_or_writes(
     report = run_session.run_encoding_session(config_path(encoding_session), command="dry-run")
     assert report["status"] == "dry-run"
     assert report["baseline_trials"] == 8
-    assert report["planned_cells"] == 48
+    assert report["planned_cells"] == 16
     assert report["neural_counts_pending"]
     assert not encoding_session.run_root.exists()
     assert not encoding_session.intermediate_root.exists()
@@ -68,7 +68,7 @@ def test_dry_run_counts_unique_cells_when_penalty_comparisons_share_signed_fits(
     payload["penalty_modes"] = ["same_numeric", "matched_context"]
     path.write_text(json.dumps(payload))
     report = run_session.run_encoding_session(path, command="dry-run")
-    assert report["planned_cells"] == 60
+    assert report["planned_cells"] == 20
 
 
 def test_new_reuses_completed_run_and_saves_session_local_audit_files(
@@ -82,7 +82,7 @@ def test_new_reuses_completed_run_and_saves_session_local_audit_files(
     for name in ("config.json", "progress.json", "run.log", "summary.md", "run_session.py", "run_batch.py"):
         assert (directory / name).is_file()
     saved = results.load_encoding_run(directory)
-    assert len(saved["cells"]) == 48
+    assert len(saved["cells"]) == 16
     preparation = encoding_session.session_root / saved["manifest"]["preparation_path"]
     assert preparation.is_relative_to(encoding_session.intermediate_root)
     assert preparation.is_file()
@@ -147,7 +147,7 @@ def test_partial_requires_explicit_resume_and_uses_saved_inputs(
     assert status["status"] != "complete"
     resumed = run_session.run_encoding_session(command="resume", run_directory=directory)
     assert resumed["status"] == "complete"
-    assert len(results.load_encoding_run(directory)["cells"]) == 48
+    assert len(results.load_encoding_run(directory)["cells"]) == 16
 
 
 def test_main_parses_dry_run_and_status_errors(
@@ -197,11 +197,24 @@ def test_completed_session_exports_bounded_light_png_inspection_examples(
     """Input config; one selected region/model exports coefficient and timeline PNGs, return None."""
     path = config_path(encoding_session)
     payload = json.loads(path.read_text())
-    payload.update({"windows": ["whole"], "timing_modes": ["trial_window"],
-                    "encodings": ["signed_context"], "estimators": ["ridge"],
+    payload.update({"encodings": ["signed_context"], "estimators": ["ridge"],
                     "probe_roles": {"PFC": "A"}})
     path.write_text(json.dumps(payload))
     report = run_session.run_encoding_session(path)
     figures = list((Path(report["run_directory"]) / "figures").rglob("*.png"))
     assert len(figures) >= 2
     assert all(path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n") for path in figures)
+
+
+def test_new_run_skips_retired_manifests_and_direct_old_resume_is_rejected(encoding_session):
+    """Old files remain untouched and do not block discovery/reuse of current analyses."""
+    directory=encoding_session.run_root/"context_encoding_old"
+    directory.mkdir(parents=True)
+    path=directory/"config.json"
+    path.write_text(json.dumps({"analysis_version":"context-encoding-v1","schema_version":1}))
+    before=path.read_bytes()
+    with pytest.raises(ValueError,match="version|schema"):
+        run_session.run_encoding_session(command="resume",run_directory=directory)
+    report=run_session.run_encoding_session(config_path(encoding_session))
+    assert report["status"]=="complete" and Path(report["run_directory"])!=directory
+    assert path.read_bytes()==before

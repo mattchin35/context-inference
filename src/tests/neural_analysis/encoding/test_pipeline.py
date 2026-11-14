@@ -29,7 +29,7 @@ def fail_one_reference_cell(
     predictors: np.ndarray, responses: np.ndarray, fold_ids: np.ndarray, **settings: object,
 ) -> dict:
     """Input X(N,P)/PC Y(N,K)/fold IDs; fail only one PFC signed ridge reference, return no repaired arrays."""
-    if len(predictors) == 60 and settings.get("estimator") == "ridge" and settings.get("encoding") == "signed_context":
+    if len(predictors) == 32 and settings.get("estimator") == "ridge" and predictors.shape[1] == 8 and np.all(responses >= 0):
         raise ValueError("synthetic reference-cell fit failure")
     return original_evaluate(predictors, responses, fold_ids, **settings)
 
@@ -38,10 +38,10 @@ def test_pipeline_publishes_unique_fits_with_explicit_aliases_and_observation_id
     """Input run Path; ten distinct cells retain pooled row IDs/PC identities and scopes, return None."""
     progress = pipeline.run_prepared_encoding(prepared_encoding_run)
     assert progress["status"] == "complete"
-    assert len(progress["completed_cells"]) == 10
+    assert len(progress["completed_cells"]) == 20
     loaded = results.load_encoding_run(prepared_encoding_run)
-    assert len(loaded["cells"]) == 10
-    assert len(list((prepared_encoding_run / "cells").glob("*.npz"))) == 10
+    assert len(loaded["cells"]) == 20
+    assert len(list((prepared_encoding_run / "cells").glob("*.npz"))) == 20
     per_region = {"PFC": [], "HPC": []}
     for cell_id, cell in loaded["cells"].items():
         meta = cell["meta"]
@@ -51,20 +51,25 @@ def test_pipeline_publishes_unique_fits_with_explicit_aliases_and_observation_id
         assert meta["preparation_id"] == loaded["manifest"]["identities"]["preparation_id"]
         region = loaded["preparation"]["regions"][settings["region"]]
         indices = cell["selected_row_indices"]
-        np.testing.assert_array_equal(cell["observed"], region.timeline.scores.reshape(-1, region.timeline.scores.shape[-1])[indices][:, region.pc_ranks - 1])
-        np.testing.assert_array_equal(cell["pc_ranks"], region.pc_ranks)
-        assert cell["reference_slopes"].shape == (cell["predictors"].shape[1], len(region.pc_ranks))
+        from src.neural_analysis.encoding.preparation import response_activity
+        activity,ids,units=response_activity(region,settings["representation"])
+        np.testing.assert_allclose(cell["observed"],activity.reshape(-1,len(ids))[indices])
+        np.testing.assert_array_equal(cell["response_ids"],ids)
+        assert meta["response_units"]==units
+        assert cell["reference_slopes"].shape==(cell["predictors"].shape[1],len(ids))
+        assert cell["contrasts"].shape==(2,len(ids)) and cell["fold_contrasts"].shape==(5,2,len(ids))
+        assert cell["contrast_valid"].shape==(2,)
         assert cell["held_out_predictions"].shape == cell["reference_predictions"].shape == cell["observed"].shape
         assert "held" in meta["score_scope"] and "reference" in meta["reference_scope"]
         assert "scores" not in cell  # Shared full activity is not copied into model files.
-        if settings["estimator"] == "ols":
-            assert meta["effective_alpha"] is None and settings["penalty_mode"] is None
-        elif settings["encoding"] == "signed_context":
-            assert set(meta["penalty_aliases"]) == {"same_numeric", "matched_context"}
-            assert meta["configured_alpha"] == meta["effective_alpha"] == 1.0
-        elif settings["penalty_mode"] == "matched_context":
-            assert meta["effective_alpha"] == 0.5
-    assert all(len(cells) == 5 for cells in per_region.values())
+        if settings["estimator"]=="ols":
+            assert not cell["penalty_vector"].any() and settings["penalty_mode"] is None
+        elif settings["encoding"]=="signed_context":
+            assert set(meta["penalty_aliases"])=={"same_numeric","matched_context"}
+            np.testing.assert_array_equal(cell["penalty_vector"],np.ones(8))
+        elif settings["penalty_mode"]=="matched_context":
+            np.testing.assert_array_equal(cell["penalty_vector"],np.r_[.5,.5,np.ones(7)])
+    assert all(len(cells) == 10 for cells in per_region.values())
 
 
 def test_completed_cells_are_not_refit_or_rewritten_on_resume(prepared_encoding_run: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,8 +95,8 @@ def test_crash_between_npz_publish_and_progress_is_reconciled(prepared_encoding_
     counter = Mock(wraps=modeling.evaluate_block_cv)
     monkeypatch.setattr(modeling, "evaluate_block_cv", counter)
     resumed = pipeline.run_prepared_encoding(prepared_encoding_run)
-    assert resumed["status"] == "complete" and len(resumed["completed_cells"]) == 10
-    assert counter.call_count == 9
+    assert resumed["status"] == "complete" and len(resumed["completed_cells"]) == 20
+    assert counter.call_count == 19
     assert published[0].stat().st_mtime_ns == published_time
 
 
@@ -103,7 +108,7 @@ def test_temporary_unpublished_files_are_ignored(prepared_encoding_run: Path) ->
     temporary.write_bytes(b"partial unpublished bytes")
     progress = pipeline.run_prepared_encoding(prepared_encoding_run)
     assert progress["status"] == "complete"
-    assert len(progress["completed_cells"]) == 10
+    assert len(progress["completed_cells"]) == 20
     assert temporary.read_bytes() == b"partial unpublished bytes"
 
 
@@ -116,7 +121,7 @@ def test_resume_uses_saved_preparation_when_live_inputs_disappear(prepared_encod
         path.unlink()
     monkeypatch.setattr(results, "compute_run_identities", forbid_work)
     progress = pipeline.run_prepared_encoding(prepared_encoding_run)
-    assert progress["status"] == "complete" and len(progress["completed_cells"]) == 10
+    assert progress["status"] == "complete" and len(progress["completed_cells"]) == 20
 
 
 def test_changed_numerical_code_blocks_resume_without_overwriting(prepared_encoding_run: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,7 +169,7 @@ def test_completed_scientifically_unavailable_cell_is_finished_work(prepared_enc
     path = config.session_root / manifest["preparation_path"]
     saved = results.load_preparation(path)
     pfc = saved["regions"]["PFC"]
-    pfc.context_valid["choice_updated"][:] = False
+    saved["regions"]["PFC"] = replace(pfc,pca=None,pc_ranks=np.array([],dtype=int),pca_unavailable_reason="No variable activity")
     hpc = saved["regions"]["HPC"]
     hpc_rows = hpc.bin_rows.copy(deep=True)
     hpc_rows["fold_id"] = -1
@@ -176,13 +181,15 @@ def test_completed_scientifically_unavailable_cell_is_finished_work(prepared_enc
     new_run = config.run_root / "context_encoding_unavailable"
     results.initialize_run(config, new_run, new_path, manifest["identities"])
     progress = pipeline.run_prepared_encoding(new_run)
-    assert progress["status"] == "complete" and len(progress["completed_cells"]) == 10
+    assert progress["status"] == "complete" and len(progress["completed_cells"]) == 20
     loaded = results.load_encoding_run(new_run)
     for cell in loaded["cells"].values():
-        if cell["meta"]["settings"]["region"] == "PFC":
+        if cell["meta"]["settings"]["region"] == "PFC" and cell["meta"]["settings"]["representation"] == "pcs":
             assert not cell["meta"]["available"] and cell["meta"]["unavailable_reason"]
         else:
-            assert cell["meta"]["available"] and not cell["meta"]["cv_available"]
+            assert cell["meta"]["available"]
+            if cell["meta"]["settings"]["region"]=="HPC":
+                assert not cell["meta"]["cv_available"]
             assert np.isfinite(cell["reference_predictions"]).all()
     monkeypatch.setattr(modeling, "evaluate_block_cv", forbid_work)
     assert pipeline.run_prepared_encoding(new_run)["status"] == "complete"
@@ -205,7 +212,7 @@ def test_completed_resume_validates_each_cell_once(prepared_encoding_run: Path, 
     counter = Mock(wraps=results.load_cell)
     monkeypatch.setattr(results, "load_cell", counter)
     pipeline.run_prepared_encoding(prepared_encoding_run)
-    assert counter.call_count == 10
+    assert counter.call_count == 20
 
 
 @pytest.mark.parametrize("array_name,bad_value", [("held_out_predictions", np.nan), ("mse", np.inf)])
@@ -228,7 +235,7 @@ def test_cv_available_cell_rejects_nonfinite_primary_products(
 
 @pytest.mark.parametrize("array_name", [
     "fold_valid", "fold_train_counts", "fold_test_counts", "fold_reasons", "fold_r2_reason",
-    "r2_reason", "column_names", "fold_ids", "pc_ranks", "selected_row_indices",
+    "r2_reason", "column_names", "penalty_vector", "contrasts", "contrast_valid", "fold_contrasts", "fold_ids", "response_ids", "selected_row_indices",
 ])
 def test_cell_loader_validates_metadata_axes_and_integer_identities(
     prepared_encoding_run: Path, array_name: str,
@@ -238,7 +245,9 @@ def test_cell_loader_validates_metadata_axes_and_integer_identities(
     path = prepared_encoding_run / next(iter(progress["completed_cells"].values()))
     with np.load(path, allow_pickle=True) as archive:
         arrays = {name: archive[name] for name in archive.files}
-    if array_name in ("fold_ids", "pc_ranks", "selected_row_indices"):
+    if array_name == "response_ids":
+        arrays[array_name] = np.full_like(arrays[array_name], "duplicate")
+    elif array_name in ("fold_ids", "selected_row_indices"):
         arrays[array_name] = arrays[array_name].astype(float)
         arrays[array_name].flat[0] = 0.5
     else:
@@ -254,15 +263,15 @@ def test_reference_cell_failure_is_saved_unavailable_and_other_cells_continue(
     """Input run Path/patch; failed reference preserves selected row/PC identity and never retries, return None."""
     monkeypatch.setattr(modeling, "evaluate_block_cv", fail_one_reference_cell)
     progress = pipeline.run_prepared_encoding(prepared_encoding_run)
-    assert progress["status"] == "complete" and len(progress["completed_cells"]) == 10
+    assert progress["status"] == "complete" and len(progress["completed_cells"]) == 20
     saved = results.load_encoding_run(prepared_encoding_run)
     failed = [cell for cell in saved["cells"].values() if not cell["meta"]["available"]]
     assert len(failed) == 1
     cell = failed[0]
     assert "synthetic reference-cell" in cell["meta"]["unavailable_reason"]
     assert not cell["meta"]["reference_valid"]
-    assert len(cell["selected_row_indices"]) == 60
-    np.testing.assert_array_equal(cell["pc_ranks"], saved["preparation"]["regions"]["PFC"].pc_ranks)
+    assert len(cell["selected_row_indices"]) == 32
+    np.testing.assert_array_equal(cell["response_ids"], saved["preparation"]["regions"]["PFC"].unit_ids)
     assert cell["reference_predictions"].shape == cell["observed"].shape
     assert np.isnan(cell["reference_predictions"]).all()
     assert "synthetic reference-cell fit failure" in (prepared_encoding_run / "run.log").read_text(encoding="ascii")
