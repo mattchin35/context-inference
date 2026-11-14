@@ -57,7 +57,8 @@ def test_ridge_matches_analytic_summed_sse_with_unpenalized_intercept() -> None:
     np.testing.assert_allclose(fit.intercept, intercept)
     assert fit.slopes.shape == (1, 1) and fit.intercept.shape == (1,)
     assert fit.estimator == "ridge"
-    assert fit.configured_alpha == fit.effective_alpha == alpha
+    assert fit.configured_alpha == alpha
+    np.testing.assert_array_equal(fit.penalties, [alpha])
     assert fit.penalty_mode == "same_numeric"
     predictions = modeling.predict_responses(predictors, fit)
     residual = responses - predictions
@@ -104,38 +105,13 @@ def test_ols_centered_minimum_norm_indicator_convention_and_equivalent_predictio
     np.testing.assert_allclose(modeling.predict_responses(signed, signed_fit),
                                modeling.predict_responses(indicators, separate_fit), atol=1e-12)
     assert separate_fit.estimator == "ols"
-    assert separate_fit.effective_alpha is None and separate_fit.configured_alpha is None
-    assert separate_fit.penalty_mode is None
+    assert separate_fit.configured_alpha is None
+    assert not separate_fit.penalties.any()
     assert "minimum" in separate_fit.coefficient_convention.lower()
 
 
-def test_matched_context_ridge_maps_indicator_alpha_to_half(model_data: tuple) -> None:
-    """Input native X/PC Y; alpha and alpha/2 yield equal predictions, return None."""
-    signed, responses, _ = model_data
-    indicators, _, _ = encode_context((signed[:, 0] + 1) / 2, "separate_context")
-    signed_fit = modeling.fit_ridge_responses(signed, responses, 7.0,
-        encoding="signed_context", penalty_mode="matched_context")
-    separate_fit = modeling.fit_ridge_responses(indicators, responses, 7.0,
-        encoding="separate_context", penalty_mode="matched_context")
-    assert signed_fit.configured_alpha == separate_fit.configured_alpha == 7.0
-    assert signed_fit.effective_alpha == 7.0 and separate_fit.effective_alpha == 3.5
-    assert separate_fit.penalty_mode == "matched_context"
-    np.testing.assert_allclose(modeling.predict_responses(signed, signed_fit),
-                               modeling.predict_responses(indicators, separate_fit), atol=1e-12)
-    np.testing.assert_allclose(separate_fit.slopes[0], signed_fit.slopes[0], atol=1e-12)
-    np.testing.assert_allclose(separate_fit.slopes[1], -signed_fit.slopes[0], atol=1e-12)
 
 
-def test_same_numeric_ridge_preserves_encoding_dependent_shrinkage(model_data: tuple) -> None:
-    """Input native X/PC Y; same summed-SSE alpha intentionally differs by encoding, return None."""
-    signed, responses, _ = model_data
-    indicators, _, _ = encode_context((signed[:, 0] + 1) / 2, "separate_context")
-    signed_fit = modeling.fit_ridge_responses(signed, responses, 7.0)
-    separate_fit = modeling.fit_ridge_responses(indicators, responses, 7.0, encoding="separate_context")
-    assert signed_fit.effective_alpha == separate_fit.effective_alpha == 7.0
-    assert np.all(np.abs(separate_fit.slopes[0]) < np.abs(signed_fit.slopes[0]))
-    assert not np.allclose(modeling.predict_responses(signed, signed_fit),
-                           modeling.predict_responses(indicators, separate_fit))
 
 
 def test_standardized_display_uses_only_supplied_reference_rows(model_data: tuple) -> None:
@@ -156,7 +132,7 @@ def test_one_context_class_and_constant_predictors_are_valid(estimator: str) -> 
     """Input estimator; (8,2) one-class indicators retain intercept and zero slopes, return None."""
     predictors = np.tile([1.0, 0.0], (8, 1))
     responses = np.arange(16, dtype=float).reshape(8, 2)
-    fit = (modeling.fit_ridge_responses(predictors, responses, encoding="separate_context")
+    fit = (modeling.fit_ridge_responses(predictors, responses)
            if estimator == "ridge" else modeling.fit_ols_responses(predictors, responses))
     np.testing.assert_allclose(fit.slopes, 0, atol=1e-12)
     np.testing.assert_allclose(fit.intercept, responses.mean(axis=0))
@@ -219,7 +195,7 @@ def test_cv_uses_supplied_block_map_and_saves_one_oof_prediction_per_bin(
                                modeling.predict_responses(predictors, result["reference_fit"]))
     assert not np.allclose(result["held_out_predictions"], result["reference_predictions"])
     assert "reference" in result["reference_scope"]
-    assert "held" in result["score_scope"] and "PCA" in result["score_scope"]
+    assert "held" in result["score_scope"] and "supplied" in result["score_scope"]
     for actual, before in zip(model_data, original):
         np.testing.assert_array_equal(actual, before)
 
@@ -243,37 +219,6 @@ def test_cv_pools_unequal_folds_and_keeps_negative_r_squared() -> None:
     assert not np.allclose(result["mse"], result["fold_mse"].mean(axis=0))
 
 
-@pytest.mark.parametrize("estimator,penalty_mode", [("ols", "same_numeric"), ("ridge", "matched_context")])
-def test_cv_propagates_encoding_and_penalty_settings_to_every_fit(
-    model_data: tuple, estimator: str, penalty_mode: str,
-) -> None:
-    """Input native X/PC Y/folds plus settings; equivalent codes match all predictions, return None."""
-    signed, responses, folds = model_data
-    indicators, _, _ = encode_context((signed[:, 0] + 1) / 2, "separate_context")
-    common = {"estimator": estimator, "penalty_mode": penalty_mode, "alpha": 7.0}
-    signed_result = modeling.evaluate_block_cv(signed, responses, folds,
-                                              encoding="signed_context", **common)
-    separate_result = modeling.evaluate_block_cv(indicators, responses, folds,
-                                                encoding="separate_context", **common)
-    assert signed_result["cv_available"] and separate_result["cv_available"]
-    for key in ("reference_predictions", "held_out_predictions", "mse", "r2"):
-        np.testing.assert_allclose(signed_result[key], separate_result[key], atol=1e-12)
-    signed_fits = (signed_result["reference_fit"], *signed_result["fold_fits"])
-    separate_fits = (separate_result["reference_fit"], *separate_result["fold_fits"])
-    for signed_fit, separate_fit in zip(signed_fits, separate_fits):
-        assert signed_fit.estimator == separate_fit.estimator == estimator
-        np.testing.assert_allclose(separate_fit.slopes[0], signed_fit.slopes[0], atol=1e-12)
-        np.testing.assert_allclose(separate_fit.slopes[1], -signed_fit.slopes[0], atol=1e-12)
-        if estimator == "ridge":
-            assert signed_fit.configured_alpha == separate_fit.configured_alpha == 7.0
-            assert signed_fit.effective_alpha == 7.0 and separate_fit.effective_alpha == 3.5
-            assert signed_fit.penalty_mode == separate_fit.penalty_mode == "matched_context"
-        else:
-            assert signed_fit.effective_alpha is separate_fit.effective_alpha is None
-            assert signed_fit.penalty_mode is separate_fit.penalty_mode is None
-    assert separate_result["fold_slopes"].shape == (5, 2, 2)
-    for fold, fit in enumerate(separate_result["fold_fits"]):
-        np.testing.assert_allclose(separate_result["fold_slopes"][fold], fit.slopes)
 
 
 @pytest.mark.parametrize("missing", ["one_fold", "all_folds"])
@@ -369,22 +314,8 @@ def test_ridge_rejects_invalid_penalty(model_data: tuple, alpha: float) -> None:
         modeling.fit_ridge_responses(predictors, responses, alpha)
 
 
-def test_predictor_column_count_must_match_explicit_context_encoding(model_data: tuple) -> None:
-    """Input native fixture; two columns cannot silently claim signed encoding, return None."""
-    predictors, responses, _ = model_data
-    indicators, _, _ = encode_context((predictors[:, 0] + 1) / 2, "separate_context")
-    with pytest.raises(ValueError, match="encoding|column|shape"):
-        modeling.fit_ridge_responses(indicators, responses)
 
 
-@pytest.mark.parametrize("settings", [
-    {"encoding": "current_action"}, {"penalty_mode": "automatic"}, {"estimator": "poisson"},
-])
-def test_unsupported_model_settings_are_not_silently_substituted(model_data: tuple, settings: dict) -> None:
-    """Input numeric fixture/unitless model setting mapping; unknown controls fail, return None."""
-    predictors, responses, folds = model_data
-    with pytest.raises(ValueError, match="encoding|penalty|estimator"):
-        modeling.evaluate_block_cv(predictors, responses, folds, **settings)
 
 
 @pytest.mark.parametrize("failure", ["vector_y", "different_rows", "empty", "bad_fold_shape", "fractional_fold", "unknown_fold"])
@@ -407,3 +338,99 @@ def test_numeric_array_contracts_reject_implicit_axis_changes(model_data: tuple,
         folds[0] = 5
     with pytest.raises(ValueError, match="shape|rows|empty|fold|two-dimensional"):
         modeling.evaluate_block_cv(predictors, responses, folds)
+
+
+def joint_design(counts=(10,10,10,10,10,10), indicators=False):
+    """Return independently constructed X(N,P), column names, and trial-fold IDs; binary/signed columns are dimensionless."""
+    categories=("left_reward","left_omission","left_incorrect","right_reward","right_omission","right_incorrect")
+    kind=np.repeat(np.arange(6),counts)
+    context=np.repeat(np.array([1,1,-1,-1,-1,1])[kind],4)
+    choice=np.repeat(np.array([1,1,1,-1,-1,-1])[kind],4)
+    post=np.tile([0.,0.,1.,1.],len(kind))
+    outcome_names=("left_reward","right_reward","left_omission","right_omission","left_incorrect","right_incorrect")
+    outcomes=np.column_stack([np.repeat(np.asarray(categories)[kind]==name,4)*post for name in outcome_names])
+    c=np.column_stack(((context+1)/2,(1-context)/2)) if indicators else context[:,None]
+    names=(("left_context","right_context") if indicators else ("signed_context",))+("signed_choice",)+outcome_names
+    return np.column_stack((c,choice,outcomes)),names,np.repeat(np.arange(len(kind))%5,4)
+
+
+def penalized_oracle(x,y,penalties):
+    """Input native X(N,P), Y(N,R), penalties(P,); return independent centered augmented-system slopes/intercept in Y units."""
+    xc,yc=x-x.mean(0),y-y.mean(0)
+    augmented=np.vstack((xc,np.diag(np.sqrt(penalties))))
+    targets=np.vstack((yc,np.zeros((x.shape[1],y.shape[1]))))
+    slopes=np.linalg.lstsq(augmented,targets,rcond=None)[0]
+    return slopes,y.mean(0)-x.mean(0)@slopes
+
+
+@pytest.mark.parametrize("indicators",[False,True])
+def test_joint_feature_penalties_match_augmented_system_and_all_cv_fits(indicators):
+    """Feature-weighted ridge must leave choice/outcome penalties unchanged in reference and every grouped fold."""
+    x,names,folds=joint_design()
+    y=np.column_stack((np.arange(len(x))%7,4+3*x[:,-6]))
+    weights=np.ones(x.shape[1]); weights[:2]=.5 if indicators else 1
+    result=modeling.evaluate_block_cv(x,y,folds,alpha=2.3,penalty_weights=weights)
+    for fold,fit in [(-1,result["reference_fit"])]+list(enumerate(result["fold_fits"])):
+        train=np.ones(len(x),dtype=bool) if fold==-1 else folds!=fold
+        b,a=penalized_oracle(x[train],y[train],2.3*weights)
+        np.testing.assert_allclose(fit.slopes,b,atol=1e-11)
+        np.testing.assert_allclose(fit.intercept,a,atol=1e-11)
+        np.testing.assert_allclose(fit.penalties,2.3*weights)
+    assert result["cv_available"]
+
+
+def test_joint_matched_context_changes_only_context_penalties_and_preserves_predictions():
+    """Signed and redundant indicator context parameterizations agree with half context penalties, all others alpha."""
+    signed,names,folds=joint_design((15,4,8,11,5,9))
+    indicators,_,_=joint_design((15,4,8,11,5,9),True)
+    y=np.column_stack((np.sin(np.arange(len(signed))),2+signed[:,0]+4*signed[:,2]))
+    weights=np.r_[.5,.5,np.ones(7)]
+    a=modeling.evaluate_block_cv(signed,y,folds,alpha=3)
+    b=modeling.evaluate_block_cv(indicators,y,folds,alpha=3,penalty_weights=weights)
+    for key in ("reference_predictions","held_out_predictions","mse","r2"):
+        np.testing.assert_allclose(a[key],b[key],atol=1e-11)
+    np.testing.assert_array_equal(b["reference_fit"].penalties[2:],np.full(7,3.))
+
+
+def test_imbalanced_generic_post_response_has_ols_zero_but_expected_nonzero_ridge_contrasts():
+    """Unequal native outcome counts cause ridge contrast bias; compare analytic shrinkage instead of forcing zero."""
+    x,names,_=joint_design((60,6,12,40,4,8))
+    post=x[:,-6:].sum(1)
+    y=(10+3*post)[:,None]
+    ols=modeling.fit_ols_responses(x,y)
+    ridge=modeling.fit_ridge_responses(x,y)
+    oc=modeling.compute_reward_contrasts(ols,x,names)
+    rc=modeling.compute_reward_contrasts(ridge,x,names)
+    assert oc["valid"].all() and rc["valid"].all()
+    np.testing.assert_allclose(oc["values"],0,atol=1e-11)
+    expected,_=penalized_oracle(x,y,np.ones(x.shape[1]))
+    expected_values=np.vstack((expected[names.index("left_reward")]-expected[names.index("left_omission")],expected[names.index("right_reward")]-expected[names.index("right_omission")]))
+    np.testing.assert_allclose(rc["values"],expected_values,atol=1e-11)
+    assert (rc["values"]>.1).all()
+
+
+def test_contrast_support_is_independent_of_finite_regularized_predictions():
+    """Absent left omission permits prediction but not a supported left reward-minus-omission contrast."""
+    x,names,_=joint_design((10,0,10,10,10,10))
+    y=np.arange(len(x))[:,None].astype(float)
+    fit=modeling.fit_ridge_responses(x,y)
+    contrast=modeling.compute_reward_contrasts(fit,x,names)
+    assert contrast["valid"].tolist()==[False,True]
+    assert contrast["reasons"][0] and not contrast["reasons"][1]
+    assert np.isfinite(contrast["values"]).all() and np.isfinite(modeling.predict_responses(x,fit)).all()
+    assert not contrast["predictor_supported"][names.index("left_omission")]
+
+
+@pytest.mark.parametrize("weights",[np.ones(7),np.array([0.]*8),np.full(8,np.nan),np.ones((8,1))])
+def test_feature_penalty_contract_rejects_invalid_vectors(weights):
+    """Weights are a finite positive (P,) feature vector, never a target alpha vector or implicit reshape."""
+    x,_,_=joint_design()
+    with pytest.raises(ValueError,match="penalty|weight"):
+        modeling.fit_ridge_responses(x,np.ones((len(x),2)),penalty_weights=weights)
+
+
+def test_unknown_estimator_is_rejected(model_data):
+    """Numeric model selection is limited to ridge/OLS, without silent substitution."""
+    x,y,folds=model_data
+    with pytest.raises(ValueError,match="estimator"):
+        modeling.evaluate_block_cv(x,y,folds,estimator="poisson")
