@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import platform
 import pickle
+from importlib.metadata import version
 import tempfile
 import os
 from zipfile import BadZipFile
@@ -125,8 +126,7 @@ def compute_identities(config: PopulationDecodingConfig) -> dict:
         if path.suffix in (".json", ".csv", ".tsv"):
             item["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
         sources.append(item)
-    runtime = {"python": platform.python_version(), "numpy": np.__version__,
-               "pandas": pd.__version__, "sklearn": sklearn.__version__}
+    runtime = runtime_versions()
     code = code_identity()
     payload = {"config": config_payload(config), "sources": sources, "code": code, "runtime": runtime}
     identity = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -149,6 +149,13 @@ def code_identity() -> str:
     return digest.hexdigest()
 
 
+def runtime_versions() -> dict:
+    """Return installed numerical runtime version strings; no data or randomness."""
+    return {"python": platform.python_version(), "numpy": np.__version__,
+            "pandas": pd.__version__, "sklearn": sklearn.__version__,
+            "scipy": version("scipy"), "pynapple": version("pynapple")}
+
+
 def config_payload(config: PopulationDecodingConfig) -> dict:
     """Serialize config control paths/roles/bin width to portable JSON-compatible dict."""
     return {"analysis_version": config.analysis_version, "session_metadata": str(config.session_metadata),
@@ -160,6 +167,39 @@ def discover_runs(run_root: Path) -> list[Path]:
     """Return newest-first saved decoder directories under scalar run-root Path; no sources."""
     return sorted((path for path in Path(run_root).glob("population_task_decoding_*")
                    if path.is_dir() and (path / "config.json").is_file()), reverse=True)
+
+
+def load_manifest(directory: Path) -> dict:
+    """Read run-directory config.json; return version-checked manifest dict, no sources."""
+    manifest = json.loads((Path(directory) / "config.json").read_text())
+    if manifest.get("analysis_version") != ANALYSIS_VERSION or manifest.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError("Unsupported population decoding manifest version")
+    return manifest
+
+
+def inspect_run_status(directory: Path) -> dict:
+    """Inspect expected paired result files; return completion counts/status and completed IDs.
+
+    The immutable manifest/results are authoritative even if progress.json was
+    interrupted. No fits or source reads occur. Corrupt/incompatible files raise
+    ValueError instead of being treated as absent or overwritten.
+    """
+    directory = Path(directory)
+    manifest = load_manifest(directory)
+    completed = []
+    for entry in manifest["cells"]:
+        path = directory / "cells" / f"{entry}.npz"
+        if not path.exists():
+            continue
+        cell = load_cell(path)
+        if cell["meta"]["model_id"] != manifest["identities"]["model_id"]:
+            raise ValueError("Published cell identity differs from this run")
+        if f"{cell['meta']['region']}_{cell['meta']['target']}" != entry:
+            raise ValueError("Published cell region/target differs from its filename")
+        completed.append(entry)
+    return {"status": "complete" if len(completed) == len(manifest["cells"]) else "partial",
+            "completed_cells": len(completed), "expected_cells": len(manifest["cells"]),
+            "completed_ids": completed, "run_directory": str(directory)}
 
 
 def write_json(path: Path, payload: dict) -> None:
