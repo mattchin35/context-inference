@@ -18,7 +18,7 @@ def test_prepare_roundtrip_reuse_and_immutable_recompute(example_session):
     path = first["result_path"]
     before = path.read_bytes()
     packet = io.load_examples(path)
-    assert len(packet["matches"][("probe", "left", 1)]) == 2
+    assert len(packet["matches"][("probe", "left", 1)]) == 3
     assert packet["meta"]["parameters"]["probe_return_outcome"] == "rewarded_or_omission"
     assert packet["meta"]["random_seed"] is None
     assert packet["meta"]["units"]["choice_time"] == "UTC Unix seconds"

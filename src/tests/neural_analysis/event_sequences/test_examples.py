@@ -60,7 +60,8 @@ def test_catalogue_contains_all_families_and_preserves_source_rows(example_trial
     assert {key[0] for key, positions in matches.items() if len(positions)} == {
         "probe", "omission_probe", "ideal_transition", "lucky_omission_switch", "indecisive_transition",
     }
-    np.testing.assert_array_equal(matches[("probe", "left", 1)], [[0, 1, 2], [4, 5, 6]])
+    # The indecisive episode's rewarded tail independently qualifies as a probe.
+    np.testing.assert_array_equal(matches[("probe", "left", 1)], [[0, 1, 2], [4, 5, 6], [24, 25, 26]])
     rows = examples.extract_example_trials(example_trials, np.array([4, 5, 6]), trials_before=5, trials_after=5)
     assert rows.row_position.tolist() == list(range(12))
     assert rows.trial_id.tolist() == list(range(501, 513))

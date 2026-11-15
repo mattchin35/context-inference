@@ -67,6 +67,7 @@ def test_real_widgets_browse_and_export_without_source_reloads(example_session, 
     assert not app_test.exception
     assert app_test.success
     _widget(app_test, "selectbox", "Pattern").select("indecisive_transition").run()
+    _widget(app_test, "selectbox", "Initial side").select("right").run()
     assert not app_test.exception
     assert _widget(app_test, "selectbox", "Example").value == 0
     _widget(app_test, "selectbox", "Pattern").select("probe").run()
