@@ -111,6 +111,11 @@ def test_plot_and_png_share_exact_edges_and_rows(activity_example, tmp_path):
     assert figure.layout.meta["caption"].startswith("example PFC")
     assert "<br>" in figure.layout.annotations[-1].text
     assert figure.layout.annotations[-1].y == 0 and figure.layout.annotations[-1].yshift < 0
+    group_labels = [item for item in figure.layout.annotations if item.text in ("Left context", "Left choice")]
+    assert all(item.x == 0 and item.xshift <= -100 for item in group_labels)
+    domain = figure.layout.yaxis2.domain
+    assert figure.layout.coloraxis.colorbar.y == pytest.approx(sum(domain)/2)
+    assert figure.layout.coloraxis.colorbar.len == pytest.approx(domain[1]-domain[0])
     path = tmp_path / "units.png"
     export_unit_activity_png(path, data, behavior, display)
     with Image.open(path) as exported:
