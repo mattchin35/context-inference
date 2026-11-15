@@ -60,6 +60,44 @@ def test_request_schema_and_partial_batch(saved_decoder_run):
         read_requests(path)
 
 
+def test_custom_sd_export_records_limits_without_changing_selection(saved_decoder_run, monkeypatch):
+    """Input one saved selection; custom color limits survive new/replot/CLI exports and metadata."""
+    from src.neural_analysis.decoder_unit_activity import run_session as runner
+    from src.neural_analysis.decoder_unit_activity import run_batch as batch_runner
+    automatic = run_session(saved_decoder_run, "PFC", max_units_per_group=1)
+    captured = []
+    original_export = runner.export_unit_activity_png
+
+    def capture_export(path, data, *args):
+        """Record renderer color limits(SD pair); delegate to real PNG export, returning None."""
+        captured.append(data["color_limits"])
+        original_export(path, data, *args)
+
+    monkeypatch.setattr(runner, "export_unit_activity_png", capture_export)
+    custom = run_session(saved_decoder_run, "PFC", max_units_per_group=1, unit_sd_limit=2.5)
+    assert custom["selection_path"] == automatic["selection_path"] and custom["selection_reused"]
+    settings = json.loads((Path(custom["run_directory"]) / "settings.json").read_text())
+    assert settings["unit_sd_limit"] == 2.5 and settings["color_limits"] == [-2.5, 2.5]
+    plot_selection(custom["selection_path"], unit_sd_limit=1.5)
+    assert captured == [(-2.5, 2.5), (-1.5, 1.5)]
+    assert main(["plot", "--selection", custom["selection_path"], "--unit-sd-limit", "3"]) == 0
+    assert captured[-1] == (-3., 3.)
+    requests = saved_decoder_run.parent.parent / "custom_requests.json"
+    requests.write_text(json.dumps([{"source_run": str(saved_decoder_run), "regions": ["PFC"]}]))
+    dry = run_batch(requests, command="dry-run", unit_sd_limit=2.)
+    assert dry["reports"][0]["unit_sd_limit"] == 2.
+    assert batch_runner.main(["dry-run", "--requests", str(requests), "--unit-sd-limit", "2"]) == 0
+    before = set(requests.parent.rglob("*"))
+    for invalid in (0., -1., float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            run_session(saved_decoder_run, "PFC", unit_sd_limit=invalid)
+        with pytest.raises(ValueError):
+            run_batch(requests, command="dry-run", unit_sd_limit=invalid)
+    with pytest.raises(ValueError):
+        plot_selection(custom["selection_path"], scale="hz", unit_sd_limit=3.)
+    assert set(requests.parent.rglob("*")) == before
+
+
 @pytest.mark.parametrize("entry", [[], [{"source_run": "missing", "regions": []}],
     [{"source_run": "missing", "regions": ["PFC", "PFC"]}], [{"source_run": "missing", "regions": ["else"]}]])
 def test_invalid_requests_fail_before_workers(tmp_path, entry):

@@ -85,6 +85,39 @@ def test_viewport_slicing_reuses_full_pool_activity(activity_example):
     np.testing.assert_equal(tail["lanes"][0]["x"], [7, 8, 9])
 
 
+def test_custom_sd_limits_only_change_colors_and_survive_panning(activity_example, tmp_path):
+    """Input cached SD activity; a positive limit sets both renderers without clipping measured values."""
+    from matplotlib.figure import Figure
+    from src.neural_analysis.decoder_unit_activity.plotting import with_unit_sd_limit
+    full = make_data(activity_example, "zscore")
+    automatic_limits = full["color_limits"]
+    custom = with_unit_sd_limit(full, .5)
+    assert custom["color_limits"] == (-.5, .5) and full["color_limits"] == automatic_limits
+    assert custom["values"] is full["values"] and custom["lanes"] is full["lanes"]
+    assert custom["mean_hz"] is full["mean_hz"] and custom["scale_hz"] is full["scale_hz"]
+    assert np.max(np.abs(custom["values"])) > .5
+    tail = viewport_unit_activity_data(custom, (7, 9))
+    assert tail["color_limits"] == (-.5, .5)
+    _, _, behavior, display = activity_example
+    figure = plot_unit_activity(tail, behavior, display)
+    assert (figure.layout.coloraxis.cmin, figure.layout.coloraxis.cmax) == (-.5, .5)
+    assert "colors (-0.5, 0.5)" in figure.layout.meta["caption"]
+    with patch.object(Figure, "savefig", autospec=True) as save:
+        export_unit_activity_png(tmp_path / "custom.png", tail, behavior, display)
+    mesh = save.call_args.args[0].axes[1].collections[0]
+    assert (mesh.norm.vmin, mesh.norm.vmax) == (-.5, .5)
+    assert with_unit_sd_limit(full, None)["color_limits"] == automatic_limits
+
+
+@pytest.mark.parametrize("scale,limit", [("zscore", 0), ("zscore", -1), ("zscore", np.nan),
+    ("zscore", np.inf), ("zscore", True), ("hz", 3)])
+def test_invalid_sd_limits_are_rejected(activity_example, scale, limit):
+    """Input nonpositive/nonfinite SD limit or Hz activity; reject an invalid symmetric SD range."""
+    from src.neural_analysis.decoder_unit_activity.plotting import with_unit_sd_limit
+    with pytest.raises(ValueError, match="SD|zscore"):
+        with_unit_sd_limit(make_data(activity_example, scale), limit)
+
+
 def test_touching_windows_need_one_lane_and_ids_are_not_indices(activity_example):
     """Input adjacent half-open intervals with irregular IDs; they do not overlap or reorder."""
     rates, choices, _, _ = activity_example
