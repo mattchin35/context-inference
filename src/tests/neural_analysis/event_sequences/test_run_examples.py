@@ -87,3 +87,16 @@ def test_export_records_exact_selection_and_preserves_prior_png(example_session)
     second = runner.export_behavior_example(report["result_path"], condition, 0)
     assert second != first
     assert first.read_bytes() == contents
+
+
+def test_interrupted_archive_is_reported_and_replaced_by_a_new_result(example_session):
+    """Input: truncated trusted-local archive. Reject it and recompute without overwriting that path."""
+    runner = importlib.import_module("src.neural_analysis.event_sequences.run_examples")
+    io = importlib.import_module("src.neural_analysis.event_sequences.example_io")
+    first = runner.prepare_behavior_examples(example_session.metadata_path)
+    first["result_path"].write_bytes(b"interrupted save")
+    with pytest.raises(ValueError, match="Invalid behavior"):
+        io.load_examples(first["result_path"])
+    fresh = runner.prepare_behavior_examples(example_session.metadata_path)
+    assert fresh["result_path"] != first["result_path"]
+    assert first["result_path"].read_bytes() == b"interrupted save"
