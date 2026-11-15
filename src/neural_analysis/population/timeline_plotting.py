@@ -12,6 +12,7 @@ from plotly.subplots import make_subplots
 from src.neural_analysis.population.session_timeline import (
     RegionalTimelinePCA,
     SessionTimelineResult,
+    SparseTimelineTransform,
 )
 from src.neural_analysis.population.window_variance import WindowVarianceSummary
 from src.neural_analysis.task_decoding.session_prediction.plotting import (
@@ -92,7 +93,10 @@ def build_timeline_heatmap_data(
     )
     custom = np.empty((*data["customdata"].shape[:2], 8), dtype=object)
     custom[:, :, :7] = data["customdata"]
-    custom[:, :, 7] = regional.transform.explained_variance_ratio[ranks - 1, None] * 100
+    if isinstance(regional.transform, SparseTimelineTransform):
+        custom[:, :, 7] = None
+    else:
+        custom[:, :, 7] = regional.transform.explained_variance_ratio[ranks - 1, None] * 100
     custom[np.isnan(data["z"])] = None
     return {**data, "y": ranks, "customdata": custom}
 
@@ -372,7 +376,14 @@ def plot_session_timeline(
     native chart navigation does not send arbitrary range events to Python.
     prediction_display optionally adds saved PFC/HPC target readouts and actual
     overlays, with hidden/raw/weighted PC rows. It never changes fitted models.
+    Sparse coefficients use the same geometry but have no PCA variance hover.
+    PCA summaries/predictions cannot be attached to a sparse timeline.
     """
+    sparse = result.meta.get("algorithm", "pca") == "sparse_pca" or any(
+        isinstance(regional.transform, SparseTimelineTransform) for regional in result.regions.values()
+    )
+    if sparse and (window_variance or prediction_display is not None):
+        raise ValueError("Variance summaries and prediction overlays require ordinary PCA.")
     full_bounds = session_time_bounds(result)
     contexts = context_intervals(result.events, full_bounds[1])
     visible = time_range_s or full_bounds
@@ -399,7 +410,8 @@ def plot_session_timeline(
     for role, regional in display_regions.items():
         first, last = pc_ranges.get(role, (1, min(10, regional.scores.shape[2])))
         if prediction_display is None:
-            titles.append(f"{role} ({regional.probe_id}) - session PCs {first}-{last}")
+            component_label = "sparse components" if sparse else "session PCs"
+            titles.append(f"{role} ({regional.probe_id}) - {component_label} {first}-{last}")
             visible_pc_count = last - first + 1
         else:
             ids = selected_pc_ids(prediction_display, role, pc_ranges.get(role))
@@ -469,14 +481,18 @@ def plot_session_timeline(
                 "Manual color limits must be positive finite score values."
             )
         axis_domain = figure.layout[f"yaxis{row}"].domain
-        colorbar_title = f"{role} z-score<br>(PC SD)" if scaled_raw else f"{role} score"
-        value_label = "Z-score (PC SD)" if scaled_raw else "Score"
+        sd_label = "component SD" if sparse else "PC SD"
+        colorbar_title = f"{role} z-score<br>({sd_label})" if scaled_raw else f"{role} score"
+        value_label = f"Z-score ({sd_label})" if scaled_raw else "Score"
         if weighted:
             units = "log-odds" if prediction_display.result.inputs.target_families[target] == "categorical" else "target units"
             colorbar_title = f"{role} contribution<br>({units})"
             value_label = f"Contribution ({units})"
-        hover = (
+        component_hover = f"{role} ({regional.probe_id}) SC%{{y}}" if sparse else (
             f"{role} ({regional.probe_id}) %{{y}} - %{{customdata[7]:.2f}}% session variance"
+        )
+        hover = (
+            component_hover +
             "<br>Trial %{customdata[0]}<br>Elapsed [%{customdata[5]:.3f}, %{customdata[6]:.3f}) s"
             "<br>UTC [%{customdata[1]:.6f}, %{customdata[2]:.6f}) s"
             "<br>Choice-relative [%{customdata[3]:.3f}, %{customdata[4]:.3f}) s"
@@ -516,7 +532,7 @@ def plot_session_timeline(
             autorange="reversed",
             tickmode="array",
             tickvals=data["y"],
-            ticktext=[f"PC{rank}" for rank in (ids if ids is not None else data["y"])],
+            ticktext=[f"{'SC' if sparse else 'PC'}{rank}" for rank in (ids if ids is not None else data["y"])],
             row=row,
             col=1,
         )

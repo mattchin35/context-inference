@@ -27,6 +27,7 @@ from src.neural_analysis.population.window_variance import SessionWindowVariance
 from src.neural_analysis.population.window_variance_io import load_window_variance
 from src.neural_analysis.population.session_timeline import (
     SessionTimelineResult,
+    SparseTimelineTransform,
     summarize_session_variance,
 )
 from src.neural_analysis.population.timeline_plotting import (
@@ -58,10 +59,26 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
     # between Streamlit positions and loses its browser-only pan state.
     with st_module.container(key=f"{scope}_controls"):
         roles, bin_width_s = _population_controls(st_module, session, scope)
-        prediction_state = render_prediction_controls(st_module, session, scope, roles, int(round(bin_width_s * 1000)))
-        prediction_display = prediction_state.display
+        algorithm = st_module.sidebar.selectbox(
+            "Decomposition", options=("pca", "sparse_pca"),
+            format_func=_algorithm_label, key=f"{scope}_algorithm",
+        )
+        sparse = algorithm == "sparse_pca"
+        algorithm_arguments = {}
+        if sparse:
+            alpha = st_module.sidebar.number_input("SparsePCA alpha", min_value=0.0, value=1.0,
+                                                    step=.1, key=f"{scope}_sparse_alpha")
+            algorithm_arguments = {"algorithm": algorithm, "sparse_alpha": alpha}
+            st_module.caption("SparsePCA fits sparse neuron loadings; scores are ridge coefficients. "
+                              "Variance summaries and condition predictions are available with ordinary PCA.")
+        # Prediction controls can pin their saved ordinary basis even when hidden.
+        # Bypass that block entirely for a sparse selection, preserving its state.
+        prediction_state = None if sparse else render_prediction_controls(
+            st_module, session, scope, roles, int(round(bin_width_s * 1000)),
+        )
+        prediction_display = prediction_state.display if prediction_state is not None else None
         started = perf_counter()
-        if prediction_state.anchor is not None:
+        if prediction_state is not None and prediction_state.anchor is not None:
             anchor = prediction_state.anchor
             result = anchor.inputs.timeline
             config = result.meta
@@ -72,7 +89,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
                               "This saved background does not prepare an unprepared analysis mode or window.")
         else:
             try:
-                config = timeline_io.timeline_configuration(session, roles, bin_width_s)
+                config = timeline_io.timeline_configuration(session, roles, bin_width_s, **algorithm_arguments)
             except (OSError, ValueError) as error:
                 st_module.error(str(error))
                 return
@@ -81,8 +98,9 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
             recompute = st_module.sidebar.button("Recompute", key=f"{scope}_recompute", disabled=saved is None)
             if prepare or recompute:
                 try:
-                    with st_module.spinner("Preparing session-wide PCA..."):
-                        report = run_session_timeline(session.metadata_path, roles, bin_width_s, rerun=recompute)
+                    with st_module.spinner(f"Preparing session-wide {_algorithm_label(algorithm)}..."):
+                        report = run_session_timeline(session.metadata_path, roles, bin_width_s, rerun=recompute,
+                                                      **algorithm_arguments)
                     saved = report.result_path
                 except (OSError, ValueError) as error:
                     st_module.error(f"Could not prepare timeline: {error}")
@@ -109,7 +127,7 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
                     unavailable = {role: "Not prepared" if role in roles else "No probe assigned" for role in ("PFC", "HPC")}
                     result = SessionTimelineResult(session.session_id, origin, choices, events, {}, unavailable, config)
                     st_module.info(
-                        "Behavior is available now. Select probes and click Prepare to compute and save their session PCs."
+                        "Behavior is available now. Select probes and click Prepare to compute and save the selected session components."
                     )
             except (OSError, ValueError, KeyError) as error:
                 st_module.error(f"Could not load timeline: {error}")
@@ -118,16 +136,16 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
         state_key = f"{scope}_{config['configuration_id']}"
         navigation_key = f"{scope}_{result.session_id}_{result.time_origin_s}_navigation"
         summary = None
-        if prediction_display is None or prediction_display.pc_mode != "hidden":
+        if not sparse and (prediction_display is None or prediction_display.pc_mode != "hidden"):
             summary = _window_summary_controls(st_module, saved, state_key)
         speed = _speed_controls(st_module, session, scope)
         visible, revision = _navigation_controls(st_module, result, navigation_key)
         zscore_pcs = st_module.sidebar.checkbox(
-            "Z-score each PC",
+            "Z-score each component" if sparse else "Z-score each PC",
             value=False,
             disabled=not result.regions or (prediction_display is not None and prediction_display.pc_mode != "raw"),
             key=f"{state_key}_zscore_pcs",
-            help="Use each PC's mean and population SD across all prepared choice-window bins in this session.",
+            help="Use each component's mean and population SD across all prepared choice-window bins in this session.",
         )
         pc_ranges, limits = {}, {}
         if prediction_display is None or (prediction_display.pc_mode != "hidden" and prediction_display.pc_order == "original"):
@@ -578,13 +596,14 @@ def _pc_controls(
     ranges = {}
     limits = {}
     for role, regional in result.regions.items():
+        sparse = isinstance(regional.transform, SparseTimelineTransform)
         count = regional.scores.shape[2]
         if count == 1:
             ranges[role] = (1, 1)
-            st_module.sidebar.caption(f"{role}: PC1 only")
+            st_module.sidebar.caption(f"{role}: {'SC1' if sparse else 'PC1'} only")
         else:
             ranges[role] = st_module.sidebar.slider(
-                f"{role} PC ranks",
+                f"{role} sparse components" if sparse else f"{role} PC ranks",
                 min_value=1,
                 max_value=count,
                 value=default_pc_range(count),
@@ -609,7 +628,7 @@ def _pc_controls(
                 key=f"{key}_{role}_{mode}_limit",
             )
             limits[role] = limit
-            units = " PC SD" if zscore_pcs else ""
+            units = (" component SD" if sparse else " PC SD") if zscore_pcs else ""
             st_module.caption(
                 f"{role} manual display limits: {-limit:g} to {limit:g}{units}; values beyond these limits saturate."
             )
@@ -627,6 +646,27 @@ def _render_variance_footer(
     show_score_scaling=False suppresses raw-score descriptions when no raw
     PC heatmap is displayed, without changing any variance calculations.
     """
+    if result.meta.get("algorithm", "pca") == "sparse_pca":
+        for role, regional in result.regions.items():
+            fitted = regional.transform
+            st_module.caption(
+                f"{role} ({regional.probe_id}): {len(fitted.retained_unit_ids)} usable units; "
+                f"{len(fitted.omitted_unit_ids)} constant units omitted; "
+                f"{len(regional.choice_positions)}/{len(result.choices)} complete choice windows; "
+                f"{fitted.actual_components} sparse components; alpha {fitted.parameters['alpha']:g}; "
+                f"{fitted.n_iter} iterations. "
+                + ("Heatmap values use per-component session z-scores (component SD)." if zscore_pcs else
+                   f"Ridge coefficients; default color limits +/-{regional.color_limit:g}.")
+            )
+            if fitted.zero_component_ids:
+                st_module.caption(f"{role}: zero-loading component IDs {fitted.zero_component_ids}; retained as zero rows.")
+            if fitted.iteration_limit_reached:
+                st_module.warning(f"{role}: iteration limit reached; convergence unconfirmed.")
+            if fitted.warnings:
+                st_module.caption(f"{role}: sklearn warnings are recorded in the saved run log.")
+        for role, reason in result.unavailable.items():
+            st_module.caption(f"{role}: unavailable - {reason}")
+        return
     width = result.meta.get("bin_width_s", 0.5) * 1000
     st_module.markdown(
         f"**Variance coverage - all eligible +/-2 s choice windows, {width:g}-ms bins**"
@@ -665,6 +705,11 @@ def _render_variance_footer(
         "Separate session-wide regional bases; saved PCA scores are unwhitened. "
         "PC signs and identities apply to this configuration; PCs describe pooled choice-window activity."
     )
+
+
+def _algorithm_label(value: str) -> str:
+    """Return the user label for the unitless pca/sparse_pca preparation selector."""
+    return "SparsePCA" if value == "sparse_pca" else "PCA"
 
 
 def _format_trial(value: object) -> str:
