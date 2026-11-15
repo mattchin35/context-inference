@@ -76,3 +76,40 @@ def synthetic_population():
                                       np.arange(n), edges, rows, {})
     return PreparedPopulation("synthetic-population", trials, behavior, baseline, targets, folds,
         {"PFC": region}, {"HPC": "No probe role configured"}, {"bin_width_ms": 500, "random_seed": 81})
+
+
+@pytest.fixture
+def legacy_population_run(population_config_path):
+    """Create a separate frozen v1 run with ten original cells and five source columns.
+
+    Input is a synthetic session config. Original target computations are
+    unchanged, so freeze only their original fields/version into fresh files.
+    Leave the extended run intact. Return (legacy run Path, metadata Path).
+    """
+    from pathlib import Path
+    from src.neural_analysis.population_decoding import results
+    from src.neural_analysis.population_decoding.run_session import run_session
+    from src.neural_analysis.population_decoding.targets import TARGET_NAMES
+
+    report = run_session(population_config_path)
+    source = Path(report["run_directory"])
+    target = source.parent / "population_task_decoding_legacy_fixture"
+    (target / "cells").mkdir(parents=True)
+    manifest = results.load_manifest(source)
+    manifest["analysis_version"] = "population-task-decoding-v1"
+    manifest["config"]["analysis_version"] = "population-task-decoding-v1"
+    manifest.pop("model_targets")
+    manifest["cells"] = [entry for entry in manifest["cells"] if entry.split("_", 1)[1] in TARGET_NAMES]
+    copies = [(Path(manifest["preparation_path"]), target / "preparation.npz")]
+    copies += [(source / "cells" / f"{entry}.npz", target / "cells" / f"{entry}.npz") for entry in manifest["cells"]]
+    for old, new in copies:
+        with np.load(old, allow_pickle=True) as archive:
+            arrays = dict(archive)
+        meta = arrays["meta"].item()
+        meta["analysis_version"] = "population-task-decoding-v1"
+        for field in ("source_target", "conditioning_side"):
+            meta.pop(field, None)
+        np.savez_compressed(new, **arrays)
+    manifest["preparation_path"] = str(target / "preparation.npz")
+    (target / "config.json").write_text(json.dumps(manifest))
+    return target, population_config_path.parent / "neural_session.json"

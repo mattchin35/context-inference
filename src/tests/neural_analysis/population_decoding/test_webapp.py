@@ -81,3 +81,36 @@ def test_outcome_reward_summary_is_a_compact_side_table(population_config_path):
     assert len(tables) == 1
     assert tables[0].Side.tolist() == ["Left", "Right"]
     assert {"Reward trials", "No-reward trials", "Reward ROC-AUC"} <= set(tables[0])
+
+
+def test_new_targets_and_comparison_are_saved_only(population_config_path, monkeypatch):
+    """Input saved v2 run; seven targets and three scopes display without fitting or source reads."""
+    run_session(population_config_path)
+    metadata = population_config_path.parent / "neural_session.json"
+    monkeypatch.setattr(pipeline, "fit_target", forbid_analysis)
+    monkeypatch.setattr(pipeline, "build_switch_comparison", forbid_analysis)
+    monkeypatch.setattr(preparation, "load_behavior_inputs", forbid_analysis)
+    view = AppTest.from_function(render_for_test, args=(str(metadata),)).run()
+    control = next(item for item in view.selectbox if item.label == "Target")
+    assert len(control.options) == 7
+    control.select("left_switch_vs_stay").run()
+    assert not view.exception
+    comparisons = [item.value for item in view.dataframe if "Fit scope" in item.value.columns]
+    assert len(comparisons) == 1 and len(comparisons[0]) == 3
+    assert comparisons[0]["Scoring trials"].iloc[1] == comparisons[0]["Scoring trials"].iloc[2]
+    next(item for item in view.selectbox if item.label == "Target").select("left_choice_switch").run()
+    assert not view.exception
+    assert any("Fit scope" in item.value.columns for item in view.dataframe)
+
+
+def test_v1_view_offers_only_original_targets_and_preserves_files(legacy_population_run):
+    """Input frozen v1 products; original five targets render read-only with raw sources absent."""
+    run, metadata = legacy_population_run
+    before = {str(path): path.read_bytes() for path in run.rglob("*.npz")}
+    (metadata.parent / "trials.csv").unlink()
+    view = AppTest.from_function(render_for_test, args=(str(metadata),)).run()
+    next(item for item in view.selectbox if item.label == "Saved population run").select(str(run)).run()
+    assert not view.exception
+    assert len(next(item for item in view.selectbox if item.label == "Target").options) == 5
+    assert view.get("bidi_component")
+    assert before == {str(path): path.read_bytes() for path in run.rglob("*.npz")}

@@ -38,3 +38,14 @@ def test_whole_window_switch_tracks_use_current_trial(synthetic_population):
     trace = next(trace for trace in figure.data if trace.name == "P(left_switch)")
     relative = np.array([row[1] for row in trace.customdata if row[0] is not None])
     assert relative.min() == -1 and relative.max() == .5
+
+
+def test_conditional_trace_is_switch_only_and_omits_opposite_side(synthetic_population):
+    """Input synthetic population; within-left traces contain only eligible original trials."""
+    cell = fit_target(synthetic_population, "PFC", "left_switch_vs_stay")
+    figure = plot_decoding_timeline(synthetic_population, cell, "units")
+    traces = [trace for trace in figure.data if trace.name.startswith("P(")]
+    assert [trace.name for trace in traces] == ["P(switch)"]
+    original_ids = set(synthetic_population.trials.iloc[cell["row_positions"]].cur_trial)
+    assert all(row[0] in original_ids for row in traces[0].customdata if row[0] is not None)
+    assert "current left" in figure.layout.meta["caption"].lower()
