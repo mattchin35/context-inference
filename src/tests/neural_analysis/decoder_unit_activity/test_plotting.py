@@ -1,5 +1,7 @@
 """Native-bin activity, zero semantics and exact non-occluding overlap geometry."""
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -114,8 +116,9 @@ def test_empty_viewport_and_invalid_unit_selection(activity_example):
 def test_logged_context_and_led_tracks_export(activity_example, tmp_path):
     """Input recorded context/LED events; both renderers accept the public interval schemas."""
     _, _, behavior, display = activity_example
-    behavior.events = pd.DataFrame({"Event": ["enter_left_patch", "LED_on", "left_entry", "LED_off", "enter_right_patch"],
+    events = pd.DataFrame({"Event": ["enter_left_patch", "LED_on", "left_entry", "LED_off", "enter_right_patch"],
         "elapsed_s": [0., 1., 2., 3., 5.], "Time": [100., 101., 102., 103., 105.]})
+    behavior = replace(behavior, events=events)
     data = make_data(activity_example)
     figure = plot_unit_activity(data, behavior, display, ("LED", "left_entry"))
     assert len([trace for trace in figure.data if trace.type == "heatmap"]) == 2
