@@ -1,6 +1,7 @@
 """Native-bin activity, zero semantics and exact non-occluding overlap geometry."""
 
 from dataclasses import replace
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -133,3 +134,13 @@ def test_logged_context_and_led_tracks_export(activity_example, tmp_path):
     figure = plot_unit_activity(data, behavior, display, ("LED", "left_entry"))
     assert len([trace for trace in figure.data if trace.type == "heatmap"]) == 2
     export_unit_activity_png(tmp_path / "events.png", data, behavior, display, ("LED", "left_entry"))
+
+
+def test_png_colorbar_does_not_cover_time_axis(activity_example, tmp_path):
+    """Input shared lane data; the exported figure keeps colorbar entirely beyond both plot axes."""
+    from matplotlib.figure import Figure
+    _, _, behavior, display = activity_example
+    with patch.object(Figure, "savefig", autospec=True) as save:
+        export_unit_activity_png(tmp_path / "layout.png", make_data(activity_example), behavior, display)
+    figure = save.call_args.args[0]
+    assert max(axis.get_position().x1 for axis in figure.axes[:-1]) + .01 < figure.axes[-1].get_position().x0
