@@ -53,12 +53,15 @@ def run_batch(request_file: Path | str, *, command: str = "new", workers: int | 
     from src.neural_analysis.population_decoding.run_batch import choose_worker_count
     if command not in ("new", "dry-run"):
         raise ValueError("Batch command must be new or dry-run")
+    if type(max_units_per_group) is not int or max_units_per_group < 1 or scale not in ("zscore", "hz"):
+        raise ValueError("Expected positive max_units_per_group cap and zscore/hz scale")
     requests = read_requests(request_file)
     count = choose_worker_count(len(requests), workers)
     options = {"command": command, "max_units_per_group": max_units_per_group, "scale": scale}
     if command == "dry-run":
         reports = [report for request in requests for report in _run_worker(request, options)]
-        return {"status": "dry-run", "worker_count": 0, "planned_workers": count, "reports": reports}
+        return {"status": "dry-run" if all(report["status"] == "dry-run" for report in reports) else "partial",
+                "worker_count": 0, "planned_workers": count, "reports": reports}
     reports = []
     with ProcessPoolExecutor(max_workers=count, mp_context=get_context("spawn")) as executor:
         futures = [executor.submit(_run_worker, request, options) for request in requests]

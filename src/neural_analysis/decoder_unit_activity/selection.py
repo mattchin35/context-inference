@@ -178,6 +178,6 @@ def _fold_parameters(cell: dict, fold: int, units: int, classes: int) -> tuple[n
     if (keep.shape != (units,) or keep.dtype != bool or means.shape != (units,) or scales.shape != (units,)
             or not np.isfinite(means).all() or not np.isfinite(scales).all()):
         raise ValueError("Invalid training-unit mask/scaler axes")
-    if beta.shape != (classes, int(keep.sum())) or not np.isfinite(beta).all() or (scales[keep] <= 0).any():
+    if not keep.any() or beta.shape != (classes, int(keep.sum())) or not np.isfinite(beta).all() or (scales[keep] <= 0).any():
         raise ValueError("Invalid available coefficient shape/scale")
     return beta, keep

@@ -168,9 +168,10 @@ def plot_unit_activity(data: dict, behavior: SessionTimelineResult, display: pd.
     caption = activity_caption(data, len(display))
     figure.update_xaxes(range=list(viewport))
     figure.update_xaxes(title_text="Session elapsed time (s)", row=row, col=1)
-    figure.add_annotation(text=caption, x=0, y=-.10, xref="paper", yref="paper", showarrow=False, xanchor="left")
+    figure.add_annotation(text="<br>".join(textwrap.wrap(caption, 100)), x=0, y=0, yshift=-60,
+        xref="paper", yref="paper", showarrow=False, xanchor="left", yanchor="top", font={"size": 12})
     figure.update_layout(template="plotly_white", font={"size": 15},
-        height=400 + max(160, len(display)*lanes*20) + 60*len(tracks), margin={"l": 235, "b": 110},
+        height=400 + max(160, len(display)*lanes*20) + 60*len(tracks), margin={"l": 235, "b": 170},
         coloraxis={"cmin": data["color_limits"][0], "cmax": data["color_limits"][1],
                    "colorscale": "RdBu_r" if data["scale"] == "zscore" else "Viridis",
                    "colorbar": {"title": "Unit SD" if data["scale"] == "zscore" else "Hz"}},
@@ -234,7 +235,8 @@ def export_unit_activity_png(path: Path, data: dict, behavior: SessionTimelineRe
 
 def activity_caption(data: dict, unit_count: int) -> str:
     """Return caption from plot-data mapping and dimensionless selected-unit count."""
-    return (f"{unit_count} unique units; native {data['bin_width_s']*1000:g} ms bins; "
+    source = f"{data['source_label']}: " if data.get("source_label") else ""
+    return (f"{source}{unit_count} unique units; native {data['bin_width_s']*1000:g} ms bins; "
         f"choice window {list(data['window_s'])} s; actual {'unit z-scores' if data['scale'] == 'zscore' else 'Hz'}; "
         f"colors {data['color_limits']}. Five usable folds, >=4 positive; highest relative rank, one group/unit. "
         f"{data['lane_count']} sublanes; {data['overlap_count']} windows assigned to additional lanes. "

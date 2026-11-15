@@ -94,6 +94,7 @@ def activity_for_selection(selection: dict, prepared: PreparedPopulation, *, sca
     for name in ("mean_hz", "scale_hz", "constant_mask"):
         if not np.array_equal(data[name], arrays[name]):
             raise ValueError("Selection normalization disagrees with referenced native activity")
+    data["source_label"] = f"{meta['session_id']} {meta['region']}"
     return data
 
 
