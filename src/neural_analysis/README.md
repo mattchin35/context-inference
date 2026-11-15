@@ -109,6 +109,25 @@ retain their existing view-specific loading behavior; selecting a cached
 summary keeps the existing saved provenance. A missing optional source
 disables the affected view and explains which source is unavailable.
 
+### Recorded behavior examples
+
+Choose **Behavior examples** in the metadata-driven app to browse choices
+without loading neural sources. Select a pattern, initial side and repeat
+count; use Previous/Next or select an example directly. Context defaults to
+five original rows on either side and is adjustable. Light figures show choice,
+reward, correctness, task context and the matched episode, with original trial
+IDs. **Export PNG** saves a figure plus exact selection/provenance metadata.
+
+Both probe families accept correct rewarded or omission returns in this view;
+unknown return rewards are excluded. Existing neural views keep their original
+rewarded-return requirement. The five families share the existing behavioral
+selectors, preserving invalid intervening rows and overlapping episodes.
+
+Preparation is cached separately from plotting, with session-local versioned
+NPZ results and dated run logs/script snapshots. See the
+[recorded behavior examples guide](event_sequences/README.md#recorded-behavior-examples)
+for definitions, output paths and callable single-session/batch preparation.
+
 ### Event-sequence heatmaps
 
 Choose **Event sequences: central trials** or **Event sequences: multi-trial

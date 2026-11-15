@@ -216,6 +216,8 @@ from src.neural_analysis.webapp.timeline_view import render_session_timeline_vie
 from src.neural_analysis.webapp.cca_view import render_session_cca_view
 from src.neural_analysis.webapp.phase_synchrony_view import render_phase_synchrony_view
 from src.neural_analysis.webapp.event_sequence_views import render_event_sequence_view
+from src.neural_analysis.webapp.behavior_examples_view import render_behavior_examples_view
+from src.neural_analysis.webapp.session_inputs import PLOT_VIEW_BEHAVIOR_EXAMPLES, behavior_examples_availability
 from src.neural_analysis.webapp.unit_views import (
     PAGE_SIZE_OPTIONS,
     POPULATION_PSTH_UNIT_SCOPE_OPTIONS,
@@ -674,6 +676,13 @@ def _start_metadata_webapp(session: ResolvedSession) -> str | None:
     """
     st.sidebar.caption(f"Session: {session.subject_id} / {session.session_id}")
     plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+    if plot_view == PLOT_VIEW_BEHAVIOR_EXAMPLES:
+        availability = behavior_examples_availability(session)
+        if availability.available:
+            render_behavior_examples_view(st, session)
+        else:
+            st.warning(availability.reason)
+        return None
     availability = metadata_view_availability(session)[plot_view]
     if not availability.available:
         st.warning(availability.reason)
@@ -767,6 +776,9 @@ def main(argv: Sequence[str] = ()) -> None:
         metadata_lfp_sites = metadata_lfp_site_inputs(metadata_session)
     else:
         plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+        if plot_view == PLOT_VIEW_BEHAVIOR_EXAMPLES:
+            st.info("Behavior examples uses session metadata. Launch with --session-metadata <session_root>/neural_session.json.")
+            return
         if plot_view == PLOT_VIEW_SESSION_CCA:
             st.info("Session timeline and CCA uses session metadata. Launch with --session-metadata <session_root>/neural_session.json.")
             return

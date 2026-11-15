@@ -78,6 +78,8 @@ PLOT_VIEW_EVENT_SEQUENCE_CENTRAL = "Event sequences: central trials"
 
 PLOT_VIEW_EVENT_SEQUENCE_TRANSITION = "Event sequences: multi-trial sequences"
 
+PLOT_VIEW_BEHAVIOR_EXAMPLES = "Behavior examples"
+
 PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_UNIT_RASTER,
     PLOT_VIEW_TRIAL_SPIKES,
@@ -99,6 +101,7 @@ PLOT_VIEW_OPTIONS = [
     PLOT_VIEW_PHASE_SYNCHRONY,
     PLOT_VIEW_EVENT_SEQUENCE_CENTRAL,
     PLOT_VIEW_EVENT_SEQUENCE_TRANSITION,
+    PLOT_VIEW_BEHAVIOR_EXAMPLES,
 ]
 
 CHANNEL_SOURCE_MANUAL = "Manual / preset"
@@ -183,6 +186,17 @@ def metadata_lfp_site_inputs(session: ResolvedSession) -> tuple[MetadataLFPSiteI
             )
         )
     return tuple(sites)
+
+def behavior_examples_availability(session: ResolvedSession) -> MetadataViewAvailability:
+    """Check one resolved session's trial CSV only; return availability without neural IO.
+
+    session contains resolved paths/identities, with no numerical arrays. No
+    time units are transformed; a missing trial file returns an explicit reason.
+    """
+    source = session.behavior.trial_table_file
+    ready = source is not None and source.is_file()
+    return MetadataViewAvailability(ready, "available" if ready else "behavior trial CSV is missing")
+
 
 def metadata_view_availability(
     session: ResolvedSession,
@@ -283,6 +297,7 @@ def metadata_view_availability(
         )
     availability[PLOT_VIEW_EVENT_SEQUENCE_CENTRAL] = event_availability
     availability[PLOT_VIEW_EVENT_SEQUENCE_TRANSITION] = event_availability
+    availability[PLOT_VIEW_BEHAVIOR_EXAMPLES] = behavior_examples_availability(session)
     return availability
 
 def resolve_region_channels_for_source(

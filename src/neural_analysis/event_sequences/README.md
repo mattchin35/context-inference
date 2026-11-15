@@ -1,5 +1,72 @@
 # Event-sequence heatmaps
 
+## Recorded behavior examples
+
+Choose **Behavior examples** in the metadata webapp to browse recorded choice
+patterns without preparing neural activity. Launch the existing app with:
+
+```bash
+uv run streamlit run src/neural_analysis/psth_webapp.py -- --session-metadata /path/to/session/neural_session.json
+```
+
+The view offers Probe, Omission probe, Ideal transition, Lucky omission-switch,
+and Indecisive transition. It defaults to a left-starting Probe with one
+incorrect opposite-side choice and five original rows before/after the episode.
+Change the initial side or repeat count, use **Previous**/**Next** or **Example**
+to select a chronological match, and adjust **Trials before/after** as needed.
+Empty conditions report that no episodes match. Counts can overlap between
+families, including an indecisive transition's shorter ideal prefix/probe tail.
+
+Probe and omission-probe returns accept a correct rewarded trial or a correct
+omission (known reward 1 or 0). Their initial trial must be correct/rewarded,
+and all participating trials must stay in one block/active context. Unknown
+return rewards are excluded. Existing neural views retain rewarded-only returns.
+The remaining families keep their existing definitions and repeat limits.
+All participating rows require ordinary choices, consecutive original trial IDs,
+known zero experimenter-reward flags and finite UTC choice timestamps.
+
+Choice figures use original trial labels with equal spacing for trial order,
+not elapsed time. Filled/open circles encode reward/no reward; red crosses
+encode incorrect choices independently. Gray diamonds mark unknown rewards;
+stars mark manual rewards in surrounding rows. Context shading and a gold
+episode band are explained in the legend. Invalid surrounding choices remain
+as gaps, and captions identify context truncated by session boundaries.
+
+**Export PNG** saves a new light figure at 200 dpi and a same-stem JSON file
+with exact trial IDs, result identity, plotting-code digest, and context counts.
+Both preview and export use the same selected rows and annotation logic.
+
+The first visit prepares or reuses a small behavioral result; navigation never
+loads neural sources or repeats matching. **Recompute behavioral matches**
+creates a fresh result. Changed source content, analysis code/version or
+scientific parameters invalidate reuse. No metadata-schema change is needed.
+
+Computation entry point:
+
+```bash
+uv run python -m src.neural_analysis.event_sequences.run_examples --session-metadata /path/to/session/neural_session.json --dry-run
+```
+
+Remove `--dry-run` to prepare. Use `--rerun` for a new result and
+`--probe-return-outcome rewarded` for the original stricter probe definition.
+The callable batch entry point is
+`src.neural_analysis.event_sequences.run_examples_batch.run_batch`, accepting
+an explicit ordered list of metadata paths and optional `workers`; default
+parallelism is CPU count capped by session count. Dry runs start no workers.
+
+Named-array results, including full source rows, matches and `meta`, are saved
+under `<trial CSV directory>/behavior_examples/<version>/<configuration>/<timestamp>/`.
+Run logs, source-script snapshots, summaries and exported figures are stored
+in `<session>/analysis_runs/behavior_examples_<date>_<time>_<configuration>/`.
+Experimental outputs must be outside the source repository. Existing results
+and figures are never overwritten. NPZ loading uses pickle for local metadata
+and original labels, so only load trusted result archives.
+
+The core computation is `examples.py`, persistence is `example_io.py`, and
+rendering is `example_plotting.py`. The webapp only orchestrates these functions.
+
+## Neural activity views
+
 Open either **Event sequences: central trials** or **Event sequences:
 multi-trial sequences** in the metadata webapp. Both tools share the same saved
 neural source and plotting controls.

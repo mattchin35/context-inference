@@ -37,7 +37,7 @@ ADDITIONAL_CONDITIONS = (
     + tuple(product(("lucky_omission_switch",), ("left", "right"), (None,)))
     + tuple(product(("indecisive_transition",), ("left", "right"), range(1, 4)))
 )
-ADDITIONAL_SELECTOR_VERSION = "additional-sequences-v1"
+ADDITIONAL_SELECTOR_VERSION = "additional-sequences-v2"
 
 
 # Public table preparation and motif selection.
@@ -217,7 +217,9 @@ def select_ideal_transitions(trial_df: pd.DataFrame) -> dict[TransitionCondition
     return matches
 
 
-def select_additional_sequences(trial_df: pd.DataFrame) -> dict[AdditionalCondition, np.ndarray]:
+def select_additional_sequences(
+    trial_df: pd.DataFrame, *, probe_return_outcome: str = "rewarded",
+) -> dict[AdditionalCondition, np.ndarray]:
     """Select complete probe, omission, lucky-switch and indecisive episodes.
 
     Parameters
@@ -228,6 +230,10 @@ def select_additional_sequences(trial_df: pd.DataFrame) -> dict[AdditionalCondit
         and state_int (0=right, 1=left). Every participating original row must
         be an ordinary choice with consecutive integer trial IDs. All choice
         timestamps remain UTC Unix seconds; no rows are removed or sorted.
+    probe_return_outcome : {"rewarded", "rewarded_or_omission"}, keyword-only
+        Required final outcome for probe and omission_probe families only.
+        The default preserves existing neural analyses. The second option
+        accepts correct returns with reward 0 or 1; unknown rewards are excluded.
 
     Returns
     -------
@@ -238,14 +244,16 @@ def select_additional_sequences(trial_df: pd.DataFrame) -> dict[AdditionalCondit
         array contains complete episodes as zero-based source positions in
         episode-start chronology; empty conditions keep shape (0,S).
 
-        Probe episodes stay in one active context/block and require rewarded
-        returns. Lucky episodes change context after their omission; indecisive
+        Probe episodes stay in one active context/block with the specified
+        return outcome. Lucky episodes change context after their omission; indecisive
         episodes change after their initial reward and stay in the new context.
         Incorrect rewards are unconstrained. Valid overlapping episodes remain
         in every matching family, including an indecisive episode's probe tail.
         Neural coverage is not checked here. Missing columns raise ValueError;
         row-level missing context invalidates only participating episodes.
     """
+    if probe_return_outcome not in ("rewarded", "rewarded_or_omission"):
+        raise ValueError("probe_return_outcome must be rewarded or rewarded_or_omission.")
     missing = sorted({"cur_block", "state_int"} - set(trial_df.columns))
     if missing:
         raise ValueError(f"Trial table is missing additional-sequence columns: {missing}")
@@ -254,6 +262,9 @@ def select_additional_sequences(trial_df: pd.DataFrame) -> dict[AdditionalCondit
     state = trials["state_int"].to_numpy()
     block = trials["cur_block"].to_numpy()
     outcomes = _outcome_masks(trials)
+    outcomes["probe_return"] = outcomes["correct_rewarded"].copy()
+    if probe_return_outcome == "rewarded_or_omission":
+        outcomes["probe_return"] |= outcomes["omission"]
     ordinary = _ordinary_choices(trials)
     adjacent = _consecutive_trial_pairs(trials["trial_id"])
     offsets = {"probe": 2, "omission_probe": 3, "indecisive_transition": 4}
@@ -297,7 +308,7 @@ def _matches_additional_episode(
 
     family is one of ADDITIONAL_CONDITIONS' unitless strings; initial_action
     is 0=right or 1=left. action/state/block are unitless float (S,) arrays,
-    S=3..7; outcomes contains bool (S,) correct_rewarded/omission/incorrect
+    S=3..7; outcomes contains bool (S,) correct_rewarded/omission/incorrect/probe_return
     masks. The caller guarantees ordinary rows, continuous IDs, finite blocks,
     and an initially rewarded choice in its matching active context. Return
     bool; this function neither changes inputs nor checks neural coverage.
@@ -309,7 +320,7 @@ def _matches_additional_episode(
     if family in ("probe", "omission_probe"):
         if not np.all(block == block[0]) or not np.all(state == initial_action):
             return False
-        if action[-1] != initial_action or not rewarded[-1]:
+        if action[-1] != initial_action or not outcomes["probe_return"][-1]:
             return False
         excursion_start = 1
         if family == "omission_probe":
