@@ -60,3 +60,22 @@ def test_transition_caption_describes_its_own_reward_rule(example_trials):
     view = plotting.build_example_view(example_trials, positions, session_id="test", condition=key)
     assert "rewarded opposite-side choice" in view["caption"]
     assert "correct rewarded or omission" not in view["caption"]
+
+
+@pytest.mark.parametrize("family", ["probe", "omission_probe", "ideal_transition", "lucky_omission_switch", "indecisive_transition"])
+def test_presentation_caption_fits_canvas_with_full_session_identity(example_trials, family):
+    """Input: synthetic (N,C) rows and a full session label. Caption must fit and avoid the legend."""
+    plotting = importlib.import_module("src.neural_analysis.event_sequences.example_plotting")
+    examples = importlib.import_module("src.neural_analysis.event_sequences.examples")
+    matches = examples.find_behavior_examples(example_trials)
+    key = next(key for key, positions in matches.items() if key[0] == family and len(positions))
+    view = plotting.build_example_view(
+        example_trials, matches[key][0], session_id="CT026_2026-08-28_134630", condition=key,
+    )
+    figure = plotting.matplotlib_figure(view)
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    caption = figure.texts[0].get_window_extent(renderer)
+    legend = figure.axes[0].get_legend().get_window_extent(renderer)
+    assert caption.x0 >= 0 and caption.x1 <= figure.bbox.x1 - 5
+    assert caption.y0 >= 0 and caption.y1 < legend.y0 - 5
