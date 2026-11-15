@@ -67,6 +67,33 @@ def _validated_activity(
     return values, ids
 
 
+def standardize_unit_activity(
+    observations: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Standardize count observations (N,U) using per-unit population SDs.
+
+    Input is a nonempty observation/unit matrix in counts per bin. Return
+    float64 standardized (N,U_retained), bool retained mask (U,), and float64
+    mean/SD vectors (U_retained,) in counts per bin. Constant/nonfinite unit
+    statistics are omitted exactly as in regional PCA; no usable units raises.
+    """
+    observations = np.asarray(observations, dtype=np.float64)
+    if observations.ndim != 2 or not all(observations.shape):
+        raise ValueError("Activity must be a nonempty (observation, unit) matrix.")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        all_means = observations.mean(axis=0, dtype=np.float64)
+        all_scales = observations.std(axis=0, ddof=0, dtype=np.float64)
+    retained_mask = (
+        np.isfinite(all_means) & np.isfinite(all_scales) & (all_scales > 0.0)
+    )
+    if not np.any(retained_mask):
+        raise ValueError("Regional PCA has no variable finite training units.")
+    means, scales = all_means[retained_mask], all_scales[retained_mask]
+    standardized = (observations[:, retained_mask] - means) / scales
+    return standardized, retained_mask, means, scales
+
+
 def fit_regional_pca(
     training_activity: np.ndarray,
     unit_ids: Sequence[str],
@@ -98,20 +125,9 @@ def fit_regional_pca(
     ):
         raise ValueError("requested_components must be a positive integer.")
     observations = values.reshape(-1, values.shape[-1])
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        all_means = observations.mean(axis=0, dtype=np.float64)
-        all_scales = observations.std(axis=0, ddof=0, dtype=np.float64)
-    retained_mask = (
-        np.isfinite(all_means) & np.isfinite(all_scales) & (all_scales > 0.0)
-    )
-    if not np.any(retained_mask):
-        raise ValueError("Regional PCA has no variable finite training units.")
+    standardized, retained_mask, means, scales = standardize_unit_activity(observations)
     retained_ids = tuple(unit_id for unit_id, keep in zip(ids, retained_mask) if keep)
     omitted_ids = tuple(unit_id for unit_id, keep in zip(ids, retained_mask) if not keep)
-    means = all_means[retained_mask]
-    scales = all_scales[retained_mask]
-    standardized = (observations[:, retained_mask] - means) / scales
     component_count = min(
         int(requested_components), standardized.shape[0], standardized.shape[1]
     )

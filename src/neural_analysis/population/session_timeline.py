@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from numbers import Integral
 from time import perf_counter
 
 import numpy as np
@@ -25,6 +26,77 @@ from src.neural_analysis.population.pca import build_trial_unit_rate_tensor_pyna
 ANALYSIS_VERSION = "session-timeline-pca-v1"
 BIN_WIDTHS_S = (0.5, 0.1, 0.05, 0.02)
 WINDOW_S = (-2.0, 2.0)
+SPARSE_ANALYSIS_VERSION = "session-timeline-sparse-pca-v1"
+
+
+@dataclass(frozen=True)
+class SparseTimelineTransform:
+    """Sparse basis and preprocessing for N observations, U retained units, K atoms.
+
+    training_mean/scale (U,) are counts per bin; center (U,) is dimensionless
+    standardized activity. components (K,U) are dimensionless normalized
+    loadings, including possible zero rows. objective_history (iterations,)
+    stores sklearn's optimization objective, not explained variance. Unit IDs
+    preserve original order. parameters contains actual sklearn settings.
+    """
+
+    input_unit_ids: tuple[str, ...]
+    retained_unit_ids: tuple[str, ...]
+    omitted_unit_ids: tuple[str, ...]
+    training_mean: np.ndarray
+    training_scale: np.ndarray
+    center: np.ndarray
+    components: np.ndarray
+    n_training_observations: int
+    parameters: dict
+    n_iter: int
+    objective_history: np.ndarray
+    warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Validate finite native arrays/identity axes; no orthogonality is required."""
+        ids, retained, omitted = self.input_unit_ids, self.retained_unit_ids, self.omitted_unit_ids
+        if (not retained or len(set(ids)) != len(ids)
+                or set(retained) & set(omitted) or set(retained + omitted) != set(ids)
+                or tuple(unit for unit in ids if unit in retained) != retained
+                or tuple(unit for unit in ids if unit in omitted) != omitted):
+            raise ValueError("Sparse unit IDs must preserve the input order and partition.")
+        observations = self.n_training_observations
+        if isinstance(observations, bool) or not isinstance(observations, Integral) or observations < 1:
+            raise ValueError("Sparse observation count must be positive.")
+        count = min(observations, len(retained))
+        shapes = {
+            "training_mean": (len(retained),), "training_scale": (len(retained),),
+            "center": (len(retained),), "components": (count, len(retained)),
+        }
+        for name, shape in shapes.items():
+            value = np.asarray(getattr(self, name), dtype=np.float64)
+            if value.shape != shape or not np.isfinite(value).all():
+                raise ValueError(f"Invalid sparse {name} shape or finite values.")
+            object.__setattr__(self, name, value)
+        history = np.asarray(self.objective_history, dtype=np.float64)
+        if history.ndim != 1 or not history.size or not np.isfinite(history).all():
+            raise ValueError("Sparse objective history must be a finite vector.")
+        if (np.any(self.training_scale <= 0) or self.parameters.get("n_components") != count
+                or isinstance(self.n_iter, bool) or not isinstance(self.n_iter, Integral)
+                or not 1 <= self.n_iter <= self.parameters.get("max_iter", 0)):
+            raise ValueError("Invalid sparse scales, component count, or iterations.")
+        object.__setattr__(self, "objective_history", history)
+
+    @property
+    def actual_components(self) -> int:
+        """Return K, the dimensionless component count."""
+        return int(self.components.shape[0])
+
+    @property
+    def zero_component_ids(self) -> tuple[int, ...]:
+        """Return one-based IDs of zero-loading rows, without changing K."""
+        return tuple(int(i + 1) for i in np.flatnonzero(~self.components.any(axis=1)))
+
+    @property
+    def iteration_limit_reached(self) -> bool:
+        """Return whether the recorded iteration budget was exhausted (not proof of convergence)."""
+        return self.n_iter >= self.parameters["max_iter"]
 
 
 @dataclass(frozen=True)
@@ -32,8 +104,9 @@ class RegionalTimelinePCA:
     """One fixed regional basis and its choice-window scores.
 
     ``choice_positions`` indexes the shared choice table, shape (W,).
-    ``scores`` is float64 (W, B, K) in unwhitened standardized-unit score
-    units. ``bin_edges_s`` is (B+1,) in choice-relative seconds. The transform
+    ``scores`` is float64 (W, B, K): ordinary unwhitened PCA projections or
+    SparsePCA ridge coefficients in standardized-unit activity space.
+    ``bin_edges_s`` is (B+1,) in choice-relative seconds. The transform
     retains count means/SDs and (K, retained unit) loadings. Sample variance
     totals have shape scalar (session) and (W,) (within-window). ``color_limit``
     is the fixed maximum absolute score. Timing values are elapsed seconds.
@@ -44,7 +117,7 @@ class RegionalTimelinePCA:
     choice_positions: np.ndarray
     bin_edges_s: np.ndarray
     scores: np.ndarray
-    transform: RegionalPCATransform
+    transform: RegionalPCATransform | SparseTimelineTransform
     total_session_variance: float
     window_total_variance: np.ndarray
     color_limit: float

@@ -60,10 +60,11 @@ def test_sparse_scores_match_explicit_sklearn_fit_and_preserve_order(sparse_coun
         sparse_counts, tuple("abcde"), np.array([0, 2, 3, 6]), "PFC", "A", .5, alpha=.3,
     )
     assert result.scores.shape == (4, 8, 4)
-    np.testing.assert_array_equal(result.scores.reshape(-1, 4), coefficients)
-    np.testing.assert_array_equal(result.transform.components, estimator.components_)
-    np.testing.assert_array_equal(result.transform.center, estimator.mean_)
-    np.testing.assert_array_equal(result.transform.objective_history, estimator.error_)
+    # Independent array layouts can change rounding at machine precision.
+    np.testing.assert_allclose(result.scores.reshape(-1, 4), coefficients, atol=1e-12, rtol=1e-12)
+    np.testing.assert_allclose(result.transform.components, estimator.components_, atol=1e-12, rtol=1e-12)
+    np.testing.assert_allclose(result.transform.center, estimator.mean_, atol=1e-12, rtol=1e-12)
+    np.testing.assert_allclose(result.transform.objective_history, estimator.error_, atol=1e-12, rtol=1e-12)
     assert result.transform.n_iter == estimator.n_iter_
     assert result.transform.input_unit_ids == tuple("abcde")
     assert result.transform.retained_unit_ids == tuple("abcd")
