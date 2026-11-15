@@ -1,8 +1,9 @@
-"""Explicit five-target OOF analysis; no global PCA or behavior-derived features."""
+"""Explicit population OOF models and matched switch-scope comparisons."""
 
 from __future__ import annotations
 
 import numpy as np
+from copy import deepcopy
 from src.neural_analysis.task_decoding.pooled.decoding import stack_training_window
 
 from .configuration import REPRESENTATIONS
@@ -10,7 +11,7 @@ from .features import fit_unit_scaling, transform_unit_activity, fit_fold_pca, t
 from .modeling import LOGISTIC_PARAMETERS, fit_classifier, predict_probabilities
 from .preparation import PreparedPopulation
 from .scoring import score_predictions, conditional_outcome_scores
-from .targets import TARGET_NAMES, CLASS_NAMES
+from .targets import MODEL_TARGET_NAMES, CONDITIONAL_SWITCH_TARGETS, build_model_target
 
 
 def fit_target(prepared: PreparedPopulation, region_name: str, target_name: str) -> dict:
@@ -23,10 +24,10 @@ def fit_target(prepared: PreparedPopulation, region_name: str, target_name: str)
     classes, pooled/per-fold metrics, trial counts, training masks and reasons.
     Inputs are unchanged. Missing required OOF rows remain NaN.
     """
-    if target_name not in TARGET_NAMES or region_name not in ("PFC", "HPC"):
+    if target_name not in MODEL_TARGET_NAMES or region_name not in ("PFC", "HPC"):
         raise ValueError("Unknown population region or target")
-    target = TARGET_NAMES.index(target_name)
-    classes = tuple(range(len(CLASS_NAMES[target])))
+    model_target = build_model_target(target_name, prepared.targets)
+    classes = tuple(range(len(model_target.class_names)))
     region = prepared.regions.get(region_name)
     width = prepared.meta["bin_width_ms"] / 1000
     edges = region.bin_edges_s if region is not None else np.linspace(-1, 1, round(2 / width) + 1)
@@ -34,16 +35,17 @@ def fit_target(prepared: PreparedPopulation, region_name: str, target_name: str)
     positions = np.empty(0, int)
     if region is not None:
         rows = region.row_positions
-        positions = np.flatnonzero(prepared.baseline[rows] & prepared.targets.valid[rows, target])
+        positions = np.flatnonzero(prepared.baseline[rows] & model_target.valid[rows])
         rows = rows[positions]
     else:
         rows = np.empty(0, int)
-    labels = prepared.targets.values[rows, target]
+    labels = model_target.labels[rows]
     folds = prepared.fold_ids[rows]
     shape = (len(rows), len(bins), len(classes))
     cell = {"row_positions": rows, "bin_indices": bins, "labels": labels,
             "fold_ids": folds, "class_codes": np.asarray(classes),
-            "meta": {"region": region_name, "target": target_name, "class_names": list(CLASS_NAMES[target]),
+            "meta": {"region": region_name, "target": target_name, "class_names": list(model_target.class_names),
+                "source_target": model_target.source_target, "conditioning_side": model_target.conditioning_side,
                 "supervised_interval_s": [0 if target_name == "outcome" else -1, 1],
                 "bin_width_ms": prepared.meta["bin_width_ms"],
                 "estimator": {**LOGISTIC_PARAMETERS, "class_name": "sklearn.linear_model.LogisticRegression",
@@ -76,6 +78,94 @@ def fit_target(prepared: PreparedPopulation, region_name: str, target_name: str)
     if not any(np.isfinite(cell[f"{name}_probabilities"]).any() for name in REPRESENTATIONS):
         cell["meta"]["unavailable_reason"] = cell["meta"]["unavailable_reason"] or "No available held-out fits"
     return cell
+
+
+def build_switch_comparison(current_choices: np.ndarray, reference_cell: dict, new_cell: dict) -> dict:
+    """Align full-row current choices(N,) and paired W,B,2 OOF cells; return comparison.
+
+    Returns reference_window_indices(W_side,) plus meta containing three score
+    scopes per representation and matched-fold diagnostics. Both cells must use
+    identical bin geometry, region, and required same-side trial/fold/label maps.
+    Missing predictions remain required; no finite-row intersection, renormalizing,
+    refitting or input mutation occurs. Scores/probabilities are dimensionless.
+    The runner checks run identities before calling this pure function.
+    """
+    reference, new = reference_cell, new_cell
+    target = new["meta"]["target"]
+    if target not in CONDITIONAL_SWITCH_TARGETS:
+        raise ValueError("Comparison requires a conditional switch target")
+    side = "left" if target == "left_switch_vs_stay" else "right"
+    reference_target = f"{side}_choice_switch"
+    if (reference["meta"]["target"] != reference_target or new["meta"].get("conditioning_side") != side
+            or reference["meta"]["region"] != new["meta"]["region"]
+            or new["meta"]["class_names"] != ["stay", "switch"]
+            or reference["meta"]["bin_width_ms"] != new["meta"]["bin_width_ms"]
+            or reference["meta"]["supervised_interval_s"] != new["meta"]["supervised_interval_s"]):
+        raise ValueError("Incompatible switch model scopes")
+    choices = np.asarray(current_choices)
+    rows = np.asarray(reference["row_positions"])
+    if (choices.ndim != 1 or rows.ndim != 1 or not np.issubdtype(rows.dtype, np.integer)
+            or np.any((rows < 0) | (rows >= len(choices))) or np.any(np.diff(rows) <= 0)):
+        raise ValueError("Invalid reference row positions")
+    indices = np.flatnonzero(choices[rows] == (1 if side == "left" else 0))
+    if (not np.array_equal(rows[indices], new["row_positions"])
+            or not np.array_equal(reference["bin_indices"], new["bin_indices"])
+            or not np.array_equal(reference["fold_ids"][indices], new["fold_ids"])
+            or not np.array_equal(reference["labels"][indices], new["labels"])):
+        raise ValueError("Comparison requires exactly matching rows, bins, folds and labels")
+    bins = len(new["bin_indices"])
+    expected_shape = (len(new["labels"]), bins, 2)
+    if bins == 0:
+        raise ValueError("Comparison requires supervised bins")
+    meta = {"reference_target": reference_target, "conditioning_side": side,
+            "class_names": ["stay", "switch"], "required_trials": len(indices),
+            "difference_definition": "within_side minus reference_matched_side; lower log loss is better",
+            "representations": {}}
+    for rep in REPRESENTATIONS:
+        if (new[f"{rep}_probabilities"].shape != expected_shape
+                or new[f"{rep}_log_probabilities"].shape != expected_shape
+                or reference[f"{rep}_probabilities"].shape != (len(rows), bins, 2)
+                or reference[f"{rep}_log_probabilities"].shape != (len(rows), bins, 2)):
+            raise ValueError("Comparison probability axes do not match row/bin maps")
+        matched = _score_window_rows(reference, rep, indices)
+        within = _score_window_rows(new, rep, np.arange(len(indices)))
+        record = {"reference_all_trials": {"trial_count": len(rows),
+                      "scores": deepcopy(reference["meta"]["representations"][rep]["pooled"])},
+                  "reference_matched_side": {"trial_count": len(indices), "scores": matched},
+                  "within_side": {"trial_count": len(indices), "scores": within},
+                  "differences": _metric_differences(matched, within), "folds": []}
+        for fold in range(5):
+            selected = np.flatnonzero(new["fold_ids"] == fold)
+            a = _score_window_rows(reference, rep, indices[selected])
+            b = _score_window_rows(new, rep, selected)
+            record["folds"].append({"fold": fold, "trial_count": len(selected),
+                "reference_matched_side": a, "within_side": b, "differences": _metric_differences(a, b)})
+        meta["representations"][rep] = record
+    return {"reference_window_indices": indices, "meta": meta}
+
+
+def _score_window_rows(cell: dict, representation: str, window_indices: np.ndarray) -> dict:
+    """Score selected integer window indices(W,) from saved W,B,2 arrays; return metrics.
+
+    Labels are repeated in trial-major/bin-major order. NaN OOF values remain
+    present, making required-scope metrics unavailable rather than dropping rows.
+    """
+    bins = len(cell["bin_indices"])
+    p = cell[f"{representation}_probabilities"][window_indices].reshape(-1, 2)
+    lp = cell[f"{representation}_log_probabilities"][window_indices].reshape(-1, 2)
+    return score_predictions(np.repeat(cell["labels"][window_indices], bins), p, (0, 1),
+                             lp if np.isfinite(lp).all() else None)
+
+
+def _metric_differences(reference: dict, new: dict) -> dict:
+    """Return new-minus-reference scalar metric differences, or None when undefined."""
+    differences = {}
+    for name in ("balanced_accuracy", "log_loss", "accuracy", "roc_auc", "average_precision"):
+        a, b = reference[name], new[name]
+        if name in ("roc_auc", "average_precision"):
+            a, b = a[1], b[1]
+        differences[name] = float(b-a) if a is not None and b is not None else None
+    return differences
 
 
 def _fit_fold(cell: dict, activity: np.ndarray, unit_ids: tuple[str, ...], rows: np.ndarray,

@@ -10,6 +10,8 @@ from sklearn.model_selection import GroupKFold
 from src.behavior_analysis.project_utils import normalize_experimenter_reward_column
 
 TARGET_NAMES = ("context", "choice", "outcome", "left_choice_switch", "right_choice_switch")
+CONDITIONAL_SWITCH_TARGETS = ("left_switch_vs_stay", "right_switch_vs_stay")
+MODEL_TARGET_NAMES = (*TARGET_NAMES, *CONDITIONAL_SWITCH_TARGETS)
 CLASS_NAMES = (
     ("right", "left"), ("right", "left"),
     ("left_reward", "right_reward", "left_no_reward", "right_no_reward"),
@@ -31,6 +33,52 @@ class PopulationTargets:
     valid: np.ndarray
     reasons: np.ndarray
     class_names: tuple[tuple[str, ...], ...] = CLASS_NAMES
+
+
+@dataclass(frozen=True)
+class ModelTarget:
+    """One model's dimensionless labels/validity/reasons (N,) on original source rows.
+
+    Excluded labels are -1. class_names defines ordered probability columns;
+    source_target names one of five source columns. conditioning_side is left,
+    right, or None. Source arrays are never modified or expanded to seven axes.
+    """
+
+    labels: np.ndarray
+    valid: np.ndarray
+    reasons: np.ndarray
+    class_names: tuple[str, ...]
+    source_target: str
+    conditioning_side: str | None
+
+
+def build_model_target(name: str, targets: PopulationTargets) -> ModelTarget:
+    """Select a fitted model's labels from source arrays (N,5); return ModelTarget.
+
+    Conditional switch heads exclude opposite current sides instead of making
+    them negatives. Immediate-successor validity is inherited unchanged. Labels
+    are dimensionless, stay=0/switch=1 for conditional heads. Return new arrays.
+    """
+    if name not in MODEL_TARGET_NAMES:
+        raise ValueError(f"Unknown model target: {name}")
+    side = None
+    source_name = name
+    if name in CONDITIONAL_SWITCH_TARGETS:
+        side = "left" if name == "left_switch_vs_stay" else "right"
+        source_name = f"{side}_choice_switch"
+    index = TARGET_NAMES.index(source_name)
+    labels = targets.values[:, index].copy()
+    valid = targets.valid[:, index].copy()
+    reasons = targets.reasons[:, index].copy()
+    class_names = targets.class_names[index]
+    if side is not None:
+        code = 1 if side == "left" else 0
+        opposite = valid & targets.valid[:, 1] & (targets.values[:, 1] != code)
+        valid &= targets.valid[:, 1] & (targets.values[:, 1] == code)
+        labels[~valid] = -1
+        reasons[opposite] = "opposite_current_side"
+        class_names = ("stay", "switch")
+    return ModelTarget(labels, valid, reasons, class_names, source_name, side)
 
 
 def numeric_column(values: object) -> np.ndarray:
