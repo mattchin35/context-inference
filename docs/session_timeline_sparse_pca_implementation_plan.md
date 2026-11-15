@@ -1,9 +1,10 @@
 # Session timeline: targeted SparsePCA addition
 
-Status: proposed implementation plan, 2026-11-14. Planning only; implementation
-requires approval under AGENTS.md. This plan incorporates the user's approved
-choices: a full component count, adjustable alpha initially 1, and no variance
-summaries in SparsePCA mode.
+Status: implemented and validated; viewer inspection finalized 2026-11-15.
+The user revised the component count to a cap of 30 after the first
+full-count CT026 fit produced individual-neuron components. Adjustable alpha
+initially 1 and no variance summaries remain approved. The completed full-count
+product is retained separately; new preparations use the 30-component cap.
 
 ## 1. Scope and intended behavior
 
@@ -17,7 +18,7 @@ context/reward markers, event rows, signed speed, navigation, bounded neural
 loading, color controls, and display-only component z-scoring.
 
 The only new scientific user control is SparsePCA's alpha. Component count is
-fixed to the current full-count policy, not another control in this addition.
+fixed to a cap of 30 per region, not another control in this addition.
 The same alpha applies to both selected regions. PCA parameters and behavior
 remain as they are today.
 
@@ -37,7 +38,7 @@ For each region independently:
    constant units exactly as ordinary PCA does. Keep original, retained, and
    omitted qualified unit IDs in their original order.
 4. Fit on standardized counts `(N,U_retained)`, with
-   `K=min(N,U_retained)`. Fit all eligible prepared observations, independently
+   `K=min(30,N,U_retained)`. Fit all eligible prepared observations, independently
    of the current viewport or displayed component range.
 5. Obtain scores through sklearn's `fit_transform()` (equivalently fit followed
    by transform), not multiplication by `components_.T`. Its transform uses
@@ -47,8 +48,9 @@ For each region independently:
    `SC1`, `SC2`, etc.; these IDs do not imply a variance ranking.
 
 SparsePCA makes neuron loadings sparse; it does not require component activity
-to be sparse over time. A full component set can approach individual-neuron
-directions. This is an accepted limitation of the initial full-count policy.
+to be sparse over time. The initial full-count CT026 fit produced individual-
+neuron directions, motivating the user's subsequent 30-component cap. The cap
+does not itself guarantee that every component combines multiple neurons.
 
 ### Fixed estimator settings
 
@@ -57,7 +59,7 @@ actual `sklearn.decomposition.SparsePCA` class with explicit settings:
 
 | Setting | Initial value / policy |
 | --- | --- |
-| `n_components` | Regional full count `min(N,U_retained)` |
+| `n_components` | Regional capped count `min(30,N,U_retained)` |
 | `alpha` | User selection; default 1.0; finite and nonnegative |
 | `ridge_alpha` | 0.01 |
 | `method` | `lars` |
@@ -147,7 +149,7 @@ that default does not require modifying its metadata or rewriting the file.
 
 SparsePCA uses `session-timeline-sparse-pca-v1` with the existing named-array
 NPZ envelope (`schema_version=1`). Its configuration adds the algorithm,
-full-count policy, complete estimator settings, seed, and installed sklearn
+30-component cap, complete estimator settings, seed, and installed sklearn
 version before calculating its identity. Include all existing source/population,
 choice-window, and bin identities as before. Ignore no scientific setting when
 finding a matching sparse cache.
@@ -155,7 +157,11 @@ finding a matching sparse cache.
 Reuse the current `session_timeline_pca_<date>_<time>_<id>` run-directory layout
 to avoid another discovery tree. Config/summary/viewer labels explicitly identify
 SparsePCA. Different algorithm/alpha settings have different IDs and new paths.
-The historical directory prefix alone does not identify the algorithm.
+The historical directory prefix alone does not identify the algorithm. The
+current sparse identity includes `component_count_policy="capped"` and
+`requested_components=30`; the initial `"full"` products keep their own IDs
+and remain readable without conversion. This is a changed parameter, not a
+change to sklearn's algorithm or to the ordinary-PCA version.
 
 The serializer currently hardcodes ordinary analysis version and `random_seed:
 None`; explicitly branch those fields for SparsePCA. The loader accepts only
@@ -255,7 +261,8 @@ and webapp tests rather than building another testing harness.
    retained IDs/order, PCA loadings/scores/variance, and constant-unit behavior.
 2. **Sparse estimator agreement:** a seeded small count tensor matches an
    independently constructed installed sklearn fit/transform using explicit
-   standardization and identical settings. Verify `(W,B,K)` order and full K.
+   standardization and identical settings. Verify `(W,B,K)` order, the cap of
+   30, smaller observation/unit bounds, and loading legacy full-count products.
 3. **Correct score method:** a nonorthogonal fixture agrees with sklearn's
    ridge transform and differs from a simple loading dot product.
 4. **Scientific edge cases:** repeatability, constant units, no usable units,
@@ -295,7 +302,7 @@ resampling, subsampling, minibatch substitute, GPU, or extra decomposition cache
 is part of this addition. Sparse fitting is expected to be the expensive step;
 measure rather than promise a preparation time.
 
-After synthetic correctness, validate CT026 2026-08-04 at 500 ms, alpha 1,
+After synthetic correctness, validate CT026 2026-08-04 at 500 ms, alpha 1, up to 30 components,
 for the existing selected regional populations. Reuse the existing metadata
 and speed cache; do not alter experimental inputs. Before/after checks cover
 the paths, stats, and hashes of the original ordinary PCA/Stage 2 products.
@@ -320,7 +327,7 @@ diagnostics, and runtime; no statistical tests are implied. No old result is
 overwritten. User inspection precedes any experimental batch.
 
 Do not automatically launch the full 20-ms preparation after the first run.
-Review the measured 500-ms fit/iteration/memory behavior first. If full-count
+Review the measured 500-ms fit/iteration/memory behavior first. If capped
 SparsePCA is impractical, report that limitation instead of silently reducing
 K, coarsening data, or switching to MiniBatchSparsePCA. The eventual plotting
 path continues to use prepared arrays and existing bounded loading.
@@ -348,3 +355,113 @@ References checked against installed scikit-learn 1.8.0:
 - SparsePCA API: https://scikit-learn.org/1.8/modules/generated/sklearn.decomposition.SparsePCA.html
 - Formulation: https://scikit-learn.org/1.8/modules/decomposition.html#sparse-principal-components-analysis-sparsepca-and-minibatchsparsepca
 - Local implementation: .venv/lib/python3.12/site-packages/sklearn/decomposition/_sparse_pca.py
+
+## 10. Completed implementation and validation
+
+The addition uses one new production module, the shared arithmetic extraction,
+and the existing timeline storage/runner/viewer paths. No dependency, metadata
+schema, chart component, or replacement variance metric was added. Sparse
+fitting is explicit; display changes use saved scores. The component cap is
+fixed at 30, with fewer components only when observation/unit bounds require it.
+
+### Test-driven work packages
+
+RED tests were committed before implementation:
+
+- `c4a9f9a`: preprocessing/scientific scores; GREEN in `12512fe`.
+- `a5186ca`: persistence, identity, CLI/batch, and Stage 2 isolation; GREEN in `4ba59ea`.
+- `146f52e`: plotting/viewer behavior and prediction-anchor exclusion; GREEN in `8553c19`.
+- `c9e14f0`: the user's revised 30-component cap and legacy full-product loading;
+  GREEN in `b66b46b`.
+
+One genuine test correction allowed 1e-12 numerical tolerance against an
+independent sklearn reference: different NumPy array layouts produced a maximum
+2.22e-16 rounding difference. Ordinary PCA regression checks remain exact;
+repeated identical sparse calls remain exactly repeatable in the tested setup.
+
+The integrated run passed **364 tests** across sparse computation/storage/UI,
+ordinary/interregional PCA, legacy timeline identity, Stage 2, speed, the Node
+chart lifecycle, and condition-prediction preparation/models/results/plotting.
+Two warnings came from the existing fork-based synthetic batch executor under
+Python 3.12. Changed Python paths pass Ruff. No experimental batch was run.
+
+### CT026 products and source integrity
+
+Designated session: CT026 2026-08-04. The completed capped result is:
+
+```text
+analysis_runs/session_timeline_pca_20261114_234820_260110_d7104f373744628c/results.npz
+```
+
+It contains `(716,8,30)` scores for each region, 500-ms bins, alpha 1, seed 0,
+174 retained PFC units and 316 retained HPC units (one constant HPC unit omitted).
+The initial full-count product remains separately readable at
+`session_timeline_pca_20261114_233545_548420_a1345a13844a2f47/results.npz`.
+
+The processed behavior CSVs had been regenerated before this task. The current
+source pool has 716 choices; the original October PCA products had 715 and
+already-stale source identities. Validation therefore used current raw spike
+counts, independent manual unit scaling, and sklearn's ridge solve. Both
+regions' saved scores matched that independent ridge calculation exactly.
+This checks score correctness, not optimization convergence.
+
+Before/after size, mtime, and SHA-256 checks preserved all four original
+500/20-ms PCA/Stage 2 NPZ archives, and their ordinary lookup status remained
+unchanged. Current source changes were not bypassed by registering/relabeling
+an old product. The existing speed implementation had advanced to v3 before
+this task; its matching cache was prepared explicitly through the existing
+Prepare speed button for inspection, preserving the older v2 product.
+
+### Capped-fit diagnostics and measurements
+
+| Quantity | PFC | HPC |
+| --- | --- | --- |
+| Fitted components | 30 | 30 |
+| Retained units | 174 | 316 |
+| Fit time | 101.56 s | 199.07 s |
+| Transform time | 0.0048 s | 0.0068 s |
+| Iterations | 1000 | 1000 |
+| Zero loading fraction | 51.44% | 44.93% |
+| Entirely zero components | None | None |
+| Optimization status | Iteration limit; convergence unconfirmed | Iteration limit; convergence unconfirmed |
+
+The smaller basis now combines neurons rather than reproducing a full set of
+single-neuron axes. Both fits exhausted the approved iteration budget. Finite
+coefficients remain available for inspection, with explicit viewer warnings
+and saved diagnostics; neither is described as a certified converged optimum.
+No tolerance/budget change or automatic retry was performed.
+
+Total preparation took 304.26 s. The NPZ is 3,177,429 bytes and loaded in
+0.034-0.035 s. The two score tensors occupy 2,749,440 bytes combined. A full
+session figure with 10 visible components per region and default event rows
+took 0.968 s to construct and 0.658 s to serialize, producing 14,475,722 bytes
+of JSON without optional speed. Process peak RSS was 0.771 GB during
+preparation and 0.790 GB across the validation/benchmark lifetime, including
+imports and independent count reconstruction. These are single local calls,
+filesystem cache state unspecified, excluding browser latency. Sklearn and
+BLAS used one job/thread; the environment reported 24 CPUs.
+
+Validation JSON, benchmarks, code/runner copies, source snapshots, and
+`implementation_provenance.json` remain beside the capped result. Preparation
+started while the cap edits were being committed; the immutable NPZ records
+the then-current HEAD. The provenance supplement identifies validated commit
+`b66b46b` and source copies, while saved estimator settings explicitly record
+the actual 30-component fit. No NPZ provenance was rewritten.
+
+### Browser inspection
+
+The production viewer selected the capped archive and showed SC labels,
+component-SD legends, context/reward markers, and signed speed. It omitted PCA
+variance summaries and prediction controls. Native pan moved the shared ticks
+from 10-60 to 30-80 s; a rank change and an alpha round trip preserved that
+interval. Unprepared alpha 0.3 showed behavior/speed without unrelated scores
+or a new preparation. Ordinary PCA restored its saved prediction anchor;
+returning to SparsePCA correctly bypassed that anchor.
+
+Bounded loading preserved the panned interval. Jump to trial 4 explicitly
+changed Window start to -0.002 s and the loaded interval to [-0.002,119.998] s.
+Both convergence warnings were present. `ct026_sparse30_preview.png`,
+`viewer_inspection.md`, and `viewer_validation.json` provide review artifacts
+beside the prepared result. Usage is documented in SESSION_TIMELINE.md and
+linked from the neural-analysis README. No finer-bin sparse preparation or
+experimental batch was started.

@@ -220,6 +220,13 @@ signed-mm/s step trace below events. The speed cache is independent of neural
 probes and bin widths. See the usage guide for preparation and the required
 one-time registration of legacy PCA results before changing their metadata.
 
+The same viewer also offers **SparsePCA** in **Decomposition**, with an
+adjustable alpha (default 1) and up to 30 components per region. Click
+**Prepare** to save its separate scores, then inspect SC rows with optional
+per-component z-scoring. Sparse mode hides ordinary-PCA variance summaries and
+prediction overlays. See [SparsePCA usage](SESSION_TIMELINE.md#optional-sparsepca-components)
+for CLI preparation, fixed estimator settings, and interpretation.
+
 Prepare in advance, using version-3 metadata probe roles:
 
 ```bash

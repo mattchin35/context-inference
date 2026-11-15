@@ -199,6 +199,73 @@ noise-corrected latent dimensionality. Signs and identities apply to the
 saved configuration and need not match another session or bin width. Stage 2
 adds the separate per-choice summary described below.
 
+## Optional SparsePCA components
+
+Select **SparsePCA** in **Decomposition**, choose **SparsePCA alpha**, then
+click **Prepare**. Alpha defaults to 1; larger values favor sparser neuron
+loadings. A matching saved result loads automatically. Changing alpha or bin
+width selects another configuration and does not fit until Prepare is clicked.
+**Recompute** creates a new timestamped result and preserves the previous one.
+
+The same completed-choice counts and session-wide unit standardization are
+used as for ordinary PCA. Each region fits `min(30, choice windows * bins,
+variable units)` components. Scores are sklearn's ridge-transform coefficients. Sparse
+means many neuron weights are zero, not that activity is sparse over time.
+Some components can still emphasize single neurons; the 30-component cap avoids
+requiring a full set of neuron axes.
+
+Rows are labeled **SC1**, **SC2**, etc., in the estimator's returned order.
+These are stable IDs within one preparation, not ranks by explained variance.
+Use the regional sparse-component sliders and **Z-score each component** as
+with ordinary PCs. Z-scores use each component's mean and population SD over
+all prepared session choice-window bins, including bins outside the viewport.
+Color legends then show **component SD**. Context, rewards, events, speed,
+panning, Jump, and bounded neural loading retain their usual behavior.
+
+Sparse components need not be orthogonal. Therefore ordinary variance
+percentages, session 80/90/95% counts, Stage 2 counts/tables, and condition
+prediction controls are hidden in this mode. Existing ordinary-PCA prediction
+models cannot be applied to sparse scores. Select **PCA** to return to those
+controls and their existing saved products.
+
+Prepare from the command line with the existing entry point:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json \
+  --algorithm sparse_pca --sparse-alpha 1 --bin-width-ms 500
+```
+
+The existing batch entry point accepts the same algorithm/alpha options.
+`--dry-run` inspects configuration without fitting or writing, `--rerun`
+prepares a new result, and `--benchmark` records saved load/plot costs. Sparse
+options cannot be combined with `--speed` or `--window-summary`; those actions
+remain independent. No metadata edits or new dependencies are required.
+
+Other estimator settings are fixed and saved: ridge alpha 0.01, LARS solver,
+1000 maximum iterations, tolerance 1e-8, random seed 0, and one sklearn job.
+The viewer reports iteration-limit exhaustion as **convergence unconfirmed**;
+finite scores remain available without an automatic retry. Zero-loading
+components keep their IDs and display as zero rows. The run log records sklearn
+warnings, and the NPZ contains the fitted center, loadings, preprocessing,
+objective history, settings, units, and axes without fabricated PCA variance.
+
+Sparse preparations have separate configuration identities and analysis version
+`session-timeline-sparse-pca-v1`. They use the existing timestamped
+`session_timeline_pca_*` directory layout; configuration/summary metadata identify
+the algorithm. Ordinary PCA identities and archives are preserved. Sparse
+fitting can be substantially slower than PCA, especially at finer bins; it is
+always a separate preparation step, while the viewer loads saved scores.
+The initial full-count sparse preparations remain readable and keep their
+separate identities; new preparations use the cap of 30.
+
+CT026 2026-08-04 was prepared at 500 ms and alpha 1 with 30 components per
+region. Preparation took about five minutes; the saved 3.18-MB file loaded in
+about 35 ms. Both regional fits reached 1000 iterations, so their optimization
+convergence is explicitly unconfirmed. The coefficients passed independent
+ridge-score validation; this does not establish convergence. Review those
+warnings before treating the fitted loadings as final scientific results.
+
 ## Stage 2: fixed-axis variance within each choice
 
 With Stage 1 prepared, click **Prepare window summary**. This loads the saved
