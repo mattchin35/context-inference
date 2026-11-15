@@ -55,19 +55,38 @@ class SparseTimelineTransform:
 
     def __post_init__(self) -> None:
         """Validate finite native arrays/identity axes; no orthogonality is required."""
-        ids, retained, omitted = self.input_unit_ids, self.retained_unit_ids, self.omitted_unit_ids
-        if (not retained or len(set(ids)) != len(ids)
-                or set(retained) & set(omitted) or set(retained + omitted) != set(ids)
-                or tuple(unit for unit in ids if unit in retained) != retained
-                or tuple(unit for unit in ids if unit in omitted) != omitted):
-            raise ValueError("Sparse unit IDs must preserve the input order and partition.")
+        ids, retained, omitted = (
+            self.input_unit_ids,
+            self.retained_unit_ids,
+            self.omitted_unit_ids,
+        )
+        if (
+            not retained
+            or len(set(ids)) != len(ids)
+            or set(retained) & set(omitted)
+            or set(retained + omitted) != set(ids)
+            or tuple(unit for unit in ids if unit in retained) != retained
+            or tuple(unit for unit in ids if unit in omitted) != omitted
+        ):
+            raise ValueError(
+                "Sparse unit IDs must preserve the input order and partition."
+            )
         observations = self.n_training_observations
-        if isinstance(observations, bool) or not isinstance(observations, Integral) or observations < 1:
+        if (
+            isinstance(observations, bool)
+            or not isinstance(observations, Integral)
+            or observations < 1
+        ):
             raise ValueError("Sparse observation count must be positive.")
-        count = min(observations, len(retained))
+        components = np.asarray(self.components, dtype=np.float64)
+        if components.ndim != 2 or not 1 <= components.shape[0] <= min(observations, len(retained)):
+            raise ValueError("Sparse component count must be within observation/unit bounds.")
+        count = components.shape[0]
         shapes = {
-            "training_mean": (len(retained),), "training_scale": (len(retained),),
-            "center": (len(retained),), "components": (count, len(retained)),
+            "training_mean": (len(retained),),
+            "training_scale": (len(retained),),
+            "center": (len(retained),),
+            "components": (count, len(retained)),
         }
         for name, shape in shapes.items():
             value = np.asarray(getattr(self, name), dtype=np.float64)
@@ -77,9 +96,13 @@ class SparseTimelineTransform:
         history = np.asarray(self.objective_history, dtype=np.float64)
         if history.ndim != 1 or not history.size or not np.isfinite(history).all():
             raise ValueError("Sparse objective history must be a finite vector.")
-        if (np.any(self.training_scale <= 0) or self.parameters.get("n_components") != count
-                or isinstance(self.n_iter, bool) or not isinstance(self.n_iter, Integral)
-                or not 1 <= self.n_iter <= self.parameters.get("max_iter", 0)):
+        if (
+            np.any(self.training_scale <= 0)
+            or self.parameters.get("n_components") != count
+            or isinstance(self.n_iter, bool)
+            or not isinstance(self.n_iter, Integral)
+            or not 1 <= self.n_iter <= self.parameters.get("max_iter", 0)
+        ):
             raise ValueError("Invalid sparse scales, component count, or iterations.")
         object.__setattr__(self, "objective_history", history)
 

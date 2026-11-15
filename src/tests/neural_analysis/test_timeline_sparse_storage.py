@@ -12,7 +12,10 @@ from src.neural_analysis.population import session_timeline_io as storage
 from src.neural_analysis.population.run_window_variance import run_window_variance
 from src.neural_analysis.population.session_timeline import SPARSE_ANALYSIS_VERSION
 from src.neural_analysis.population.window_variance import compute_window_variance
-from src.neural_analysis.population.timeline_sparse_pca import fit_sparse_timeline_activity, sparse_pca_parameters
+from src.neural_analysis.population.timeline_sparse_pca import (
+    fit_sparse_timeline_activity,
+    sparse_pca_parameters,
+)
 from src.neural_analysis.population.session_timeline import SessionTimelineResult
 from src.tests.neural_analysis.test_session_timeline_io import (
     synthetic_timeline_session as session_fixture,
@@ -160,21 +163,40 @@ def test_sparse_load_rejects_corrupted_shapes_and_versions(synthetic_timeline_se
             storage.load_timeline_result(destination)
 
 
-def test_legacy_full_sparse_archive_remains_readable(synthetic_timeline_session, tmp_path):
+def test_legacy_full_sparse_archive_remains_readable(
+    synthetic_timeline_session, tmp_path
+):
     """A 35-component legacy envelope is distinct from the new cap and is not rewritten."""
     session = synthetic_timeline_session
     origin, choices, events = storage.load_timeline_behavior(session)
     counts = np.random.default_rng(105).poisson(3, (3, 40, 35)).astype(float)
     regional = fit_sparse_timeline_activity(
-        counts, tuple(f"A:{i}" for i in range(35)), np.arange(3), "PFC", "A", .1,
+        counts,
+        tuple(f"A:{i}" for i in range(35)),
+        np.arange(3),
+        "PFC",
+        "A",
+        0.1,
     )
-    fitted = replace(regional.transform, components=np.eye(35),
-                     parameters=dict(regional.transform.parameters, n_components=35))
-    coefficients = ((counts - fitted.training_mean) / fitted.training_scale - fitted.center) / 1.01
+    fitted = replace(
+        regional.transform,
+        components=np.eye(35),
+        parameters=dict(regional.transform.parameters, n_components=35),
+    )
+    coefficients = (
+        (counts - fitted.training_mean) / fitted.training_scale - fitted.center
+    ) / 1.01
     regional = replace(regional, transform=fitted, scores=coefficients)
-    meta = {"analysis_version": SPARSE_ANALYSIS_VERSION, "algorithm": "sparse_pca",
-            "component_count_policy": "full", "sparse_pca": sparse_pca_parameters(1), "bin_width_s": .1}
-    result = SessionTimelineResult(session.session_id, origin, choices, events, {"PFC": regional}, {}, meta)
+    meta = {
+        "analysis_version": SPARSE_ANALYSIS_VERSION,
+        "algorithm": "sparse_pca",
+        "component_count_policy": "full",
+        "sparse_pca": sparse_pca_parameters(1),
+        "bin_width_s": 0.1,
+    }
+    result = SessionTimelineResult(
+        session.session_id, origin, choices, events, {"PFC": regional}, {}, meta
+    )
     path = tmp_path / "legacy_full.npz"
     storage.save_timeline_result(path, result)
     before = path.read_bytes()

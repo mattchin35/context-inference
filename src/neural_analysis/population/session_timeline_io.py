@@ -31,7 +31,7 @@ from src.neural_analysis.session_metadata import (
 )
 from src.neural_analysis.spike_behavior import loading
 from src.neural_analysis.task_decoding.activity import inspect_probe_coverage
-from src.neural_analysis.population.timeline_sparse_pca import sparse_pca_parameters
+from src.neural_analysis.population.timeline_sparse_pca import COMPONENT_LIMIT, sparse_pca_parameters
 
 
 @dataclass(frozen=True)
@@ -197,7 +197,7 @@ def timeline_configuration(
         )
     if sparse_parameters is not None:
         config.update(analysis_version=SPARSE_ANALYSIS_VERSION, algorithm="sparse_pca",
-                      sparse_pca=sparse_parameters, component_count_policy="full",
+                      sparse_pca=sparse_parameters, component_count_policy="capped", requested_components=COMPONENT_LIMIT,
                       scikit_learn=version("scikit-learn"))
     config["configuration_id"] = _configuration_digest(config)
     return config
@@ -584,6 +584,17 @@ def load_timeline_result(input_path: Path | str) -> SessionTimelineResult:
                 )
                 if fitted.parameters != dict(expected_parameters, n_components=fitted.actual_components):
                     raise ValueError("Sparse regional settings disagree with the session configuration.")
+                policy = meta.get("component_count_policy")
+                maximum = min(fitted.n_training_observations, len(fitted.retained_unit_ids))
+                if policy == "capped":
+                    requested = meta.get("requested_components")
+                    if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+                        raise ValueError("Sparse component cap must be a positive integer.")
+                    maximum = min(maximum, requested)
+                elif policy != "full":
+                    raise ValueError("Unsupported sparse component-count policy.")
+                if fitted.actual_components != maximum:
+                    raise ValueError("Sparse component count disagrees with its saved policy.")
                 positions, edges, scores = (archive[prefix + name] for name in ("choice_positions", "bin_edges_s", "scores"))
                 if (positions.ndim != 1 or not np.issubdtype(positions.dtype, np.integer)
                         or np.any(positions < 0) or np.any(positions >= len(choices))

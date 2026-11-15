@@ -25,6 +25,7 @@ from src.neural_analysis.population.run_window_variance import (
 )
 from src.neural_analysis.population.window_variance import SessionWindowVariance
 from src.neural_analysis.population.window_variance_io import load_window_variance
+from src.neural_analysis.population.timeline_sparse_pca import COMPONENT_LIMIT
 from src.neural_analysis.population.session_timeline import (
     SessionTimelineResult,
     SparseTimelineTransform,
@@ -69,7 +70,8 @@ def render_session_timeline_view(st_module: object, session: ResolvedSession) ->
             alpha = st_module.sidebar.number_input("SparsePCA alpha", min_value=0.0, value=1.0,
                                                     step=.1, key=f"{scope}_sparse_alpha")
             algorithm_arguments = {"algorithm": algorithm, "sparse_alpha": alpha}
-            st_module.caption("SparsePCA fits sparse neuron loadings; scores are ridge coefficients. "
+            st_module.caption(f"SparsePCA fits up to {COMPONENT_LIMIT} components per region with sparse neuron loadings; "
+                              "scores are ridge coefficients. "
                               "Variance summaries and condition predictions are available with ordinary PCA.")
         # Prediction controls can pin their saved ordinary basis even when hidden.
         # Bypass that block entirely for a sparse selection, preserving its state.

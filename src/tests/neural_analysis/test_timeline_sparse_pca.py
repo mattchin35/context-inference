@@ -142,14 +142,23 @@ def test_sparse_fit_is_capped_at_thirty_components():
     """The user-selected cap fits 30 joint atoms rather than a full unit basis."""
     counts = np.random.default_rng(105).poisson(3, (6, 8, 35)).astype(float)
     result = sparse.fit_sparse_timeline_activity(
-        counts, tuple(f"A:{i}" for i in range(35)), np.arange(6), "PFC", "A", .5,
+        counts,
+        tuple(f"A:{i}" for i in range(35)),
+        np.arange(6),
+        "PFC",
+        "A",
+        0.5,
     )
     assert result.scores.shape == (6, 8, 30)
     assert result.transform.components.shape == (30, 35)
     assert result.transform.parameters["n_components"] == 30
-    standardized = (counts.reshape(-1, 35) - result.transform.training_mean) / result.transform.training_scale
+    standardized = (
+        counts.reshape(-1, 35) - result.transform.training_mean
+    ) / result.transform.training_scale
     reference = SparsePCA(**result.transform.parameters).fit_transform(standardized)
-    np.testing.assert_allclose(result.scores.reshape(-1, 30), reference, atol=1e-12, rtol=1e-12)
+    np.testing.assert_allclose(
+        result.scores.reshape(-1, 30), reference, atol=1e-12, rtol=1e-12
+    )
 
 
 @pytest.mark.parametrize("alpha", [-1, np.nan, np.inf, True, "1"])
