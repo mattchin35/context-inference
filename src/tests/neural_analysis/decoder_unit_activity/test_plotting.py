@@ -178,3 +178,18 @@ def test_hundred_unit_png_labels_and_caption_do_not_overlap(activity_example, tm
     groups = [label.get_window_extent(renderer) for label in heatmap.texts]
     assert max(label.x1 for label in groups) + 5 < min(label.x0 for label in labels)
     assert figure.texts[0].get_window_extent(renderer).y1 + 2 < heatmap.xaxis.label.get_window_extent(renderer).y0
+
+
+def test_unknown_reward_is_gray_in_png_not_no_reward(activity_example, tmp_path):
+    """Input one unknown reward; PNG choice styling preserves its unknown status like the shared timeline."""
+    from matplotlib.figure import Figure
+    from matplotlib.colors import to_rgba
+    _, choices, behavior, display = activity_example
+    behavior = replace(behavior, choices=choices.assign(reward=[1., np.nan, 0.]))
+    with patch.object(Figure, "savefig", autospec=True) as save:
+        export_unit_activity_png(tmp_path / "unknown.png", make_data(activity_example), behavior, display)
+    figure = save.call_args.args[0]
+    unknown = [artist for artist in figure.axes[0].collections
+               if len(artist.get_offsets()) and np.any(np.isclose(artist.get_offsets()[:, 0], 3.))]
+    assert len(unknown) == 1
+    np.testing.assert_allclose(unknown[0].get_edgecolors()[0], to_rgba("#6b7280"))
