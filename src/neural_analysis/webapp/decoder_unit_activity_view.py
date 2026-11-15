@@ -9,7 +9,9 @@ import pandas as pd
 import streamlit as st
 
 from src.neural_analysis.decoder_unit_activity import results
-from src.neural_analysis.decoder_unit_activity.plotting import plot_unit_activity, viewport_unit_activity_data
+from src.neural_analysis.decoder_unit_activity.plotting import (
+    plot_unit_activity, viewport_unit_activity_data, with_unit_sd_limit,
+)
 from src.neural_analysis.decoder_unit_activity.run_session import activity_for_selection, run_session
 from src.neural_analysis.decoder_unit_activity.selection import GROUP_LABELS
 from src.neural_analysis.population.timeline_plotting import available_event_tracks, session_time_bounds
@@ -34,6 +36,13 @@ def render_decoder_unit_activity_view(st_module: object, directory: Path, region
         return
     cap = int(st_module.sidebar.number_input("Units per group", min_value=1, value=10, step=1, key=key+"_unit_cap"))
     scale = st_module.sidebar.radio("Activity scale", ("zscore", "hz"), format_func=scale_label, key=key+"_unit_scale")
+    unit_sd_limit = None
+    if scale == "zscore":
+        color_mode = st_module.sidebar.radio("SD color range", ("Auto", "Custom"), key=key+"_unit_color_mode")
+        if color_mode == "Custom":
+            unit_sd_limit = float(st_module.sidebar.number_input("Symmetric limit (SD)",
+                min_value=.1, value=3., step=.1, key=key+"_unit_sd_limit",
+                help="3 sets the range to -3 through +3 SD. Values beyond the range saturate in color; activity stays unchanged."))
     cache_key = (str(directory), region, signature)
     selection = cached_unit_selection(cache_key, cap, _inputs=loaded)
     display = results.displayed_units(selection["assignments"])
@@ -61,6 +70,7 @@ def render_decoder_unit_activity_view(st_module: object, directory: Path, region
     time_range, revision = render_timeline_navigation(st_module, prepared.behavior, key)
     tracks = tuple(st_module.sidebar.multiselect("Event overlays", available_event_tracks(prepared.behavior.events), key=key+"_unit_events"))
     full_data = cached_activity_data(cache_key, cap, scale, _selection=selection, _prepared=prepared)
+    full_data = with_unit_sd_limit(full_data, unit_sd_limit)
     bounds = session_time_bounds(prepared.behavior)
     span = time_range[1]-time_range[0]
     loaded_range = (max(bounds[0], time_range[0]-span), min(bounds[1], time_range[1]+span))
@@ -71,7 +81,7 @@ def render_decoder_unit_activity_view(st_module: object, directory: Path, region
         "the plot includes measured pre-choice firing. Sublanes preserve overlapping windows.")
     if st_module.button("Export unit activity PNG", key=key+"_unit_export"):
         report = run_session(directory, region, max_units_per_group=cap, scale=scale,
-                             time_range_s=time_range, event_tracks=tracks, inputs=loaded)
+                             time_range_s=time_range, event_tracks=tracks, inputs=loaded, unit_sd_limit=unit_sd_limit)
         st_module.success(f"Saved {report['figure_path']}")
 
 

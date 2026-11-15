@@ -5,6 +5,13 @@ activity**. Choose PFC/HPC, the per-group cap (default 10), and z-score/Hz.
 The source must be an existing saved decoder run; no raw recording or new fit
 is needed. Probability timelines remain the default subview.
 
+In Z-score mode, **SD color range -> Custom** exposes **Symmetric limit (SD)**.
+A limit of 3 maps colors from -3 to +3 SD across all groups; values beyond that
+range saturate in color. The control changes only colors, preserving measured
+values, normalization, unit selection, and cached activity. Limits stay fixed
+while panning, and PNG exports use the chosen range. **Auto** restores the full
+selected-pool limits. Hz mode keeps its automatic nonnegative range.
+
 Units are grouped by left/right context, left/right choice, four side/outcome
 classes, and within-side L->R/R->L switch-versus-stay weights. Five usable folds,
 a positive mean and at least four positive fold weights are required. The
@@ -39,6 +46,10 @@ uv run python -m src.neural_analysis.decoder_unit_activity.run_session plot \
 
 Optional `--time-range START_S END_S` uses elapsed session seconds; optional
 `--event-tracks` selects existing trial/lick/LED tracks. Dry-run writes nothing.
+For z-score plots, `--unit-sd-limit 3` sets symmetric -3 to +3 SD colors in
+single-session, plot-from-selection, and batch commands. Omit it for automatic
+limits. Nonpositive/nonfinite limits and custom SD limits with Hz are rejected.
+Exports record requested and effective color limits in `settings.json`.
 The new selection NPZ contains named arrays and JSON metadata (no pickle),
 including source hashes, rules, versions, axes/units and normalization. Its
 referenced preparation and decoder files must remain available; raw files need

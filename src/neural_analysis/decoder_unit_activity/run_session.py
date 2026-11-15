@@ -18,23 +18,26 @@ import pandas as pd
 from src.neural_analysis.population_decoding import results as decoder_results
 from src.neural_analysis.population_decoding.preparation import PreparedPopulation
 from . import results
-from .plotting import build_unit_activity_data, export_unit_activity_png
+from .plotting import build_unit_activity_data, export_unit_activity_png, validate_unit_sd_limit, with_unit_sd_limit
 
 
 def run_session(source_run: Path | str, region: str, *, command: str = "new",
                 max_units_per_group: int = 10, scale: str = "zscore",
                 time_range_s: tuple[float, float] | None = None, event_tracks: tuple[str, ...] = (),
-                inputs: dict | None = None) -> dict:
+                inputs: dict | None = None, unit_sd_limit: float | None = None) -> dict:
     """Run one saved decoder Path/region; return a JSON-safe completion/availability report.
 
     command is new/dry-run. cap is positive units/group, scale zscore/hz, range
     elapsed seconds. Optional validated inputs share UI source loads. Dry-run
     writes nothing. New computes/saves/reloads the selection before rendering;
     identical selections are reused, figures always get fresh run directories.
+    unit_sd_limit is a positive finite scalar in SDs for symmetric zscore colors;
+    None keeps automatic full-pool limits. It does not affect unit selection.
     """
     started = perf_counter()
     if command not in ("new", "dry-run") or scale not in ("zscore", "hz"):
         raise ValueError("Expected new/dry-run command and zscore/hz scale")
+    validate_unit_sd_limit(scale, unit_sd_limit)
     loaded = inputs if inputs is not None else results.load_decoder_inputs(source_run, region)
     if loaded["region"] != region or loaded["directory"] != Path(source_run).resolve():
         raise ValueError("Provided saved inputs belong to another run/region")
@@ -46,23 +49,27 @@ def run_session(source_run: Path | str, region: str, *, command: str = "new",
         regional = loaded["prepared"].regions[region]
         return {"status": "dry-run", "region": region, "source_run": str(source_run),
                 "activity_shape": list(regional.rates_hz.shape), "bin_width_ms": selection["meta"]["bin_width_ms"],
-                "selected_units": len(selection["arrays"]["display_unit_indices"]), "selection_path": str(path)}
+                "selected_units": len(selection["arrays"]["display_unit_indices"]), "selection_path": str(path),
+                "unit_sd_limit": unit_sd_limit}
     reused = path.exists()
     if not reused:
         results.save_unit_selection(path, selection["arrays"], selection["meta"])
     selection = results.load_unit_selection(path)
-    report = _render_selection(selection, path, loaded["prepared"], scale, time_range_s, event_tracks)
+    report = _render_selection(selection, path, loaded["prepared"], scale, time_range_s, event_tracks, unit_sd_limit)
     report.update(selection_reused=reused, elapsed_s=perf_counter()-started)
     return report
 
 
 def plot_selection(selection_path: Path | str, *, scale: str = "zscore",
-                   time_range_s: tuple[float, float] | None = None, event_tracks: tuple[str, ...] = ()) -> dict:
+                   time_range_s: tuple[float, float] | None = None, event_tracks: tuple[str, ...] = (),
+                   unit_sd_limit: float | None = None) -> dict:
     """Render existing selection NPZ Path from its exact preparation reference, no weight refit.
 
     scale/range are zscore/hz and elapsed seconds. Return new output-path/status
     mapping. Source archives must remain available; raw spike files need not.
+    unit_sd_limit sets symmetric +/-SD colors for zscore; None uses auto limits.
     """
+    validate_unit_sd_limit(scale, unit_sd_limit)
     path = Path(selection_path)
     selection = results.load_unit_selection(path)
     manifest = decoder_results.load_manifest(Path(selection["meta"]["session_root"]) / selection["meta"]["source_run"])
@@ -70,7 +77,7 @@ def plot_selection(selection_path: Path | str, *, scale: str = "zscore",
     if not preparation_path.is_absolute():
         preparation_path = Path(selection["meta"]["session_root"]) / selection["meta"]["source_run"] / preparation_path
     prepared = decoder_results.load_preparation(preparation_path)
-    return _render_selection(selection, path, prepared, scale, time_range_s, event_tracks)
+    return _render_selection(selection, path, prepared, scale, time_range_s, event_tracks, unit_sd_limit)
 
 
 def activity_for_selection(selection: dict, prepared: PreparedPopulation, *, scale: str = "zscore") -> dict:
@@ -111,11 +118,12 @@ def main(argv: list[str] | None = None) -> int:
             sub.add_argument("--region", choices=("PFC", "HPC"), required=True)
             sub.add_argument("--max-units-per-group", type=int, default=10)
         sub.add_argument("--scale", choices=("zscore", "hz"), default="zscore")
+        sub.add_argument("--unit-sd-limit", type=float, help="Positive symmetric zscore color limit in SDs; default auto")
         sub.add_argument("--time-range", type=float, nargs=2, metavar=("START_S", "END_S"))
         sub.add_argument("--event-tracks", nargs="*", default=[])
     args = parser.parse_args(argv)
     options = {"scale": args.scale, "time_range_s": tuple(args.time_range) if args.time_range else None,
-               "event_tracks": tuple(args.event_tracks)}
+               "event_tracks": tuple(args.event_tracks), "unit_sd_limit": args.unit_sd_limit}
     try:
         if args.command == "plot":
             report = plot_selection(args.selection, **options)
@@ -130,8 +138,9 @@ def main(argv: list[str] | None = None) -> int:
 
 # Output assembly deliberately loads the durable selection before generating figures.
 def _render_selection(selection: dict, selection_path: Path, prepared: PreparedPopulation, scale: str,
-                       time_range_s: tuple[float, float] | None, event_tracks: tuple[str, ...]) -> dict:
-    """Create one immutable human-readable output run; inputs retain W,B,U Hz and elapsed seconds."""
+                       time_range_s: tuple[float, float] | None, event_tracks: tuple[str, ...],
+                       unit_sd_limit: float | None) -> dict:
+    """Create immutable outputs from W,B,U Hz/elapsed seconds; optional SD limit affects only colors."""
     from .plotting import viewport_unit_activity_data
     started = perf_counter()
     meta = selection["meta"]
@@ -142,16 +151,18 @@ def _render_selection(selection: dict, selection_path: Path, prepared: PreparedP
     log = directory / "run.log"
     settings = {"source_run": meta["source_run"], "session_id": meta["session_id"], "region": meta["region"],
         "max_units_per_group": meta["max_units_per_group"], "scale": scale,
+        "unit_sd_limit": unit_sd_limit,
         "time_range_s": time_range_s, "event_tracks": list(event_tracks), "selection_path": str(selection_path),
         "created_at": timestamp.isoformat(), "selection_id": meta["selection_id"]}
     log.write_text(f"{timestamp.isoformat()} Starting saved-only rendering\n{json.dumps(settings)}\n", encoding="ascii")
     try:
         for path in sorted(Path(__file__).parent.glob("*.py")):
             shutil.copyfile(path, directory / path.name)
-        (directory / "settings.json").write_text(json.dumps(settings, indent=2), encoding="ascii")
         selection["assignments"].to_csv(directory / "unit_groups.csv", index=False)
         display = results.displayed_units(selection["assignments"])
-        data = activity_for_selection(selection, prepared, scale=scale)
+        data = with_unit_sd_limit(activity_for_selection(selection, prepared, scale=scale), unit_sd_limit)
+        settings["color_limits"] = list(data["color_limits"])
+        (directory / "settings.json").write_text(json.dumps(settings, indent=2), encoding="ascii")
         if time_range_s is not None:
             data = viewport_unit_activity_data(data, time_range_s)
         output = directory / "activity.png"
@@ -161,6 +172,7 @@ def _render_selection(selection: dict, selection_path: Path, prepared: PreparedP
             "Goal: inspect actual choice-centered activity of units grouped by consistent decoder weights.",
             "Scripts: run_session.py; run_batch.py (snapshots included).", "",
             f"Displayed units: {len(display)}; {meta['bin_width_ms']} ms native bins; scale: {scale}.",
+            f"Color limits: {data['color_limits']}; custom SD limit: {unit_sd_limit}.",
             "Groups describe coefficients; same-session activity is descriptive, not independent selectivity evidence.",
             "Four-class outcome weights can reflect side. Within-side population reward/no-reward diagnostics:", "",
             json.dumps(meta["diagnostics"]["outcomes"], indent=2), "", "Per-group displayed counts:"]

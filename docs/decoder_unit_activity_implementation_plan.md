@@ -130,6 +130,11 @@ Use a shared color range across groups: symmetric around zero for z-scores,
 starting at zero for Hz. Automatic limits use the full selected-unit pool and
 remain fixed during panning. A changed selected set may change those limits;
 record the limits and scale. Color saturation must not alter saved values.
+The subsequently approved color-control extension adds Auto/Custom mode for
+z-scores: one positive finite SD limit sets a shared symmetric range. It is
+applied after cached activity preparation, preserving values and normalization.
+PNG exports and optional `--unit-sd-limit` CLI/batch arguments use the same
+range, recorded with effective limits in export settings. Hz remains automatic.
 
 Reuse choice/context/event tracks, elapsed-time navigation, and original
 trial/bin identities. Unit labels appear once within their assigned group.
@@ -380,3 +385,21 @@ Decoder fit code identity remains
 `9e214d4ceaca5d085438b97eac278785a211df480505c7fd57b1d51cdb4b2379`.
 No raw recordings were loaded, no experimental models were refitted, and no
 wider experimental batch was run.
+
+### Approved symmetric SD color control
+
+The user approved this extension on 2026-11-15. Tests were committed first in
+`005896f`: nine new cases failed on the missing helper, option, and UI control.
+After implementation, all nine passed; the complete affected suite then passed
+**273 tests in 39.52 seconds**. Coverage checks symmetric Plotly/PNG limits,
+invalid values, unchanged activity/statistics/cache, stable limits when panning,
+Auto restoration, UI export, CLI/batch forwarding, and saved export settings.
+
+Z-score mode now exposes **SD color range -> Custom -> Symmetric limit (SD)**,
+defaulting to 3 SD when Custom is selected. Auto remains the initial setting.
+One shallow mapping copy changes color limits without copying activity arrays
+or repeating normalization; values outside the range saturate only in color.
+Single-session/plot/batch commands accept optional `--unit-sd-limit`. Exports
+record the requested limit and effective range. No dependencies were added.
+The user authorized finishing while leaving the concurrent, unrelated change
+in `event_sequences/selection.py` untouched.

@@ -130,6 +130,31 @@ def viewport_unit_activity_data(data: dict, time_range_s: tuple[float, float]) -
     return {**data, "lanes": lanes, "time_range_s": tuple(time_range_s)}
 
 
+def validate_unit_sd_limit(scale: str, unit_sd_limit: float | None) -> None:
+    """Validate optional positive finite scalar in unit SDs; None keeps automatic colors. Return None.
+
+    A custom limit applies only to zscore activity; reject invalid values before
+    source loading, output creation or batch workers. No data are modified.
+    """
+    if unit_sd_limit is not None and (scale != "zscore" or isinstance(unit_sd_limit, bool)
+            or not isinstance(unit_sd_limit, (int, float)) or not np.isfinite(unit_sd_limit)
+            or unit_sd_limit <= 0):
+        raise ValueError("Custom SD limit must be positive and finite, with scale=zscore")
+
+
+def with_unit_sd_limit(data: dict, unit_sd_limit: float | None = None) -> dict:
+    """Return a shallow plot-data mapping with symmetric colors [-limit,+limit] in unit SDs.
+
+    data is the cached build_unit_activity_data mapping (values W,B,S in Hz or
+    SDs). None retains its automatic limits. Custom limits require zscore.
+    Values, normalization statistics, lane arrays and the input stay unchanged;
+    only the color mapping saturates outside the requested range.
+    """
+    validate_unit_sd_limit(data["scale"], unit_sd_limit)
+    limits = data["color_limits"] if unit_sd_limit is None else (-float(unit_sd_limit), float(unit_sd_limit))
+    return {**data, "color_limits": limits}
+
+
 def plot_unit_activity(data: dict, behavior: SessionTimelineResult, display: pd.DataFrame,
                        event_tracks: tuple[str, ...] = (), viewport_revision: int = 0,
                        time_range_s: tuple[float, float] | None = None) -> go.Figure:

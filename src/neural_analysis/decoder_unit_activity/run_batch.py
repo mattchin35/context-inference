@@ -43,21 +43,26 @@ def read_requests(path: Path | str) -> tuple[dict, ...]:
 
 
 def run_batch(request_file: Path | str, *, command: str = "new", workers: int | None = None,
-               max_units_per_group: int = 10, scale: str = "zscore") -> dict:
+               max_units_per_group: int = 10, scale: str = "zscore", unit_sd_limit: float | None = None) -> dict:
     """Run JSON session requests in spawned workers; return ordered JSON-safe region reports.
 
     command is new/dry-run; workers is positive or CPU/session default. Regions
     within a session run sequentially; independent failures produce partial
     status without canceling other sessions. Dry-run writes nothing/no workers.
+    unit_sd_limit is a positive finite scalar in SDs for symmetric zscore colors,
+    or None for auto; the same display option applies to all requested regions.
     """
     from src.neural_analysis.population_decoding.run_batch import choose_worker_count
+    from .plotting import validate_unit_sd_limit
     if command not in ("new", "dry-run"):
         raise ValueError("Batch command must be new or dry-run")
     if type(max_units_per_group) is not int or max_units_per_group < 1 or scale not in ("zscore", "hz"):
         raise ValueError("Expected positive max_units_per_group cap and zscore/hz scale")
+    validate_unit_sd_limit(scale, unit_sd_limit)
     requests = read_requests(request_file)
     count = choose_worker_count(len(requests), workers)
-    options = {"command": command, "max_units_per_group": max_units_per_group, "scale": scale}
+    options = {"command": command, "max_units_per_group": max_units_per_group, "scale": scale,
+               "unit_sd_limit": unit_sd_limit}
     if command == "dry-run":
         reports = [report for request in requests for report in _run_worker(request, options)]
         return {"status": "dry-run" if all(report["status"] == "dry-run" for report in reports) else "partial",
@@ -82,10 +87,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int)
     parser.add_argument("--max-units-per-group", type=int, default=10)
     parser.add_argument("--scale", choices=("zscore", "hz"), default="zscore")
+    parser.add_argument("--unit-sd-limit", type=float, help="Positive symmetric zscore color limit in SDs; default auto")
     args = parser.parse_args(argv)
     try:
         report = run_batch(args.requests, command=args.command, workers=args.workers,
-                           max_units_per_group=args.max_units_per_group, scale=args.scale)
+                           max_units_per_group=args.max_units_per_group, scale=args.scale, unit_sd_limit=args.unit_sd_limit)
     except (OSError, ValueError) as error:
         parser.error(str(error))
     print(json.dumps(report, indent=2, allow_nan=False))
