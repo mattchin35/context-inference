@@ -1,6 +1,7 @@
 """Sparse source identity, exact archive binding, and live color-range contracts."""
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.neural_analysis.event_sequences import io, plotting, run_session
@@ -110,3 +111,42 @@ def test_manual_limit_rejects_invalid_values(event_session, limit):
     packet = io.load_event_sequences(run_session.prepare_event_sequences(request)["result_path"])
     with pytest.raises(ValueError):
         plotting.prepare_display_source(packet, color_limit=limit)
+
+
+def test_sparse_lookup_ignores_other_probe_but_detects_changed_input_pool(event_session):
+    """Input: session. Return None; all input IDs matter, including silent omitted units."""
+    upstream = runner.run_session_timeline(event_session.metadata_path, {"PFC": "A", "HPC": "B"},
+                                          algorithm="sparse_pca", missing_label_policy="exclude")
+    (event_session.session_root / "B/cluster_info.tsv").unlink()
+    def lookup():
+        """Input: none. Return compatible sparse archive path for the current selected input IDs."""
+        return timeline_io.find_compatible_regional_timeline(event_session, "PFC", "A", .5, algorithm="sparse_pca")
+    assert lookup() == upstream.result_path
+    path = event_session.session_root / "A/cluster_info.tsv"
+    rows = pd.read_csv(path, sep="\t")
+    silent = pd.DataFrame({"cluster_id": [12], "ch": [0], "group": ["good"], "KSLabel": ["good"]})
+    pd.concat([rows, silent], ignore_index=True).to_csv(path, sep="\t", index=False)
+    assert lookup() is None
+
+
+def test_sparse_reference_rejects_cross_kind_and_byte_changes(event_session):
+    """Input: session. Return None; exact source kind and hash protect an otherwise matching reference."""
+    report = run_session.prepare_event_sequences(_request(event_session))
+    packet = io.load_event_sequences(report["result_path"])
+    packet["meta"]["source_kind"] = "pc"
+    with pytest.raises(ValueError, match="sparse"):
+        io._bind_pca(packet)
+    packet["meta"]["source_kind"] = "sparse_pc"
+    path = event_session.session_root / packet["meta"]["pca_reference"]["path"]
+    path.write_bytes(path.read_bytes() + b"changed")
+    with pytest.raises(ValueError, match="byte identity"):
+        io.load_event_sequences(report["result_path"])
+
+
+def test_zero_sparse_component_keeps_raw_display_but_disables_zscore(event_session):
+    """Input: session. Return None; high-alpha zero (7,8) coefficients remain valid raw data."""
+    packet = io.load_event_sequences(run_session.prepare_event_sequences(_request(event_session, sparse_alpha=1e9))["result_path"])
+    source = plotting.prepare_display_source(packet, color_limit=2)
+    np.testing.assert_array_equal(source["values"], np.zeros((7, 8)))
+    assert source["color_limits"] == (-2, 2) and not source["zscore_available"]
+    assert plotting.prepare_display_source(packet, zscore=True)["values"] is None
