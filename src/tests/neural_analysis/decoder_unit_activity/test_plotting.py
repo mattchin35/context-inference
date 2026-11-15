@@ -98,6 +98,7 @@ def test_touching_windows_need_one_lane_and_ids_are_not_indices(activity_example
 def test_plot_and_png_share_exact_edges_and_rows(activity_example, tmp_path):
     """Input prepared plot data; both renderers preserve one label per unit and non-overwrite export."""
     data = make_data(activity_example)
+    data["source_label"] = "example PFC"
     _, _, behavior, display = activity_example
     figure = plot_unit_activity(data, behavior, display)
     heatmaps = [trace for trace in figure.data if trace.type == "heatmap"]
@@ -107,6 +108,9 @@ def test_plot_and_png_share_exact_edges_and_rows(activity_example, tmp_path):
     assert tuple(figure.layout.yaxis2.range) == (4, 0)
     assert list(figure.layout.yaxis2.ticktext) == ["u0", "u1"]
     assert "1000 ms" in figure.layout.meta["caption"]
+    assert figure.layout.meta["caption"].startswith("example PFC")
+    assert "<br>" in figure.layout.annotations[-1].text
+    assert figure.layout.annotations[-1].y == 0 and figure.layout.annotations[-1].yshift < 0
     path = tmp_path / "units.png"
     export_unit_activity_png(path, data, behavior, display)
     with Image.open(path) as exported:
