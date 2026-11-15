@@ -19,16 +19,16 @@ def test_dry_run_writes_no_outputs_and_fits_nothing(population_config_path, monk
     monkeypatch.setattr(pipeline, "fit_target", forbid_compute)
     before = set(population_config_path.parent.rglob("*"))
     report = run_session(population_config_path, command="dry-run")
-    assert report["status"] == "dry-run" and report["maximum_classifier_fits"] == 100
+    assert report["status"] == "dry-run" and report["maximum_classifier_fits"] == 140
     assert before == set(population_config_path.parent.rglob("*"))
 
 
 def test_new_reuse_source_free_resume_and_published_file_adoption(population_config_path, monkeypatch):
-    """Input sources/patch; publish ten cells, reuse without fitting, recover stale progress."""
+    """Input sources/patch; publish fourteen cells, reuse without fitting, recover stale progress."""
     report = run_session(population_config_path)
     run = Path(report["run_directory"])
-    assert report["status"] == "complete" and report["completed_cells"] == 10
-    assert len(list((run / "cells").glob("*.npz"))) == 10
+    assert report["status"] == "complete" and report["completed_cells"] == 14
+    assert len(list((run / "cells").glob("*.npz"))) == 14
     for name in ("run_session.py", "run_batch.py", "run.log", "summary.md", "performance.json"):
         assert (run / name).is_file()
     performance = json.loads((run / "performance.json").read_text())
@@ -41,9 +41,9 @@ def test_new_reuse_source_free_resume_and_published_file_adoption(population_con
         path.unlink()
     monkeypatch.setattr(preparation, "prepare_session", forbid_compute)
     resumed = run_session(command="resume", run_directory=run)
-    assert resumed["status"] == "complete" and resumed["completed_cells"] == 10
+    assert resumed["status"] == "complete" and resumed["completed_cells"] == 14
     assert original == {path.name: path.read_bytes() for path in (run / "cells").glob("*.npz")}
-    assert run_session(command="status", run_directory=run)["completed_cells"] == 10
+    assert run_session(command="status", run_directory=run)["completed_cells"] == 14
 
 
 def test_new_parameters_keep_old_outputs_and_rerun_uses_new_directory(population_config_path):

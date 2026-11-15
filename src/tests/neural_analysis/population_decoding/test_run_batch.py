@@ -22,4 +22,4 @@ def test_two_synthetic_sessions_execute_in_spawned_workers(population_config_pat
     report = run_batch((population_config_path, second), workers=2)
     assert report["status"] == "complete", report
     assert report["worker_count"] == 2
-    assert all(item["completed_cells"] == 10 for item in report["reports"])
+    assert all(item["completed_cells"] == 14 for item in report["reports"])

@@ -30,7 +30,7 @@ def population_config_path(encoding_session):
     """Input synthetic encoding config; return new decoder JSON Path, no fitting."""
     path = encoding_session.session_root / "population_decoding.json"
     path.write_text(json.dumps({
-        "analysis_version": "population-task-decoding-v1",
+        "analysis_version": "population-task-decoding-v2",
         "session_metadata": "neural_session.json",
         "augmented_trials": "processed/augmented.csv",
         "probe_roles": {"PFC": "A", "HPC": "B"},
