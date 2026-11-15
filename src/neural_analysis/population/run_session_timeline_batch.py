@@ -12,6 +12,7 @@ from src.neural_analysis.population.run_session_timeline import (
     TimelineRunReport,
     run_session_timeline,
     probe_roles_from_arguments,
+    timeline_algorithm_arguments,
 )
 
 
@@ -63,6 +64,8 @@ def run_batch(
     dry_run: bool = False,
     window_summary: bool = False,
     speed: bool = False,
+    algorithm: str = "pca",
+    sparse_alpha: float | None = None,
 ) -> list[TimelineRunReport]:
     """Run session-level preparation and return reports in input order.
 
@@ -71,8 +74,11 @@ def run_batch(
     never launches workers. Real sessions run in independent processes.
     window_summary selects Stage 2 reduction of existing Stage 1 products;
     missing Stage 1 configurations raise rather than fitting implicitly.
+    algorithm/sparse_alpha select the Stage 1 fit using the single-run contract;
+    sparse jobs use one sklearn job within each independent session worker.
     """
     count = choose_worker_count(len(metadata_paths), workers)
+    algorithm_arguments = timeline_algorithm_arguments(algorithm, sparse_alpha, speed=speed, window_summary=window_summary)
     if speed and window_summary:
         raise ValueError("Speed and window-summary actions are mutually exclusive.")
     action = run_session_timeline
@@ -90,11 +96,11 @@ def run_batch(
         analysis_arguments = ()
     if dry_run:
         return [
-            action(path, *analysis_arguments, dry_run=True) for path in metadata_paths
+            action(path, *analysis_arguments, dry_run=True, **algorithm_arguments) for path in metadata_paths
         ]
     with ProcessPoolExecutor(max_workers=count) as executor:
         futures = [
-            executor.submit(action, path, *analysis_arguments, rerun=rerun)
+            executor.submit(action, path, *analysis_arguments, rerun=rerun, **algorithm_arguments)
             for path in metadata_paths
         ]
         return [future.result() for future in futures]
@@ -112,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int)
     parser.add_argument("--rerun", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--algorithm", choices=("pca", "sparse_pca"), default="pca")
+    parser.add_argument("--sparse-alpha", type=float)
     actions = parser.add_mutually_exclusive_group()
     actions.add_argument("--window-summary", action="store_true")
     actions.add_argument(
@@ -132,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             window_summary=args.window_summary,
             speed=args.speed,
+            algorithm=args.algorithm,
+            sparse_alpha=args.sparse_alpha,
         )
     except (OSError, ValueError) as error:
         print(f"Timeline batch failed: {error}", file=sys.stderr)

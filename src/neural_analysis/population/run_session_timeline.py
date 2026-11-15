@@ -23,10 +23,17 @@ import numpy as np
 
 from src.neural_analysis.population import session_timeline_io as timeline_io
 from src.neural_analysis.population.session_timeline import (
+    ANALYSIS_VERSION,
+    SPARSE_ANALYSIS_VERSION,
+    SparseTimelineTransform,
     SessionTimelineResult,
+    bin_choice_counts,
     compute_timeline_pca,
     select_complete_choice_windows,
     summarize_session_variance,
+)
+from src.neural_analysis.population.timeline_sparse_pca import (
+    fit_sparse_timeline_activity, sparse_pca_parameters,
 )
 from src.neural_analysis.session_metadata import (
     ResolvedSession,
@@ -58,6 +65,8 @@ def run_session_timeline(
     dry_run: bool = False,
     population_quality: str = "good_mua",
     missing_label_policy: str = "mua",
+    algorithm: str = "pca",
+    sparse_alpha: float | None = None,
 ) -> TimelineRunReport:
     """Prepare a session-local result or reuse an identical saved configuration.
 
@@ -69,6 +78,8 @@ def run_session_timeline(
     Keyword-only population_quality (good_mua/good) and missing_label_policy
     (mua/exclude) select manual-label rules for both identity and actual loading.
     These scalar policies do not change the (W,B,K) score axes or native units.
+    algorithm selects pca/sparse_pca; sparse_alpha (None defaults to 1) applies
+    only to sparse_pca. Sparse scores are ridge coefficients, not PCA projections.
     """
     started = perf_counter()
     session = resolve_session_metadata(
@@ -78,6 +89,7 @@ def run_session_timeline(
     config = timeline_io.timeline_configuration(
         session, roles, bin_width_s, population_quality=population_quality,
         missing_label_policy=missing_label_policy,
+        **timeline_algorithm_arguments(algorithm, sparse_alpha),
     )
     identity = config["configuration_id"]
     if dry_run:
@@ -172,6 +184,7 @@ def find_saved_timeline(session_root: Path, configuration_id: str) -> Path | Non
                 if (
                     meta.get("configuration_id") == configuration_id
                     and meta.get("schema_version") == 1
+                    and meta.get("analysis_version") in (ANALYSIS_VERSION, SPARSE_ANALYSIS_VERSION)
                 ):
                     return path
         except (OSError, ValueError, KeyError, EOFError, BadZipFile):
@@ -251,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hpc-probe")
     parser.add_argument("--rerun", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--algorithm", choices=("pca", "sparse_pca"), default="pca")
+    parser.add_argument("--sparse-alpha", type=float)
     actions = parser.add_mutually_exclusive_group()
     actions.add_argument(
         "--window-summary",
@@ -270,6 +285,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     roles = probe_roles_from_arguments(args.pfc_probe, args.hpc_probe)
     try:
+        algorithm_arguments = timeline_algorithm_arguments(
+            args.algorithm, args.sparse_alpha, speed=args.speed, window_summary=args.window_summary,
+        )
         action = run_session_timeline
         if args.window_summary:
             from src.neural_analysis.population.run_window_variance import (
@@ -290,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.bin_width_ms / 1000.0,
                 rerun=args.rerun,
                 dry_run=args.dry_run,
+                **algorithm_arguments,
             )
     except (OSError, ValueError) as error:
         print(f"Timeline preparation failed: {error}", file=sys.stderr)
@@ -324,6 +343,28 @@ def main(argv: list[str] | None = None) -> int:
 
 
 # Orchestration helpers: scientific operations remain in session_timeline.py.
+def timeline_algorithm_arguments(
+    algorithm: str, sparse_alpha: float | None, *, speed: bool = False, window_summary: bool = False,
+) -> dict:
+    """Validate CLI/Python algorithm selections; return only nondefault fit kwargs.
+
+    algorithm is pca/sparse_pca; sparse_alpha is a nonnegative scalar penalty
+    or None. Action flags identify non-fitting runner boundaries. Return an
+    empty dict for existing default calls, preserving their public invocation.
+    Unsupported combinations raise ValueError before any scientific loading.
+    """
+    if algorithm not in ("pca", "sparse_pca"):
+        raise ValueError("Timeline algorithm must be pca or sparse_pca.")
+    if algorithm == "pca":
+        if sparse_alpha is not None:
+            raise ValueError("--sparse-alpha applies only to sparse_pca.")
+        return {}
+    if speed or window_summary:
+        raise ValueError("SparsePCA is unavailable for speed or window summaries; summaries require ordinary PCA.")
+    parameters = sparse_pca_parameters(1.0 if sparse_alpha is None else sparse_alpha)
+    return {"algorithm": algorithm, "sparse_alpha": parameters["alpha"]}
+
+
 def _prepare_session(
     session: ResolvedSession,
     roles: dict[str, str],
@@ -378,15 +419,30 @@ def _prepare_session(
                 raise ValueError(
                     "No completed choices have full neural recording coverage"
                 )
-            regional = compute_timeline_pca(
-                population.spike_group,
-                population.cluster_ids,
-                choices,
-                positions,
-                role,
-                roles[role],
-                config["bin_width_s"],
-            )
+            if config.get("algorithm", "pca") == "sparse_pca":
+                start = perf_counter()
+                counts, _ = bin_choice_counts(
+                    population.spike_group, population.cluster_ids,
+                    choices.iloc[positions].choice_time.to_numpy(), config["bin_width_s"],
+                )
+                binning_s = perf_counter() - start
+                regional = fit_sparse_timeline_activity(
+                    counts, population.unit_ids, positions, role, roles[role],
+                    config["bin_width_s"], alpha=config["sparse_pca"]["alpha"],
+                )
+                regional.timings_s["binning"] = binning_s
+                fitted = regional.transform
+                logger.info("%s SparsePCA: %d iterations, zero components %s, loading zero fraction %.6f",
+                            role, fitted.n_iter, fitted.zero_component_ids, np.mean(fitted.components == 0))
+                if fitted.iteration_limit_reached:
+                    logger.warning("%s iteration limit reached; convergence unconfirmed", role)
+                for warning in fitted.warnings:
+                    logger.warning("%s sklearn: %s", role, warning)
+            else:
+                regional = compute_timeline_pca(
+                    population.spike_group, population.cluster_ids, choices,
+                    positions, role, roles[role], config["bin_width_s"],
+                )
             regional.timings_s["loading"] = loading_s
             regions[role] = regional
             logger.info(
@@ -409,8 +465,9 @@ def _prepare_session(
 
 def _write_summary(directory: Path, result: SessionTimelineResult) -> None:
     """Write a short session-scoped Markdown report of preparation, units, and coverage."""
+    sparse = result.meta.get("algorithm", "pca") == "sparse_pca"
     lines = [
-        "# Session timeline PCA",
+        "# Session timeline SparsePCA" if sparse else "# Session timeline PCA",
         "",
         f"Session: {result.session_id}",
         "",
@@ -421,10 +478,23 @@ def _write_summary(directory: Path, result: SessionTimelineResult) -> None:
         f"Bin width: {result.meta['bin_width_s'] * 1000:g} ms; windows: [-2, +2) s.",
         f"Completed ordinary choices: {len(result.choices)}; origin: first trial start, UTC {result.time_origin_s} s.",
         "",
+        "Sparse coefficients are ridge scores; variance coverage is unavailable." if sparse else
         "Variance coverage uses all eligible choice windows and total standardized-unit variance.",
         "",
     ]
     for role, regional in result.regions.items():
+        if isinstance(regional.transform, SparseTimelineTransform):
+            fitted = regional.transform
+            lines.extend([
+                f"- {role} ({regional.probe_id}): {len(regional.choice_positions)} windows; "
+                f"{len(fitted.retained_unit_ids)} retained units; {fitted.actual_components} sparse components.",
+                f"  Settings: {fitted.parameters}; iterations: {fitted.n_iter}; "
+                f"zero component IDs: {fitted.zero_component_ids}; loading zero fraction: {np.mean(fitted.components == 0):.6f}.",
+                f"  Timing seconds: {regional.timings_s}; sklearn warnings: {fitted.warnings}.",
+            ])
+            if fitted.iteration_limit_reached:
+                lines.append("  Iteration limit reached; convergence unconfirmed.")
+            continue
         coverage = summarize_session_variance(
             regional.transform.explained_variance, regional.total_session_variance
         )

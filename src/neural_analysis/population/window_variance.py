@@ -10,6 +10,7 @@ import pandas as pd
 from src.neural_analysis.population.session_timeline import (
     RegionalTimelinePCA,
     SessionTimelineResult,
+    SparseTimelineTransform,
 )
 
 PARAMETERS = {
@@ -77,6 +78,8 @@ def compute_window_variance(regional: RegionalTimelinePCA) -> WindowVarianceSumm
     or modify inputs. Nonfinite, zero, insufficient, and inconsistent windows
     have NaN counts. Incomplete bases retain explicitly restricted results.
     """
+    if isinstance(regional.transform, SparseTimelineTransform):
+        raise ValueError("Window variance summaries require ordinary PCA, not SparsePCA.")
     scores = np.asarray(regional.scores, dtype=np.float64)
     windows, bins, pcs = scores.shape
     totals = np.asarray(regional.window_total_variance, dtype=np.float64)

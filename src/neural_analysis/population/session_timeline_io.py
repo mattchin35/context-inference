@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+from importlib.metadata import version
 import json
 from pathlib import Path
 import tempfile
@@ -16,7 +17,9 @@ import pynapple as nap
 from src.neural_analysis.interregional.records import RegionalPCATransform
 from src.neural_analysis.population.session_timeline import (
     ANALYSIS_VERSION,
+    SPARSE_ANALYSIS_VERSION,
     RegionalTimelinePCA,
+    SparseTimelineTransform,
     SessionTimelineResult,
     choice_bin_edges,
     prepare_timeline_choices,
@@ -28,6 +31,7 @@ from src.neural_analysis.session_metadata import (
 )
 from src.neural_analysis.spike_behavior import loading
 from src.neural_analysis.task_decoding.activity import inspect_probe_coverage
+from src.neural_analysis.population.timeline_sparse_pca import sparse_pca_parameters
 
 
 @dataclass(frozen=True)
@@ -119,6 +123,8 @@ def timeline_configuration(
     window_s: tuple[float, float] = (-2.0, 2.0),
     population_quality: str = "good_mua",
     missing_label_policy: str = "mua",
+    algorithm: str = "pca",
+    sparse_alpha: float | None = None,
 ) -> dict:
     """Return a JSON-compatible scientific/source cache identity, without spike loading.
 
@@ -129,8 +135,15 @@ def timeline_configuration(
     bin_width_s is seconds; the keyword-only scalar quality/policy labels use
     the load_timeline_population contract. Both defaults preserve the previous
     dict/digest exactly; nondefault policies add explicit scientific identity.
+    algorithm is pca/sparse_pca; sparse_alpha is a nonnegative penalty only
+    for sparse_pca (None selects 1). Ordinary defaults retain their exact digest.
     """
     _validate_population_policy(population_quality, missing_label_policy)
+    if algorithm not in ("pca", "sparse_pca"):
+        raise ValueError("Timeline algorithm must be pca or sparse_pca.")
+    if algorithm == "pca" and sparse_alpha is not None:
+        raise ValueError("sparse_alpha applies only to the sparse_pca algorithm.")
+    sparse_parameters = sparse_pca_parameters(1.0 if sparse_alpha is None else sparse_alpha) if algorithm == "sparse_pca" else None
     choice_bin_edges(bin_width_s, window_s=window_s)
     if not set(probe_roles).issubset({"PFC", "HPC"}):
         raise ValueError("Probe roles must be PFC and/or HPC.")
@@ -182,6 +195,10 @@ def timeline_configuration(
             population_quality=population_quality, missing_label_policy=missing_label_policy,
             quality_rules=_quality_rule_description(population_quality, missing_label_policy),
         )
+    if sparse_parameters is not None:
+        config.update(analysis_version=SPARSE_ANALYSIS_VERSION, algorithm="sparse_pca",
+                      sparse_pca=sparse_parameters, component_count_policy="full",
+                      scikit_learn=version("scikit-learn"))
     config["configuration_id"] = _configuration_digest(config)
     return config
 
@@ -441,15 +458,18 @@ def save_timeline_result(
     if path.exists():
         raise FileExistsError(f"Refusing to overwrite {path}")
     meta = dict(result.meta)
+    sparse = meta.get("algorithm", "pca") == "sparse_pca"
+    if any(isinstance(region.transform, SparseTimelineTransform) != sparse for region in result.regions.values()):
+        raise ValueError("Timeline algorithm and fitted transform differ.")
     meta.update(
         {
-            "analysis_version": ANALYSIS_VERSION,
+            "analysis_version": SPARSE_ANALYSIS_VERSION if sparse else ANALYSIS_VERSION,
             "schema_version": 1,
             "generator": "src.neural_analysis.population.run_session_timeline",
             "session_id": result.session_id,
             "time_origin_s": result.time_origin_s,
             "unavailable": result.unavailable,
-            "random_seed": None,
+            "random_seed": 0 if sparse else None,
             "units": {
                 "absolute_time": "UTC Unix seconds",
                 "relative_time": "seconds",
@@ -464,6 +484,15 @@ def save_timeline_result(
             "regions": {},
         }
     )
+    if sparse:
+        meta["units"].update(scores="ridge coefficients in standardized-unit activity space",
+                             training_mean="spike counts per bin", training_scale="spike counts per bin",
+                             center="standardized activity", components="dimensionless loadings",
+                             objective_history="sklearn dictionary-learning objective")
+        meta["axes"] = {"scores": ["choice_window", "time_bin", "session_component"],
+                        "components": ["session_component", "retained_unit"],
+                        "training_mean": ["retained_unit"], "training_scale": ["retained_unit"],
+                        "center": ["retained_unit"], "objective_history": ["iteration"]}
     arrays = {
         "choices": result.choices.to_records(index=False),
         "events": result.events.to_records(index=False),
@@ -481,6 +510,9 @@ def save_timeline_result(
             "color_limit": regional.color_limit,
             "timings_s": regional.timings_s,
         }
+        if sparse:
+            meta["regions"][role].update(parameters=fitted.parameters, n_iter=fitted.n_iter,
+                                         warnings=list(fitted.warnings))
         for name in (
             "scores",
             "choice_positions",
@@ -488,13 +520,10 @@ def save_timeline_result(
             "window_total_variance",
         ):
             arrays[prefix + name] = getattr(regional, name)
-        for name in (
-            "training_mean",
-            "training_scale",
-            "components",
-            "explained_variance",
-            "explained_variance_ratio",
-        ):
+        transform_names = ("training_mean", "training_scale", "components") + (
+            ("center", "objective_history") if sparse else ("explained_variance", "explained_variance_ratio")
+        )
+        for name in transform_names:
             arrays[prefix + name] = getattr(fitted, name)
     arrays["meta"] = np.asarray(meta, dtype=object)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -521,9 +550,11 @@ def load_timeline_result(input_path: Path | str) -> SessionTimelineResult:
     """
     with np.load(input_path, allow_pickle=True) as archive:
         meta = archive["meta"].item()
+        sparse = meta.get("analysis_version") == SPARSE_ANALYSIS_VERSION
         if (
             meta.get("schema_version") != 1
-            or meta.get("analysis_version") != ANALYSIS_VERSION
+            or meta.get("analysis_version") not in (ANALYSIS_VERSION, SPARSE_ANALYSIS_VERSION)
+            or meta.get("algorithm", "pca") != ("sparse_pca" if sparse else "pca")
         ):
             raise ValueError("Unsupported timeline result version.")
         choices = pd.DataFrame.from_records(archive["choices"])
@@ -531,22 +562,43 @@ def load_timeline_result(input_path: Path | str) -> SessionTimelineResult:
         regions = {}
         for role, info in meta["regions"].items():
             prefix = role.lower() + "_"
-            fitted = RegionalPCATransform(
+            transform_arguments = dict(
                 retained_unit_ids=tuple(info["retained_unit_ids"]),
                 omitted_unit_ids=tuple(info["omitted_unit_ids"]),
                 input_unit_ids=tuple(info["input_unit_ids"]),
                 n_training_observations=info["n_training_observations"],
                 **{
                     name: archive[prefix + name]
-                    for name in (
-                        "training_mean",
-                        "training_scale",
-                        "components",
-                        "explained_variance",
-                        "explained_variance_ratio",
-                    )
+                    for name in ("training_mean", "training_scale", "components")
                 },
             )
+            if sparse:
+                expected_parameters = sparse_pca_parameters(meta["sparse_pca"]["alpha"])
+                if meta["sparse_pca"] != expected_parameters:
+                    raise ValueError("Unsupported sparse timeline settings.")
+                fitted = SparseTimelineTransform(
+                    **transform_arguments, center=archive[prefix + "center"],
+                    objective_history=archive[prefix + "objective_history"],
+                    parameters=info["parameters"], n_iter=info["n_iter"],
+                    warnings=tuple(info["warnings"]),
+                )
+                if fitted.parameters != dict(expected_parameters, n_components=fitted.actual_components):
+                    raise ValueError("Sparse regional settings disagree with the session configuration.")
+                positions, edges, scores = (archive[prefix + name] for name in ("choice_positions", "bin_edges_s", "scores"))
+                if (positions.ndim != 1 or not np.issubdtype(positions.dtype, np.integer)
+                        or np.any(positions < 0) or np.any(positions >= len(choices))
+                        or edges.ndim != 1 or len(edges) < 2 or not np.isfinite(edges).all()
+                        or not np.all(np.diff(edges) > 0)
+                        or scores.shape != (len(positions), len(edges) - 1, fitted.actual_components)
+                        or not np.isfinite(scores).all()
+                        or fitted.n_training_observations != len(positions) * (len(edges) - 1)):
+                    raise ValueError("Invalid sparse timeline score/choice/bin axes.")
+            else:
+                fitted = RegionalPCATransform(
+                    **transform_arguments,
+                    explained_variance=archive[prefix + "explained_variance"],
+                    explained_variance_ratio=archive[prefix + "explained_variance_ratio"],
+                )
             regions[role] = RegionalTimelinePCA(
                 role,
                 info["probe_id"],

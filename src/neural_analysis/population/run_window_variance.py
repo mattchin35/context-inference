@@ -27,6 +27,7 @@ from src.neural_analysis.population.run_session_timeline import (
 from src.neural_analysis.population.window_variance import (
     compute_session_window_variance,
 )
+from src.neural_analysis.population.session_timeline import SPARSE_ANALYSIS_VERSION
 from src.neural_analysis.session_metadata import (
     load_session_metadata,
     resolve_session_metadata,
@@ -41,11 +42,15 @@ def run_window_variance(
 ) -> TimelineRunReport:
     """Prepare a new timestamped sidecar or reuse an identical Stage 2 result.
 
-    stage1_path is an existing timeline NPZ. Dry-run reads only its file stat.
+    stage1_path is an existing ordinary PCA timeline NPZ. Dry-run reads its
+    small metadata and file stat; SparsePCA is rejected before output creation.
     Return a small report; outputs live inside that exact Stage 1 run directory.
     Neither spikes nor PCA fitting are accessed. Existing files are preserved.
     """
     started = perf_counter()
+    with np.load(stage1_path, allow_pickle=True) as archive:
+        if archive["meta"].item().get("analysis_version") == SPARSE_ANALYSIS_VERSION:
+            raise ValueError("Window variance summaries require ordinary PCA, not SparsePCA.")
     config = storage.window_variance_configuration(stage1_path)
     identity = config["configuration_id"]
     if dry_run:
