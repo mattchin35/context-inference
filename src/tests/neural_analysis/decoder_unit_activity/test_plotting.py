@@ -155,3 +155,26 @@ def test_png_colorbar_does_not_cover_time_axis(activity_example, tmp_path):
         export_unit_activity_png(tmp_path / "layout.png", make_data(activity_example), behavior, display)
     figure = save.call_args.args[0]
     assert max(axis.get_position().x1 for axis in figure.axes[:-1]) + .01 < figure.axes[-1].get_position().x0
+
+
+def test_hundred_unit_png_labels_and_caption_do_not_overlap(activity_example, tmp_path):
+    """Input 100 labeled synthetic units; rendered text bounds retain vertical and horizontal separation."""
+    from matplotlib.figure import Figure
+    rates, choices, behavior, _ = activity_example
+    choices = choices.assign(choice_time=[102., 104., 106.], elapsed_s=[2., 4., 6.])
+    behavior = replace(behavior, choices=choices)
+    ids = tuple(f"ProbeA:{index}" for index in range(100))
+    expanded = np.broadcast_to(rates[:, :, :1], (3, 2, 100)).copy()
+    data = build_unit_activity_data(expanded, ids, ids, choices, np.arange(3), np.array([-1., 0., 1.]), scale="hz")
+    display = pd.DataFrame({"unit_id": ids, "group_index": np.repeat(np.arange(10), 10)})
+    with patch.object(Figure, "savefig", autospec=True) as save:
+        export_unit_activity_png(tmp_path / "hundred.png", data, behavior, display)
+    figure = save.call_args.args[0]
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    heatmap = figure.axes[1]
+    labels = [label.get_window_extent(renderer) for label in heatmap.get_yticklabels()]
+    assert all(upper.y0 - lower.y1 > 2 for upper, lower in zip(labels, labels[1:]))
+    groups = [label.get_window_extent(renderer) for label in heatmap.texts]
+    assert max(label.x1 for label in groups) + 5 < min(label.x0 for label in labels)
+    assert figure.texts[0].get_window_extent(renderer).y1 + 2 < heatmap.xaxis.label.get_window_extent(renderer).y0
