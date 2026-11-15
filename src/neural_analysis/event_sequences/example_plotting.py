@@ -157,7 +157,8 @@ def matplotlib_figure(view: dict) -> Figure:
     for text in legend.get_texts():
         text.set_color("black")
     figure.subplots_adjust(left=.08, right=.98, top=.86, bottom=.40)
-    figure.text(.04, .035, "\n".join(textwrap.wrap(view["caption"], 145)), fontsize=12, color="black", va="bottom")
+    # Leave horizontal room for full session IDs and wider caption words.
+    figure.text(.04, .035, "\n".join(textwrap.wrap(view["caption"], 125)), fontsize=12, color="black", va="bottom")
     return figure
 
 
