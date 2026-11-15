@@ -1,0 +1,50 @@
+"""Choice-only figure semantics shared between interactive and static renderers."""
+
+import importlib
+
+import numpy as np
+import pytest
+
+from src.tests.neural_analysis.event_sequences.example_fixtures import example_trials
+
+
+def test_both_renderers_show_original_trials_reward_correctness_and_context(example_trials, tmp_path):
+    """Input: full (N,C) trials and one (3,) episode. Check original identities and independent outcomes."""
+    plotting = importlib.import_module("src.neural_analysis.event_sequences.example_plotting")
+    view = plotting.build_example_view(
+        example_trials, np.array([4, 5, 6]), session_id="synthetic-behavior",
+        condition=("probe", "left", 1), trials_before=5, trials_after=5,
+    )
+    assert view["episode_trial_ids"] == [505, 506, 507]
+    assert view["rows"].trial_id.iloc[0] == 501
+    assert "correct rewarded or omission" in view["caption"]
+    assert "truncated" in view["caption"]
+    interactive = plotting.plotly_figure(view)
+    assert interactive.layout.plot_bgcolor == "white"
+    names = {trace.name for trace in interactive.data}
+    assert {"Rewarded", "Unrewarded", "Incorrect"}.issubset(names)
+    assert list(interactive.layout.yaxis.ticktext) == ["Right", "Left"]
+    assert interactive.layout.shapes
+    static = plotting.matplotlib_figure(view)
+    assert static.get_facecolor() == (1, 1, 1, 1)
+    assert [label.get_text() for label in static.axes[0].get_yticklabels()] == ["Right", "Left"]
+    assert static.axes[0].patches
+    path = plotting.export_png(view, tmp_path / "example.png")
+    assert path.stat().st_size > 5000
+    with pytest.raises(FileExistsError):
+        plotting.export_png(view, path)
+
+
+def test_unknown_reward_and_manual_rows_are_distinct_and_missing_choices_break_lines(example_trials):
+    """Input: context rows with unknown reward/manual reward/non-choice. Do not infer outcomes."""
+    plotting = importlib.import_module("src.neural_analysis.event_sequences.example_plotting")
+    trials = example_trials.copy()
+    trials.iloc[0, trials.columns.get_loc("reward")] = np.nan
+    trials.iloc[0, trials.columns.get_loc("experimenter_reward_given")] = 1
+    view = plotting.build_example_view(trials, np.array([4, 5, 6]), session_id="test", condition=("probe", "left", 1))
+    figure = plotting.plotly_figure(view)
+    names = {trace.name for trace in figure.data}
+    assert {"Unknown reward", "Manual reward"}.issubset(names)
+    choices = next(trace for trace in figure.data if trace.name == "Choices")
+    assert np.isnan(np.asarray(choices.y, dtype=float)[3])
+    assert choices.connectgaps is False
