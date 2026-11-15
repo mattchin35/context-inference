@@ -144,7 +144,7 @@ def plot_unit_activity(data: dict, behavior: SessionTimelineResult, display: pd.
     row = 2 + len(tracks)
     figure = make_subplots(rows=row, cols=1, shared_xaxes=True, vertical_spacing=.035,
         row_heights=[.7, *([.25]*len(tracks)), max(1., len(display)*max(1, data["lane_count"])/12)],
-        subplot_titles=["Recorded choices", *tracks, "Actual activity: decoder-weight groups"])
+        subplot_titles=["Recorded choices", *tracks, "Actual unit activity"])
     add_timeline_behavior(figure, behavior, tracks)
     for lane in data["lanes"]:
         custom = _weight_hover(lane["customdata"], data["lane_count"], display)
@@ -162,19 +162,21 @@ def plot_unit_activity(data: dict, behavior: SessionTimelineResult, display: pd.
                        ticktext=list(data["unit_ids"]), row=row, col=1)
     for start, end, group in _group_bounds(display):
         figure.add_hline(y=end*lanes, line_color="#94a3b8", line_width=1, row=row, col=1)
-        figure.add_annotation(x=-.10, y=(start+end)*lanes/2, xref="paper", yref=f"y{row}",
+        figure.add_annotation(x=0, xshift=-110, y=(start+end)*lanes/2, xref="paper", yref=f"y{row}",
             text=GROUP_LABELS[group], showarrow=False, xanchor="right", font={"size": 13})
     viewport = time_range_s or data["time_range_s"]
     caption = activity_caption(data, len(display))
     figure.update_xaxes(range=list(viewport))
     figure.update_xaxes(title_text="Session elapsed time (s)", row=row, col=1)
-    figure.add_annotation(text="<br>".join(textwrap.wrap(caption, 100)), x=0, y=0, yshift=-60,
-        xref="paper", yref="paper", showarrow=False, xanchor="left", yanchor="top", font={"size": 12})
+    figure.add_annotation(text="<br>".join(textwrap.wrap(caption, 80)), x=0, xshift=-220, y=0, yshift=-60,
+        xref="paper", yref="paper", showarrow=False, xanchor="left", yanchor="top", align="left", font={"size": 12})
+    heatmap_domain = figure.layout[f"yaxis{row}"].domain
     figure.update_layout(template="plotly_white", font={"size": 15},
         height=400 + max(160, len(display)*lanes*20) + 60*len(tracks), margin={"l": 235, "b": 170},
         coloraxis={"cmin": data["color_limits"][0], "cmax": data["color_limits"][1],
                    "colorscale": "RdBu_r" if data["scale"] == "zscore" else "Viridis",
-                   "colorbar": {"title": "Unit SD" if data["scale"] == "zscore" else "Hz"}},
+                   "colorbar": {"title": "Unit SD" if data["scale"] == "zscore" else "Hz",
+                                "y": sum(heatmap_domain)/2, "len": heatmap_domain[1]-heatmap_domain[0]}},
         uirevision=f"decoder-units-{behavior.session_id}-{viewport_revision}",
         meta={"primary_time_axis": "xaxis", "time_axes": ["xaxis" if i == 1 else f"xaxis{i}" for i in range(1, row+1)],
               "loaded_range_s": list(data["time_range_s"]), "caption": caption, "lane_count": data["lane_count"]})
