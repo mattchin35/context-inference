@@ -11,6 +11,7 @@ from plotly.subplots import make_subplots
 from src.neural_analysis.population.timeline_plotting import (
     add_timeline_behavior, available_event_tracks, session_time_bounds,
 )
+from .targets import CONDITIONAL_SWITCH_TARGETS
 
 COLORS = ("#2563eb", "#c2410c", "#08916d", "#a855f7")
 
@@ -50,7 +51,7 @@ def plot_decoding_timeline(prepared: PreparedPopulation, cell: dict, representat
         line={"color": "#111827"}, connectgaps=False,
         hovertemplate="Trial %{customdata[0]}: class %{y}<extra>Recorded label</extra>"), row=actual_row, col=1)
     probabilities = cell[f"{representation}_probabilities"]
-    shown = [1] if target.endswith("choice_switch") else range(len(classes))
+    shown = [1] if target.endswith("choice_switch") or target in CONDITIONAL_SWITCH_TARGETS else range(len(classes))
     for class_index in shown:
         x, y, hover = _step_track(prepared, cell, probabilities[:, :, class_index], loaded)
         figure.add_trace(go.Scatter(x=x, y=y, customdata=hover, name=f"P({classes[class_index]})",
@@ -65,6 +66,8 @@ def plot_decoding_timeline(prepared: PreparedPopulation, cell: dict, representat
     summary = cell["meta"]["representations"][representation]["pooled"]
     caption = (f"{cell['meta']['region']} {target}, {representation}; block-held-out bins; "
                f"balanced accuracy={summary['balanced_accuracy']}, log loss={summary['log_loss']}.")
+    if cell["meta"].get("conditioning_side"):
+        caption += f" Current {cell['meta']['conditioning_side']} choices only; opposite-side windows blank."
     figure.add_annotation(text=caption, x=0, y=-.14, xref="paper", yref="paper", showarrow=False, xanchor="left")
     figure.update_layout(template="plotly_white", height=650 + 70*len(tracks), font={"size": 15},
         margin={"b": 100}, uirevision=f"population-{prepared.session_id}-{viewport_revision}",
@@ -91,7 +94,7 @@ def export_png(path: Path, prepared: PreparedPopulation, cell: dict, representat
     axis = figure.subplots()
     target = cell["meta"]["target"]
     classes = cell["meta"]["class_names"]
-    for index in ([1] if target.endswith("choice_switch") else range(len(classes))):
+    for index in ([1] if target.endswith("choice_switch") or target in CONDITIONAL_SWITCH_TARGETS else range(len(classes))):
         x, y, _ = _step_track(prepared, cell, cell[f"{representation}_probabilities"][:, :, index], bounds)
         axis.plot(x, y, label=f"P({classes[index]})", color=COLORS[index])
     axis.set(xlim=bounds, ylim=(0, 1), xlabel="Session elapsed time (s)", ylabel="Held-out probability")
@@ -104,6 +107,10 @@ def export_png(path: Path, prepared: PreparedPopulation, cell: dict, representat
         f"Choice-relative {cell['meta']['supervised_interval_s']} s; block-held-out predictions.\n"
         f"Balanced accuracy={score['balanced_accuracy']}; log loss={score['log_loss']}. "
         "Outcome scores may include chosen-side information; inspect within-side reward summaries.")
+    if cell["meta"].get("conditioning_side"):
+        caption = (f"{prepared.session_id}: {cell['meta']['region']}, current {cell['meta']['conditioning_side']} choices only, "
+            f"{representation}. Choice-relative [-1,+1) s; opposite-side windows blank.\n"
+            f"Block-held-out switch-vs-stay: balanced accuracy={score['balanced_accuracy']}; log loss={score['log_loss']}.")
     figure.text(.03, .03, caption, fontsize=11, color="black")
     figure.subplots_adjust(bottom=.23)
     path.parent.mkdir(parents=True, exist_ok=True)
