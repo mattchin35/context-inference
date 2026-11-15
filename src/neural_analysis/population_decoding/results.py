@@ -17,7 +17,9 @@ import numpy as np
 import pandas as pd
 import sklearn
 
-from .configuration import ANALYSIS_VERSION, SCHEMA_VERSION, PopulationDecodingConfig
+from .configuration import (ANALYSIS_VERSION, LEGACY_ANALYSIS_VERSION, READABLE_ANALYSIS_VERSIONS,
+                            SCHEMA_VERSION, PopulationDecodingConfig)
+from .targets import TARGET_NAMES, MODEL_TARGET_NAMES, CONDITIONAL_SWITCH_TARGETS
 
 if TYPE_CHECKING:
     from .preparation import PreparedPopulation
@@ -112,6 +114,19 @@ def load_cell(path: Path) -> dict:
     expected = (len(cell["row_positions"]), len(cell["bin_indices"]), c)
     if any(cell[f"{representation}_probabilities"].shape != expected for representation in ("units", "pcs")):
         raise ValueError("Invalid saved probability axes")
+    if cell["meta"]["target"] in CONDITIONAL_SWITCH_TARGETS:
+        comparison = cell["meta"].get("switch_comparison")
+        mapping = cell.get("comparison_reference_window_indices")
+        side = "left" if cell["meta"]["target"] == "left_switch_vs_stay" else "right"
+        if (not isinstance(comparison, dict) or mapping is None or mapping.shape != (expected[0],)
+                or not np.issubdtype(mapping.dtype, np.integer) or np.any(mapping < 0)
+                or np.any(np.diff(mapping) <= 0) or comparison.get("required_trials") != expected[0]
+                or comparison.get("reference_target") != f"{side}_choice_switch"
+                or comparison.get("reference_model_id") != cell["meta"].get("model_id")
+                or comparison.get("reference_cell") != f"cells/{cell['meta']['region']}_{side}_choice_switch.npz"
+                or comparison.get("conditioning_side") != cell["meta"].get("conditioning_side")
+                or comparison.get("class_names") != ["stay", "switch"]):
+            raise ValueError("Invalid saved switch comparison mapping/provenance")
     return cell
 
 
@@ -186,9 +201,36 @@ def discover_runs(run_root: Path) -> list[Path]:
 def load_manifest(directory: Path) -> dict:
     """Read run-directory config.json; return version-checked manifest dict, no sources."""
     manifest = json.loads((Path(directory) / "config.json").read_text())
-    if manifest.get("analysis_version") != ANALYSIS_VERSION or manifest.get("schema_version") != SCHEMA_VERSION:
+    if manifest.get("analysis_version") not in READABLE_ANALYSIS_VERSIONS or manifest.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("Unsupported population decoding manifest version")
+    model_targets_for_run(manifest)
     return manifest
+
+
+def model_targets_for_run(manifest: dict) -> tuple[str, ...]:
+    """Return ordered model IDs declared by v1/v2 saved manifest, without accessing sources.
+
+    Legacy manifests infer the five-model set from cell identities. Extended
+    manifests explicitly declare seven models. Unknown IDs/versions fail rather
+    than being reinterpreted using the installed default target list.
+    """
+    version_name = manifest.get("analysis_version")
+    if version_name not in READABLE_ANALYSIS_VERSIONS:
+        raise ValueError("Unsupported population decoding version")
+    allowed = TARGET_NAMES if version_name == LEGACY_ANALYSIS_VERSION else MODEL_TARGET_NAMES
+    cells = manifest.get("cells", [])
+    declared = set()
+    for cell in cells:
+        if not isinstance(cell, str) or "_" not in cell:
+            raise ValueError("Invalid saved cell identity")
+        region, target = cell.split("_", 1)
+        if region not in ("PFC", "HPC") or target not in allowed:
+            raise ValueError("Invalid saved model target")
+        declared.add(target)
+    names = tuple(name for name in allowed if name in declared)
+    if not names or (version_name == ANALYSIS_VERSION and manifest.get("model_targets") != list(MODEL_TARGET_NAMES)):
+        raise ValueError("Invalid saved model target declaration")
+    return names
 
 
 def inspect_run_status(directory: Path) -> dict:
@@ -251,7 +293,7 @@ def _load_archive(path: Path) -> dict:
         with np.load(path, allow_pickle=True) as archive:
             data = {key: archive[key] for key in archive.files}
         meta = data["meta"].item()
-        if meta["analysis_version"] != ANALYSIS_VERSION or meta["schema_version"] != SCHEMA_VERSION:
+        if meta["analysis_version"] not in READABLE_ANALYSIS_VERSIONS or meta["schema_version"] != SCHEMA_VERSION:
             raise ValueError("Unsupported population decoding version")
         data["meta"] = meta
         return data

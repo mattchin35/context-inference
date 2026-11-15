@@ -10,7 +10,9 @@ from collections.abc import Mapping
 
 from src.neural_analysis.session_metadata import load_session_metadata
 
-ANALYSIS_VERSION = "population-task-decoding-v1"
+LEGACY_ANALYSIS_VERSION = "population-task-decoding-v1"
+ANALYSIS_VERSION = "population-task-decoding-v2"
+READABLE_ANALYSIS_VERSIONS = (LEGACY_ANALYSIS_VERSION, ANALYSIS_VERSION)
 SCHEMA_VERSION = 1
 SUPPORTED_BIN_WIDTH_MS = (500, 100, 50, 20)
 REPRESENTATIONS = ("units", "pcs")
@@ -63,6 +65,8 @@ def load_config(path: Path | str) -> PopulationDecodingConfig:
     if not isinstance(payload, dict) or required - payload.keys() or payload.keys() - allowed:
         raise ValueError("Missing or unsupported population decoding configuration fields")
     if payload["analysis_version"] != ANALYSIS_VERSION:
+        if payload["analysis_version"] == LEGACY_ANALYSIS_VERSION:
+            raise ValueError("Legacy v1 is read-only; create a v2 config with init-config --output <new.json>")
         raise ValueError(f"analysis_version must be {ANALYSIS_VERSION}")
     inputs = {}
     for name in ("session_metadata", "augmented_trials"):

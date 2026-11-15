@@ -18,20 +18,23 @@ for _thread_variable in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THR
 
 
 def initialize_config(metadata_path: Path | str, *, augmented_trials: Path | str | None = None,
-                      probe_roles: dict | None = None, bin_width_ms: int = 500) -> Path:
+                      probe_roles: dict | None = None, bin_width_ms: int = 500,
+                      output_path: Path | str | None = None) -> Path:
     """Create one non-overwriting JSON beside scalar metadata Path; return config Path.
 
     Optional augmented-table Path defaults to the metadata source trial table,
     since fitted behavior values are unnecessary. Explicit PFC/HPC probe roles
     are required for version-2 metadata. Bin width is integer milliseconds.
-    No analysis/behavior fitting or neural-array loading occurs.
+    output_path optionally names a new config, relative to the metadata folder
+    or absolute. Defaults to population_decoding.json. No analysis/behavior
+    fitting or neural-array loading occurs; existing files are never replaced.
     """
     from .configuration import ANALYSIS_VERSION, load_config
     from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
 
     metadata_path = Path(metadata_path).resolve(strict=True)
     session = resolve_session_metadata(load_session_metadata(metadata_path), metadata_path)
-    path = metadata_path.parent / "population_decoding.json"
+    path = (metadata_path.parent / Path(output_path).expanduser()).resolve() if output_path is not None else metadata_path.parent / "population_decoding.json"
     trials = Path(augmented_trials).resolve() if augmented_trials is not None else session.behavior.trial_table_file
     if trials is None or not trials.is_file():
         raise ValueError("An existing complete trial table is required")
@@ -59,7 +62,7 @@ def run_session(config_path: Path | str | None = None, *, command: str = "new",
     no input data files or prior analysis products are overwritten.
     """
     from . import results, preparation
-    from .configuration import load_config
+    from .configuration import ANALYSIS_VERSION, load_config
 
     if command not in ("new", "dry-run", "status", "resume") or (rerun and command != "new"):
         raise ValueError("Unsupported run command/rerun combination")
@@ -70,6 +73,8 @@ def run_session(config_path: Path | str | None = None, *, command: str = "new",
         if command == "status":
             return results.inspect_run_status(directory)
         manifest = results.load_manifest(directory)
+        if manifest["analysis_version"] != ANALYSIS_VERSION:
+            raise ValueError("Legacy v1 is read-only; create a v2 config/run with init-config --output")
         if (manifest["identities"]["code_identity"] != results.code_identity()
                 or manifest["identities"]["runtime"] != results.runtime_versions()):
             raise ValueError("Code/runtime changed; create a new analysis run")
@@ -86,9 +91,11 @@ def run_session(config_path: Path | str | None = None, *, command: str = "new",
         raise ValueError("new/dry-run require only config_path")
     config = load_config(config_path)
     if command == "dry-run":
+        from .targets import MODEL_TARGET_NAMES
         session, trials, behavior, baseline, targets, folds = preparation.load_behavior_inputs(config)
         return {"status": "dry-run", "session_id": session.session_id, "baseline_trials": int(baseline.sum()),
-                "maximum_classifier_fits": 100, "regions": dict(config.probe_roles),
+                "maximum_classifier_fits": 2*len(MODEL_TARGET_NAMES)*len(config.representations)*config.fold_count,
+                "regions": dict(config.probe_roles),
                 "blockers": preparation.inspect_sources(config), "bin_width_ms": config.bin_width_ms,
                 "neural_counts": "Not loaded; coverage and class support remain pending"}
     identities = results.compute_identities(config)
@@ -98,7 +105,7 @@ def run_session(config_path: Path | str | None = None, *, command: str = "new",
                 report = results.inspect_run_status(candidate)
                 return {**report, "status": "reused" if report["status"] == "complete" else "partial"}
     from .configuration import ANALYSIS_VERSION, SCHEMA_VERSION
-    from .targets import TARGET_NAMES
+    from .targets import MODEL_TARGET_NAMES
     stamp = datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S_%f")
     directory = config.run_root / f"population_task_decoding_{stamp}_{identities['model_id'][:12]}"
     directory.mkdir(parents=True)
@@ -106,7 +113,8 @@ def run_session(config_path: Path | str | None = None, *, command: str = "new",
     manifest = {"analysis_version": ANALYSIS_VERSION, "schema_version": SCHEMA_VERSION,
                 "session_root": str(config.session_root), "config": results.config_payload(config),
                 "identities": identities, "preparation_path": str(preparation_path),
-                "cells": [f"{region}_{target}" for region in ("PFC", "HPC") for target in TARGET_NAMES]}
+                "model_targets": list(MODEL_TARGET_NAMES),
+                "cells": [f"{region}_{target}" for region in ("PFC", "HPC") for target in MODEL_TARGET_NAMES]}
     results.write_json(directory / "config.json", manifest)
     for name in ("run_session.py", "run_batch.py"):
         shutil.copyfile(Path(__file__).with_name(name), directory / name)
@@ -132,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     init = commands.add_parser("init-config")
     init.add_argument("--session-metadata", type=Path, required=True)
     init.add_argument("--augmented-trials", type=Path)
+    init.add_argument("--output", type=Path)
     init.add_argument("--pfc-probe")
     init.add_argument("--hpc-probe")
     init.add_argument("--bin-width-ms", type=int, choices=(500, 100, 50, 20), default=500)
@@ -145,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "init-config":
             roles = {name: value for name, value in (("PFC", args.pfc_probe), ("HPC", args.hpc_probe)) if value is not None}
             report = {"config": str(initialize_config(args.session_metadata, augmented_trials=args.augmented_trials,
-                probe_roles=roles or None, bin_width_ms=args.bin_width_ms))}
+                probe_roles=roles or None, bin_width_ms=args.bin_width_ms, output_path=args.output))}
         else:
             report = run_session(getattr(args, "config", None), command=args.command,
                 run_directory=getattr(args, "run_directory", None), rerun=getattr(args, "rerun", False))
@@ -164,6 +173,7 @@ def _execute(directory: Path, preparation_s: float = 0.0) -> dict:
     neural/behavior data; no raw paths are opened after its publication.
     """
     from . import pipeline, results
+    from .targets import CONDITIONAL_SWITCH_TARGETS
     manifest = results.load_manifest(directory)
     progress = results.inspect_run_status(directory)
     prepared = results.load_preparation(Path(manifest["preparation_path"]))
@@ -177,6 +187,16 @@ def _execute(directory: Path, preparation_s: float = 0.0) -> dict:
         cell_start = perf_counter()
         try:
             cell = pipeline.fit_target(prepared, region, target)
+            if target in CONDITIONAL_SWITCH_TARGETS:
+                reference_target = cell["meta"]["source_target"]
+                reference_path = f"cells/{region}_{reference_target}.npz"
+                reference = results.load_cell(directory / reference_path)
+                if reference["meta"]["model_id"] != manifest["identities"]["model_id"]:
+                    raise ValueError("Switch comparison reference belongs to a different run")
+                comparison = pipeline.build_switch_comparison(prepared.targets.values[:, 1], reference, cell)
+                cell["comparison_reference_window_indices"] = comparison["reference_window_indices"]
+                cell["meta"]["switch_comparison"] = {**comparison["meta"],
+                    "reference_model_id": manifest["identities"]["model_id"], "reference_cell": reference_path}
             results.save_cell(directory / "cells" / f"{entry}.npz", cell, manifest["identities"])
         except Exception as error:
             _append_log(directory, f"ERROR {entry}: {type(error).__name__}: {error}")
@@ -198,7 +218,7 @@ def _execute(directory: Path, preparation_s: float = 0.0) -> dict:
     if not (directory / "performance.json").exists():
         results.write_json(directory / "performance.json", performance)
     lines = ["# Population task decoding", "", f"Session: {prepared.session_id}",
-        f"Status: {progress['status']}; paired targets: {progress['completed_cells']}/10.",
+        f"Status: {progress['status']}; paired targets: {progress['completed_cells']}/{len(manifest['cells'])}.",
         "", "Goal: read context, choice, post-choice outcome and next chosen-port switch from population activity.",
         "Scripts: run_session.py; run_batch.py. Units and PCs use training-fold transforms and block-held-out probabilities.", ""]
     for entry in progress["completed_ids"]:
@@ -208,8 +228,14 @@ def _execute(directory: Path, preparation_s: float = 0.0) -> dict:
             lines.append(f"- {entry} ({representation}): balanced accuracy={score}; trials={summary['eligible_trials']}.")
         if cell["meta"]["unavailable_reason"]:
             lines.append(f"  Unavailable: {cell['meta']['unavailable_reason']}")
+        if "switch_comparison" in cell["meta"]:
+            lines.append("  Same-side comparison (reference all trials / reference matching side / new within side):")
+            for rep, comparison in cell["meta"]["switch_comparison"]["representations"].items():
+                scores = [comparison[name]["scores"]["balanced_accuracy"]
+                          for name in ("reference_all_trials", "reference_matched_side", "within_side")]
+                lines.append(f"  {rep}: balanced accuracy={scores}; matched trials={cell['meta']['switch_comparison']['required_trials']}.")
     lines += ["", "Scores describe held-out decoding, without significance or causal claims. Inspect side-conditional reward scores",
-              "before interpreting a four-state outcome score as reward responsiveness. No experimental run is implied."]
+              "before interpreting a four-state outcome score as reward responsiveness. Within-side switching also decodes next chosen port."]
     (directory / "summary.md").write_text("\n".join(lines) + "\n", encoding="ascii")
     _append_log(directory, f"{progress['status']}; elapsed_s={performance['elapsed_s']:.3f}")
     return progress
