@@ -69,7 +69,7 @@ def test_retained_masks_restore_units_and_unavailable_fold(coefficient_cells):
 
 
 @pytest.mark.parametrize("problem", ["class_order", "side", "unit_order", "duplicate_ids", "duplicate_fold",
-    "missing_fold", "unknown_fold", "mask_shape", "mask_dtype", "coefficient_shape", "infinite", "zero_scale"])
+    "missing_fold", "unknown_fold", "mask_shape", "mask_dtype", "coefficient_shape", "infinite", "zero_scale", "empty_features"])
 def test_malformed_saved_weights_fail(coefficient_cells, problem):
     """Input malformed class/fold/unit/feature metadata; reject without reinterpreting axes."""
     cell = coefficient_cells["context"]
@@ -98,6 +98,9 @@ def test_malformed_saved_weights_fail(coefficient_cells, problem):
         cell["fold_0_units_coefficients"][0, 0] = np.inf
     elif problem == "zero_scale":
         cell["fold_0_scale_hz"][0] = 0
+    elif problem == "empty_features":
+        cell["fold_0_retained_mask"] = np.zeros(3, bool)
+        cell["fold_0_units_coefficients"] = np.empty((1, 0))
     with pytest.raises(ValueError):
         build_group_weights(coefficient_cells, ids)
 

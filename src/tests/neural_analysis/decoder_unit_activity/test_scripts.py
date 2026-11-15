@@ -48,6 +48,10 @@ def test_request_schema_and_partial_batch(saved_decoder_run):
     dry = run_batch(path, command="dry-run", workers=1)
     assert dry["status"] == "dry-run" and dry["worker_count"] == 0
     (saved_decoder_run / "cells/HPC_left_switch_vs_stay.npz").unlink()
+    dry_partial = run_batch(path, command="dry-run", workers=1)
+    assert dry_partial["status"] == "partial" and dry_partial["worker_count"] == 0
+    with pytest.raises(ValueError, match="cap|group"):
+        run_batch(path, command="dry-run", max_units_per_group=0)
     report = run_batch(path, workers=1, max_units_per_group=1)
     assert report["status"] == "partial"
     assert [item["status"] for item in report["reports"]] == ["complete", "pending"]
