@@ -20,17 +20,26 @@ def _limits(app):
     return axis["cmin"], axis["cmax"]
 
 
-def test_sparse_color_preferences_survive_widget_cleanup_and_tool_changes(event_session):
+def test_sparse_color_preferences_survive_widget_cleanup_and_tool_changes(event_session, monkeypatch):
     """Input: session. Return None; raw/zscore/source preferences survive actual Streamlit reruns."""
     prepare_event_sequences(EventSequenceRequest(event_session.metadata_path, "pc", region="PFC"))
     prepare_event_sequences(EventSequenceRequest(event_session.metadata_path, "sparse_pc", region="PFC"))
+    from src.neural_analysis.webapp import event_sequence_views
+    from src.tests.neural_analysis.event_sequences.test_sparse_sources import _forbidden
+    monkeypatch.setattr(event_sequence_views, "prepare_event_sequences", _forbidden)
     app = AppTest.from_function(_render_event_tool, args=(str(event_session.metadata_path),)).run()
     assert not app.exception
     assert _widget(app, "selectbox", "Neural source").value == "sparse_pc"
     _widget(app, "checkbox", "Manual color limit").check().run()
     _widget(app, "number_input", "Color limit L").set_value(.15).run()
     assert _limits(app) == (-.15, .15)
+    _widget(app, "slider", "Sparse component").set_value(2).run()
+    assert not _widget(app, "checkbox", "Manual color limit").value
+    _widget(app, "slider", "Sparse component").set_value(1).run()
+    assert _limits(app) == (-.15, .15)
     _widget(app, "selectbox", "Test tool").select("transition").run()
+    assert _limits(app) == (-.15, .15)
+    _widget(app, "selectbox", "Sequence family").select("probe").run()
     assert _limits(app) == (-.15, .15)
     _widget(app, "checkbox", "Z-score").check().run()
     assert not _widget(app, "checkbox", "Manual color limit").value
