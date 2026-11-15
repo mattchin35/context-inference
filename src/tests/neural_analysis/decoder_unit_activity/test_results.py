@@ -60,10 +60,22 @@ def test_missing_region_is_reported_before_coefficients(saved_decoder_run):
     prepared = source_results.load_preparation(manifest["preparation_path"])
     prepared.regions.pop("HPC")
     prepared.unavailable["HPC"] = "No regional coverage"
+    for cell in (saved_decoder_run / "cells").glob("HPC_*.npz"):
+        cell.unlink()
     loaded = load_decoder_inputs(saved_decoder_run, "HPC", prepared=prepared)
     assert loaded["status"] == "unavailable" and "coverage" in loaded["reason"]
     prepared.unavailable.pop("HPC")
     with pytest.raises(ValueError, match="region"):
+        load_decoder_inputs(saved_decoder_run, "HPC", prepared=prepared)
+
+
+def test_absent_region_cannot_have_available_published_fits(saved_decoder_run):
+    """Input contradictory preparation/fit availability; reject instead of concealing published data."""
+    manifest = source_results.load_manifest(saved_decoder_run)
+    prepared = source_results.load_preparation(manifest["preparation_path"])
+    prepared.regions.pop("HPC")
+    prepared.unavailable["HPC"] = "No regional coverage"
+    with pytest.raises(ValueError, match="region|available"):
         load_decoder_inputs(saved_decoder_run, "HPC", prepared=prepared)
 
 
