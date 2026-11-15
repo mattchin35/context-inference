@@ -1,12 +1,17 @@
 # Population task decoding: implementation plan
 
 Status: D1-D7 implemented and synthetically validated, 2026-11-14.
-Implementation was approved on that date. Experimental execution remains a
-separate user-designated-session gate. See the execution record below and
+Implementation was approved on that date. CT026 2026-08-28 has subsequently
+been fitted; human inspection is pending. See the execution record below and
 [usage instructions](../src/neural_analysis/population_decoding/README.md).
 Scientific authority: [population_task_decoding_spec_v1.md](population_task_decoding_spec_v1.md).
 [AGENTS.md](../AGENTS.md) and [SoftwareDesign.md](SoftwareDesign.md) govern
 readability, data contracts, tests-first commits, and experimental run gates.
+
+The separately requested
+[within-side switch-versus-stay extension](population_switch_vs_stay_implementation_plan.md)
+is implemented as the additive v2 profile. It preserves v1's existing
+directional switch targets and read-only saved results; see its execution record.
 
 ## 1. Deliverable and webapp placement
 
@@ -455,8 +460,15 @@ discrimination or solve the post-only outcome task. Missing labels, training
 class absence, constants, regional coverage, saved-data corruption, partial
 resume, code/runtime mismatch and held-out preprocessing leakage are covered.
 Measured timings and peak process RSS are saved by the synthetic entry-point
-runs; interpreter/test-process overhead is included in RSS. Production-session
-performance remains unmeasured.
+runs; interpreter/test-process overhead is included in RSS. The subsequently
+authorized CT026 v1 run recorded 8.11 seconds of execution, including 3.44
+seconds of preparation, and 687,349,760 bytes peak process RSS. These are
+single-session measurements, not runtime guarantees for other sessions or
+the subsequent extension.
 
-No experimental session has been run for this new analysis. User session
-designation and inspection remain the next gate before any wider batch.
+The user subsequently designated CT026 2026-08-28. Its run
+`population_task_decoding_20261114_123639_218380_6a05b9562dc0` completed all ten
+paired cells and 100 fold fits with complete OOF coverage, using 696 baseline
+windows, 141 PFC units and 286 HPC units at 500 ms. An `inspection.md` report
+is saved in that session-local run directory. Used input/code identities were
+verified after fitting. Human inspection remains pending; no wider batch ran.

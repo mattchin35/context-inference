@@ -22,6 +22,10 @@ uv run python -m src.neural_analysis.population_decoding.run_session init-config
 ```
 
 This creates `population_decoding.json` without replacing an existing config.
+New execution uses `population-task-decoding-v2` with seven models. To keep a
+session's existing v1 config, add `--output population_decoding_switch_vs_stay.json`
+and use that filename in subsequent commands. V1 saved runs remain readable;
+new fitting/resuming requires v2 and never extends a v1 run in place.
 Use `--augmented-trials /path/to/augmented.csv` when needed. Source and augmented
 tables must agree in complete chronological order on trial/block IDs, times,
 context, action, reward and manual-reward flags. Correctness/model-value columns
@@ -48,11 +52,17 @@ behavioral-block assignments. Complete two-second windows are required:
 | Context, current choice | `[-1,+1)` s |
 | Joint four-class outcome | `[0,+1)` s only |
 | Left/right directional choice switches | `[-1,+1)` s |
+| Switch vs stay, current left/right (separate models) | `[-1,+1)` s, matching current side only |
 
 Outcome class order is left reward, right reward, left no reward, right no reward.
 No reward includes incorrect choices. Switches refer to the immediately following
 unfiltered trial's chosen port; invalid/manual successors and the terminal trial
 are unavailable. They do not mean task-context switches.
+
+The two additional models are `left_switch_vs_stay` (left -> left/right) and
+`right_switch_vs_stay` (right -> right/left). Classes are stay=0, switch=1.
+Opposite-side trials are excluded, never labeled stay. Each new model fits its
+own training-only scaling/PCA using the existing global block folds.
 
 Scaling and PCA see only each target/fold's training bins. The two feature sets
 can give nearly identical predictions because keeping all nonzero PCs largely
@@ -82,6 +92,15 @@ including after raw files are unmounted; selector changes perform no analysis.
 It displays actual labels, supported OOF probability intervals, class counts,
 confusion matrices, scores and fold reasons. Pre-choice outcome tracks are blank.
 The export button writes a non-overwriting PNG under that run's `figures/`.
+In v2 runs, select **Switch vs stay: current left** or **current right** to
+view `P(switch)` with opposite-side windows blank. The matched comparison is
+also available from the corresponding original `left_choice_switch` or
+`right_choice_switch` target. Its three rows are: original all-trial fit scored
+on all trials; those same saved predictions scored on the matching side; and
+the new within-side fit scored on exactly those same required held-out bins.
+No recalibration, finite-row intersection, or new split is performed. A missing
+new prediction makes its primary comparison unavailable while valid reference
+scores remain visible. Detailed reasons and differences are in the expander.
 
 Primary scores pool all required held-out bins: balanced accuracy and log loss.
 An incomplete set of OOF predictions makes those scores unavailable. Missing
@@ -90,6 +109,9 @@ Outcome scores can reflect side alone, so inspect the within-actual-side
 reward/no-reward summaries. For switches inspect positive prevalence and the
 always-negative baseline. Full-window switch decoding is an offline readout
 including post-choice activity, without prospective/causal/significance claims.
+Within-side switching also decodes the next chosen port. Differences between
+fits change training sample size, preprocessing and the effective penalty/data
+ratio under fixed `C`; they do not establish a unique switching mechanism.
 
 ## Resume, rerun, and batch
 
@@ -120,5 +142,9 @@ uv run python -m src.neural_analysis.population_decoding.run_batch new \
   --config-list /path/to/configs.txt --workers 2
 ```
 
-Synthetic validation precedes one user-designated experimental session and
-user inspection. No experimental session has been run for this new analysis.
+The seven-model extension and its tests-first validation are described in
+[its implementation plan](../../../docs/population_switch_vs_stay_implementation_plan.md).
+Synthetic validation preceded the designated CT026 2026-08-28 extended fit.
+Both v1 and v2 runs are complete and retained. The v2 run named
+`population_task_decoding_20261114_192507_406224_a176e2c37f26` contains the new
+comparison and an `inspection.md` report. Human inspection precedes any wider batch.

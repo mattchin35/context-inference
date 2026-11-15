@@ -3,8 +3,9 @@
 Status: scientific choices confirmed, 2026-11-14. The user selected both raw
 unit and PC population inputs and accepted the remaining defaults. This is a
 scientific specification; an implementation plan and implementation approval
-remain separate. Implementation of the revised plan was approved on 2026-11-14;
-an experimental run is not yet authorized.
+remain separate. V1 was implemented and CT026 2026-08-28 was fitted on
+2026-11-14; human inspection is pending. A separately requested within-side
+switch-versus-stay extension is implemented under the v2 profile (section 9).
 
 Related contracts:
 
@@ -12,7 +13,8 @@ Related contracts:
 - [Existing population decoding specification](task_variable_spec_v5.md).
 - [Existing session prediction specification](condition_prediction_generalization_spec_v1.md).
 - [Software design guidance](SoftwareDesign.md).
-- [Implementation-plan draft](population_task_decoding_implementation_plan.md).
+- [Implemented v1 plan](population_task_decoding_implementation_plan.md).
+- [Switch-versus-stay extension plan](population_switch_vs_stay_implementation_plan.md).
 
 ## 1. Goal and direction
 
@@ -32,6 +34,9 @@ left-to-right or right-to-left change of chosen port. A choice switch is not
 a task-context switch.
 
 ## 2. Confirmed scientific decisions
+
+The table records the implemented v1 profile. Section 9 describes the additive
+additive extension; it does not replace the existing switch targets.
 
 | Item | Confirmed definition |
 | --- | --- |
@@ -135,8 +140,10 @@ trial i, whose activity is used to decode the upcoming transition:
 | Right -> right | 0 | 0 |
 
 Other valid transitions are negatives for the respective switch indicator.
-Do not restrict each decoder to the current chosen side, create separate stay
-targets, or add the proposed within-side switch-versus-stay analyses.
+Keep these two existing decoders across all eligible trials. The user has now
+requested additional within-side switch-versus-stay models for comparison;
+those are separate model IDs described in section 9, not a change to these
+original targets or their negative classes.
 
 The successor is the immediately following unfiltered trial,
 consistent with "on the next trial." Do not silently skip a no-choice/manual
@@ -277,7 +284,7 @@ be labeled as the same fixed session-PC basis in a contribution plot.
 Existing decoding modules already support population matrices, grouped
 evaluation, logistic readouts and saved probability/contribution views. The
 existing `next_choice_switch_stay` target uses adjacent actions rather than
-contexts. The implementation-plan draft records the reuse audit: current
+contexts. The implemented v1 plan records the reuse audit: current
 session-prediction targets are trial-level, whereas new target-specific timing,
 directional switch indicators and broad no-reward labels require explicit
 contracts. Do not change existing analyses' omission meanings or introduce a
@@ -288,17 +295,47 @@ choice, reward-absence and next-choice signals on synthetic populations.
 Include incorrect unrewarded choices, rare switches, omitted/invalid successor
 trials, terminal trials, class absence, target-specific missingness and leakage
 checks. Tests, synthetic validation, one designated experimental session and
-user inspection precede any wider run. No experimental session is designated
-for this new analysis yet.
+user inspection precede any wider run. CT026 2026-08-28 has been fitted under
+the v1 profile; human inspection is pending and no wider batch has been run.
 
 ## 8. Readiness
 
 The requested scientific choices and accepted defaults are recorded above.
-The [implementation-plan draft](population_task_decoding_implementation_plan.md)
+The [implemented plan](population_task_decoding_implementation_plan.md)
 covers audited reuse boundaries, the separate dropdown view, data contracts,
 dependencies, tests written first, and performance/storage considerations.
 Implementation of that revised plan is complete through D1-D7, with synthetic
 validation and a separate saved-results dropdown view. See the plan's execution
 record and [usage instructions](../src/neural_analysis/population_decoding/README.md).
-An experimental session must still be designated before running this new
-analysis on experimental data.
+The user designated CT026 2026-08-28, and its v1 fit is complete. The separately
+requested extension below has been approved and implemented.
+
+## 9. Additive within-side switch-versus-stay models (v2)
+
+The user approved the fuller
+[implementation plan](population_switch_vs_stay_implementation_plan.md)
+on 2026-11-14. The extension is implemented; the plan records validation.
+
+- `left_switch_vs_stay`: among current left choices with a valid immediate
+  successor, classify left -> right as switch=1 and left -> left as stay=0.
+- `right_switch_vs_stay`: among current right choices with a valid immediate
+  successor, classify right -> left as switch=1 and right -> right as stay=0.
+
+Opposite-side trials are ineligible, never stay/zero. Use the existing whole
+`[-1,+1)` window, shared global block folds, both population representations,
+and fixed estimator/weighting defaults. Fit preprocessing on each new model's
+eligible training bins only. Keep the original directional targets unchanged.
+
+For each side, compare the original all-trial score, its existing OOF
+predictions rescored on matching-side trials, and the new within-side decoder
+scored on exactly those same required rows/bins/folds. Do not silently remove
+rows with failed predictions. Report support/prevalence and explicit metric
+availability; do not renormalize the original probabilities or imply that
+different training scopes isolate a causal switching signal.
+
+New extended runs use `population-task-decoding-v2` and preserve v1 files and
+read-only viewing. Following authorization and synthetic validation, CT026
+8/28 completed all 14 paired cells and 140 fold fits. Its original v1 files
+are unchanged; the original five models' probabilities are exactly reproduced.
+See the extension plan's execution record. Human inspection is pending; no
+wider batch has been run.
