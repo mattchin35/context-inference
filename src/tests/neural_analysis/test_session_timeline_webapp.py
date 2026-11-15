@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from src.neural_analysis.webapp import app, session_inputs, timeline_view
@@ -14,6 +16,26 @@ from src.tests.neural_analysis.test_session_timeline_io import (
 )
 
 synthetic_timeline_session = timeline_session_fixture
+
+
+@pytest.fixture
+def allow_synthetic_output(synthetic_timeline_session, monkeypatch):
+    """Allow only this generated fixture's outputs during UI tests; leave production policy separately tested."""
+    from src.neural_analysis.population import run_session_timeline as runner
+    policy = Mock()
+    monkeypatch.setattr(runner, "validate_timeline_output_root", policy)
+    yield
+    for call in policy.call_args_list:
+        assert call.args == (synthetic_timeline_session.session_root / "analysis_runs",)
+
+
+def test_production_output_policy_rejects_repository_paths():
+    """Input repository and external paths; validation rejects real repository outputs without creating either."""
+    from src.neural_analysis.population.run_session_timeline import validate_timeline_output_root
+    repository = Path(__file__).resolve().parents[3]
+    with pytest.raises(ValueError, match="outside the source repository"):
+        validate_timeline_output_root(repository / "analysis_runs")
+    assert validate_timeline_output_root(Path("/data/synthetic_policy_check/analysis_runs")) is None
 
 
 def test_timeline_is_available_with_behavior_and_missing_neural_probes(
@@ -72,7 +94,7 @@ def _timeline_figure_spec(app_test):
     return json.loads(json.loads(component.proto.json)["figure_json"])
 
 
-def test_streamlit_display_changes_reuse_saved_basis(synthetic_timeline_session):
+def test_streamlit_display_changes_reuse_saved_basis(synthetic_timeline_session, allow_synthetic_output):
     """Actual Streamlit reruns keep one saved analysis while PC/event controls change."""
     from src.neural_analysis.population.run_session_timeline import run_session_timeline
     from src.neural_analysis.population.session_timeline_io import load_timeline_result
@@ -104,7 +126,7 @@ def test_streamlit_display_changes_reuse_saved_basis(synthetic_timeline_session)
 
 
 def test_context_checkbox_changes_overlay_without_another_preparation(
-    synthetic_timeline_session,
+    synthetic_timeline_session, allow_synthetic_output,
 ):
     """A saved Stage 1 result with logged transitions gains a default-on display toggle."""
     import pandas as pd
@@ -145,7 +167,7 @@ def test_context_checkbox_changes_overlay_without_another_preparation(
 
 
 def test_zscore_checkbox_reuses_saved_result_and_keeps_manual_limit_units_separate(
-    synthetic_timeline_session, monkeypatch
+    synthetic_timeline_session, monkeypatch, allow_synthetic_output
 ):
     """Live display normalization updates units without fitting PCA or rewriting an archive."""
     from src.neural_analysis.population.run_session_timeline import run_session_timeline
@@ -232,7 +254,7 @@ def test_zscore_option_is_disabled_without_prepared_pc_scores(
 
 
 def test_rank_changes_keep_component_identity_and_navigation_revision(
-    synthetic_timeline_session,
+    synthetic_timeline_session, allow_synthetic_output,
 ):
     """Rank and z-score changes update data in place; explicit navigation requests a new range."""
     from src.neural_analysis.population.run_session_timeline import run_session_timeline
@@ -313,7 +335,7 @@ def test_repeated_jump_and_clamped_duration_changes_still_request_navigation(
 
 
 def test_old_archives_gain_reward_markers_without_rewriting_or_refitting(
-    synthetic_timeline_session, monkeypatch
+    synthetic_timeline_session, monkeypatch, allow_synthetic_output
 ):
     """A cached behavior read enriches legacy choices without changing saved neural products."""
     import pandas as pd
