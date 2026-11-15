@@ -202,10 +202,13 @@ def export_unit_activity_png(path: Path, data: dict, behavior: SessionTimelineRe
         raise FileExistsError(path)
     tracks = tuple(track for track in event_tracks if track in available_event_tracks(behavior.events))
     lanes = max(1, data["lane_count"])
-    figure = Figure(figsize=(16, max(7, 3 + len(display)*lanes*.22 + len(tracks))), facecolor="white")
+    row_heights = [1., *([.55]*len(tracks)), max(2., len(display)*lanes*.24)]
+    top_inches, bottom_inches, gap_inches = .6, 1.35, .35
+    height = max(7., sum(row_heights) + top_inches + bottom_inches + gap_inches*(len(row_heights)-1))
+    figure = Figure(figsize=(16, height), facecolor="white")
     FigureCanvasAgg(figure)
     axes = np.atleast_1d(figure.subplots(2+len(tracks), 1, sharex=True,
-        gridspec_kw={"height_ratios": [1, *([.5]*len(tracks)), max(2, len(display)*lanes*.25)]}))
+        gridspec_kw={"height_ratios": row_heights}))
     viewport = time_range_s or data["time_range_s"]
     _draw_png_behavior(axes, behavior, tracks, viewport)
     heatmap = axes[-1]
@@ -220,12 +223,17 @@ def export_unit_activity_png(path: Path, data: dict, behavior: SessionTimelineRe
         xlabel="Session elapsed time (s)")
     for start, end, group in _group_bounds(display):
         heatmap.axhline(end*lanes, color="#94a3b8", linewidth=.7)
-        heatmap.text(-.10, (start+end)*lanes/2, GROUP_LABELS[group],
-            transform=heatmap.get_yaxis_transform(), ha="right", va="center", fontsize=12)
+        heatmap.annotate(GROUP_LABELS[group], xy=(0, (start+end)*lanes/2),
+            xycoords=heatmap.get_yaxis_transform(), xytext=(-100, 0), textcoords="offset points",
+            ha="right", va="center", fontsize=12)
     for axis in axes:
         axis.tick_params(labelsize=13)
-    figure.text(.02, .02, textwrap.fill(activity_caption(data, len(display)), 150), fontsize=11, color="black")
-    figure.subplots_adjust(left=.22, right=.86, bottom=.18, hspace=.22)
+    # Fixed physical margins and per-unit height keep long exports readable.
+    figure.text(.02, .1/height, textwrap.fill(activity_caption(data, len(display)), 150),
+                fontsize=11, color="black", va="bottom")
+    axes_inches = height - top_inches - bottom_inches - gap_inches*(len(row_heights)-1)
+    figure.subplots_adjust(left=.24, right=.86, bottom=bottom_inches/height,
+        top=1-top_inches/height, hspace=gap_inches*len(row_heights)/axes_inches)
     if artist is not None:
         position = heatmap.get_position()
         colorbar_axis = figure.add_axes((.90, position.y0, .015, position.height))
@@ -277,11 +285,18 @@ def _draw_png_behavior(axes: np.ndarray, behavior: SessionTimelineResult,
                        tracks: tuple[str, ...], viewport: tuple[float, float]) -> None:
     """Draw shared recorded choices/context/events on Matplotlib axes; X elapsed seconds."""
     choices = behavior.choices
-    for action, color in ((0, "#991b1b"), (1, "#2563eb")):
-        for rewarded in (False, True):
-            mask = (choices.action == action) & ((choices.reward == 1) if rewarded else (choices.reward != 1))
+    rewards = pd.to_numeric(choices.get("reward", pd.Series(np.nan, index=choices.index)), errors="coerce")
+    for action, color, marker in ((0, "#c2410c", "v"), (1, "#2563eb", "^")):
+        for rewarded in (0, 1):
+            mask = (choices.action == action) & (rewards == rewarded)
             axes[0].scatter(choices.loc[mask, "elapsed_s"], np.full(mask.sum(), action),
-                            s=32 if rewarded else 16, facecolors=color if rewarded else "none", edgecolors=color)
+                marker=marker, s=32 if rewarded else 16,
+                facecolors=color if rewarded else "none", edgecolors=color)
+        # Match the shared timeline's unknown marker instead of implying no reward.
+        unknown = (choices.action == action) & ~rewards.isin([0, 1])
+        if unknown.any():
+            axes[0].scatter(choices.loc[unknown, "elapsed_s"], np.full(unknown.sum(), action),
+                            marker="x", s=25, color="#6b7280")
     for interval in context_intervals(behavior.events, viewport[1]).itertuples(index=False):
         axes[0].axvspan(interval.start_s, interval.end_s, color=CONTEXT_COLORS[interval.context], alpha=.12)
     axes[0].set(yticks=[0, 1], yticklabels=["Right", "Left"], title="Recorded choices", xlim=viewport)

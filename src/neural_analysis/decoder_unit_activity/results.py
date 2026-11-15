@@ -47,6 +47,7 @@ def load_decoder_inputs(run_directory: Path | str, region: str,
         reason = prepared.unavailable.get(region)
         if not reason:
             raise ValueError("Missing region has no recorded unavailable reason")
+        _validate_absent_region(directory, region, manifest)
         return {**loaded, "status": "unavailable", "reason": reason}
     if regional.probe_id != manifest["config"]["probe_roles"].get(region):
         raise ValueError("Source region/probe identities disagree")
@@ -214,6 +215,19 @@ def code_identity() -> str:
 
 
 # Validation helpers reject ordinary saved-input errors, without changing source products.
+def _validate_absent_region(directory: Path, region: str, manifest: dict) -> None:
+    """Check any published cells for a region absent from preparation; no available fits may contradict it."""
+    for name in MODEL_NAMES:
+        path = directory / "cells" / f"{region}_{name}.npz"
+        if not path.is_file():
+            continue
+        meta = decoder_results.load_cell(path)["meta"]
+        if (meta["region"] != region or meta["model_id"] != manifest["identities"]["model_id"]
+                or meta["preparation_id"] != manifest["identities"]["preparation_id"]
+                or any(record["available"] for record in meta["representations"]["units"]["folds"])):
+            raise ValueError("Absent region contradicts published source identity or available fits")
+
+
 def _validate_source_cell(cell: dict, name: str, region: str, regional: PreparedPopulationRegion,
                            manifest: dict, prepared: PreparedPopulation) -> None:
     """Check saved target identity and original row/native-bin geometry; return None or ValueError."""
