@@ -47,6 +47,20 @@ def render_population_decoding_view(st_module: object, session: ResolvedSession)
         st_module.error(f"Could not read population run metadata: {error}")
         return
     region = st_module.sidebar.selectbox("Region", ["PFC", "HPC"], key=key+"_region")
+    display_mode = st_module.sidebar.selectbox("Display", ["Probability timelines", "Decoder-weight unit activity"],
+                                               key=key+"_display")
+    if display_mode == "Decoder-weight unit activity":
+        from .decoder_unit_activity_view import render_decoder_unit_activity_view
+        try:
+            prep_path = Path(manifest["preparation_path"])
+            if not prep_path.is_absolute():
+                prep_path = directory / prep_path
+            stat = prep_path.stat()
+            prepared = load_preparation_cached(str(prep_path), stat.st_size, stat.st_mtime_ns)
+            render_decoder_unit_activity_view(st_module, directory, region, key, prepared)
+        except (OSError, ValueError, KeyError) as error:
+            st_module.error(f"Could not load saved decoder unit activity: {error}")
+        return
     representation = st_module.sidebar.selectbox("Population features", ["units", "pcs"], key=key+"_features")
     target = st_module.sidebar.selectbox("Target", list(targets), format_func=_target_label, key=key+"_target")
     try:

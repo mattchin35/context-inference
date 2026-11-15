@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from src.neural_analysis.population_decoding import results as decoder_results
-from src.neural_analysis.population_decoding.preparation import PreparedPopulation
+from src.neural_analysis.population_decoding.preparation import PreparedPopulation, PreparedPopulationRegion
 from .selection import GROUP_IDS, GROUP_LABELS, MODEL_NAMES, build_group_weights, summarize_group_weights, assign_unit_groups
 
 ANALYSIS_VERSION = "decoder-unit-activity-v1"
@@ -214,7 +214,7 @@ def code_identity() -> str:
 
 
 # Validation helpers reject ordinary saved-input errors, without changing source products.
-def _validate_source_cell(cell: dict, name: str, region: str, regional: object,
+def _validate_source_cell(cell: dict, name: str, region: str, regional: PreparedPopulationRegion,
                            manifest: dict, prepared: PreparedPopulation) -> None:
     """Check saved target identity and original row/native-bin geometry; return None or ValueError."""
     meta = cell["meta"]

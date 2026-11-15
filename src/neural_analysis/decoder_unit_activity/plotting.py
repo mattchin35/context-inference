@@ -107,6 +107,29 @@ def assign_temporal_lanes(starts_s: np.ndarray, ends_s: np.ndarray) -> np.ndarra
     return lanes
 
 
+def viewport_unit_activity_data(data: dict, time_range_s: tuple[float, float]) -> dict:
+    """Slice cached full-pool plot data to elapsed-second viewport; return a shallow new mapping.
+
+    Keep normalized values(W,B,S), statistics, color limits and global lanes by
+    reference. Only visible lane columns/edges/customdata are sliced, preserving
+    full native bins at viewport boundaries. No recomputation or input mutation.
+    """
+    if len(time_range_s) != 2 or not np.isfinite(time_range_s).all() or time_range_s[1] <= time_range_s[0]:
+        raise ValueError("Expected increasing finite elapsed-second viewport")
+    lanes = []
+    for lane in data["lanes"]:
+        edges = lane["x"]
+        columns = np.flatnonzero((edges[:-1] < time_range_s[1]) & (edges[1:] > time_range_s[0]))
+        if not len(columns):
+            continue
+        start, stop = int(columns[0]), int(columns[-1]+1)
+        if not np.isfinite(lane["z"][:, start:stop]).any():
+            continue
+        lanes.append({**lane, "x": edges[start:stop+1], "z": lane["z"][:, start:stop],
+                      "customdata": lane["customdata"][:, start:stop]})
+    return {**data, "lanes": lanes, "time_range_s": tuple(time_range_s)}
+
+
 def plot_unit_activity(data: dict, behavior: SessionTimelineResult, display: pd.DataFrame,
                        event_tracks: tuple[str, ...] = (), viewport_revision: int = 0,
                        time_range_s: tuple[float, float] | None = None) -> go.Figure:
@@ -135,6 +158,7 @@ def plot_unit_activity(data: dict, behavior: SessionTimelineResult, display: pd.
     lanes = max(1, data["lane_count"])
     ticks = np.arange(len(display))*lanes + lanes/2
     figure.update_yaxes(range=[max(1, len(display)*lanes), 0], tickvals=ticks,
+                       uirevision=repr((data["unit_ids"], lanes)),
                        ticktext=list(data["unit_ids"]), row=row, col=1)
     for start, end, group in _group_bounds(display):
         figure.add_hline(y=end*lanes, line_color="#94a3b8", line_width=1, row=row, col=1)
@@ -197,10 +221,12 @@ def export_unit_activity_png(path: Path, data: dict, behavior: SessionTimelineRe
             transform=heatmap.get_yaxis_transform(), ha="right", va="center", fontsize=12)
     for axis in axes:
         axis.tick_params(labelsize=13)
-    if artist is not None:
-        figure.colorbar(artist, ax=list(axes), label="Unit SD" if data["scale"] == "zscore" else "Hz", fraction=.025, pad=.02)
     figure.text(.02, .02, textwrap.fill(activity_caption(data, len(display)), 150), fontsize=11, color="black")
-    figure.subplots_adjust(left=.22, right=.88, bottom=.16, hspace=.22)
+    figure.subplots_adjust(left=.22, right=.86, bottom=.18, hspace=.22)
+    if artist is not None:
+        position = heatmap.get_position()
+        colorbar_axis = figure.add_axes((.90, position.y0, .015, position.height))
+        figure.colorbar(artist, cax=colorbar_axis, label="Unit SD" if data["scale"] == "zscore" else "Hz")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as stream:
         figure.savefig(stream, format="png", dpi=140, facecolor="white", transparent=False)
