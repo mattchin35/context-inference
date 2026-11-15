@@ -117,3 +117,47 @@ def test_incomplete_new_predictions_do_not_shrink_matched_scope(synthetic_popula
         assert record["within_side"]["scores"]["balanced_accuracy"] is None
         assert record["reference_matched_side"]["scores"]["balanced_accuracy"] is not None
         assert record["differences"]["balanced_accuracy"] is None
+
+
+def test_current_side_only_signal_does_not_invent_conditional_switch_coding(synthetic_population):
+    """Input seeded population; all-trial AUC can use current side, within-side controls remain chance-like."""
+    rng = np.random.default_rng(719)
+    region = synthetic_population.regions["PFC"]
+    rates = 20 + rng.normal(0, 1, region.rates_hz.shape)
+    rates += 30*synthetic_population.targets.values[:, 1, None, None]
+    population = replace(synthetic_population, regions={"PFC": replace(region, rates_hz=rates)})
+    reference = fit_target(population, "PFC", "left_choice_switch")
+    new = fit_target(population, "PFC", "left_switch_vs_stay")
+    comparison = build_switch_comparison(population.targets.values[:, 1], reference, new)
+    for rep, record in comparison["meta"]["representations"].items():
+        assert record["reference_all_trials"]["scores"]["roc_auc"][1] > .7
+        for scope in ("reference_matched_side", "within_side"):
+            assert .3 < record[scope]["scores"]["roc_auc"][1] < .7
+
+
+def test_restricted_constant_unit_is_omitted(synthetic_population):
+    """Input population; unit varying only between current sides must disappear in new fits."""
+    region = synthetic_population.regions["PFC"]
+    rates = region.rates_hz.copy()
+    rates[:, :, 0] = 20 + 30*synthetic_population.targets.values[:, 1, None]
+    population = replace(synthetic_population, regions={"PFC": replace(region, rates_hz=rates)})
+    reference = fit_target(population, "PFC", "left_choice_switch")
+    new = fit_target(population, "PFC", "left_switch_vs_stay")
+    assert reference["fold_0_retained_mask"][0]
+    assert not new["fold_0_retained_mask"][0]
+
+
+def test_no_stay_training_class_keeps_valid_reference_scores(synthetic_population):
+    """Input population; alternating real choices leave no within-side stays, without changing folds."""
+    actions = np.arange(len(synthetic_population.trials)) % 2
+    targets = build_population_targets(synthetic_population.trials.state_int, actions,
+                                       synthetic_population.trials.reward, np.zeros(len(actions)))
+    population = replace(synthetic_population, targets=targets)
+    reference = fit_target(population, "PFC", "left_choice_switch")
+    new = fit_target(population, "PFC", "left_switch_vs_stay")
+    comparison = build_switch_comparison(actions, reference, new)
+    for rep, record in comparison["meta"]["representations"].items():
+        assert record["reference_matched_side"]["scores"]["log_loss"] is not None
+        assert record["within_side"]["scores"]["log_loss"] is None
+        assert record["differences"]["log_loss"] is None
+        assert all(fold["reason"] == "training_class_missing" for fold in new["meta"]["representations"][rep]["folds"])

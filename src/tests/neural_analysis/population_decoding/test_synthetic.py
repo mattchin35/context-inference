@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from src.neural_analysis.population_decoding import pipeline, results
-from src.neural_analysis.population_decoding.targets import TARGET_NAMES
+from src.neural_analysis.population_decoding.targets import TARGET_NAMES, MODEL_TARGET_NAMES
 from src.neural_analysis.population_decoding.run_session import run_session
 
 
@@ -105,7 +105,8 @@ def test_full_spike_pipeline_recovers_signals(population_config_path, synthetic_
     raw loader/IRIG/binning/CV/publication path is exercised on synthetic data.
     """
     root = population_config_path.parent
-    trials = synthetic_population.trials
+    trials = synthetic_population.trials.copy()
+    trials["led_on_time"] = trials.start_time + 1.0
     trials.to_csv(root / "trials.csv", index=False)
     trials.to_csv(root / "processed/augmented.csv", index=False)
     rng = np.random.default_rng(20261114)
@@ -127,10 +128,10 @@ def test_full_spike_pipeline_recovers_signals(population_config_path, synthetic_
         np.savez(root / probe / "aligned.npz", spike_utc_unix=times[order],
             irig_utc_unix=np.arange(trials.start_time.iloc[0], trials.choice_time.iloc[-1] + 3))
     report = run_session(population_config_path)
-    assert report["status"] == "complete"
+    assert report["status"] == "complete" and report["completed_cells"] == 14
     directory = Path(report["run_directory"])
     for region in ("PFC", "HPC"):
-        for target in TARGET_NAMES:
+        for target in MODEL_TARGET_NAMES:
             cell = results.load_cell(directory / "cells" / f"{region}_{target}.npz")
             for representation in ("units", "pcs"):
                 assert cell["meta"]["representations"][representation]["pooled"]["balanced_accuracy"] > .8

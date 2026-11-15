@@ -79,3 +79,22 @@ def test_corrupt_comparison_mapping_is_rejected(population_config_path):
     np.savez_compressed(path, **arrays)
     with pytest.raises(ValueError, match="comparison"):
         results.load_cell(path)
+
+
+@pytest.mark.parametrize("damage", ["missing_representation", "wrong_required_bins", "wrong_classes"])
+def test_malformed_comparison_metadata_is_rejected(population_config_path, damage):
+    """Input v2 run/damage type; incomplete or misdeclared comparison summaries fail at loading."""
+    report = run_session(population_config_path)
+    path = Path(report["run_directory"]) / "cells/PFC_left_switch_vs_stay.npz"
+    with np.load(path, allow_pickle=True) as archive:
+        arrays = dict(archive)
+    meta = arrays["meta"].item()
+    if damage == "missing_representation":
+        del meta["switch_comparison"]["representations"]["units"]
+    elif damage == "wrong_required_bins":
+        meta["switch_comparison"]["representations"]["units"]["within_side"]["scores"]["required_rows"] += 1
+    else:
+        meta["class_names"] = ["switch", "stay"]
+    np.savez_compressed(path, **arrays)
+    with pytest.raises(ValueError, match="comparison"):
+        results.load_cell(path)
