@@ -109,3 +109,14 @@ def test_empty_viewport_and_invalid_unit_selection(activity_example):
     with pytest.raises(ValueError):
         build_unit_activity_data(rates, ("u0", "u1"), ("missing",), choices,
             np.arange(3), np.array([-1., 0., 1.]))
+
+
+def test_logged_context_and_led_tracks_export(activity_example, tmp_path):
+    """Input recorded context/LED events; both renderers accept the public interval schemas."""
+    _, _, behavior, display = activity_example
+    behavior.events = pd.DataFrame({"Event": ["enter_left_patch", "LED_on", "left_entry", "LED_off", "enter_right_patch"],
+        "elapsed_s": [0., 1., 2., 3., 5.], "Time": [100., 101., 102., 103., 105.]})
+    data = make_data(activity_example)
+    figure = plot_unit_activity(data, behavior, display, ("LED", "left_entry"))
+    assert len([trace for trace in figure.data if trace.type == "heatmap"]) == 2
+    export_unit_activity_png(tmp_path / "events.png", data, behavior, display, ("LED", "left_entry"))
