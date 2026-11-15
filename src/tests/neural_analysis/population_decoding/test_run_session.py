@@ -86,3 +86,36 @@ def test_unavailable_fold_reasons_are_recorded_in_run_log(population_config_path
     report = run_session(population_config_path)
     text = (Path(report["run_directory"]) / "run.log").read_text()
     assert "training_class_missing" in text
+
+
+def test_conditional_comparison_interruption_resumes_without_sources(population_config_path, monkeypatch):
+    """Input synthetic session; interrupt before conditional publication, retain references and resume."""
+    original_builder = pipeline.build_switch_comparison
+    original_fit = pipeline.fit_target
+
+    def interrupt(*args, **kwargs):
+        """Accept comparison inputs and simulate interruption before atomic publication."""
+        raise RuntimeError("interrupted comparison")
+
+    monkeypatch.setattr(pipeline, "build_switch_comparison", interrupt)
+    with pytest.raises(RuntimeError, match="interrupted comparison"):
+        run_session(population_config_path)
+    run = results.discover_runs(population_config_path.parent / "analysis_runs")[0]
+    published = {path: path.read_bytes() for path in (run / "cells").glob("*.npz")}
+    assert len(published) == 5
+    assert not (run / "cells/PFC_left_switch_vs_stay.npz").exists()
+    for path in (population_config_path.parent / "trials.csv", population_config_path.parent / "A/aligned.npz"):
+        path.unlink()
+    monkeypatch.setattr(preparation, "prepare_session", forbid_compute)
+    monkeypatch.setattr(pipeline, "build_switch_comparison", original_builder)
+    fitted = []
+
+    def record_fit(prepared, region, target):
+        """Accept prepared Hz/region/target; record model ID and return ordinary fitted cell."""
+        fitted.append(f"{region}_{target}")
+        return original_fit(prepared, region, target)
+
+    monkeypatch.setattr(pipeline, "fit_target", record_fit)
+    assert run_session(command="resume", run_directory=run)["completed_cells"] == 14
+    assert len(fitted) == 9 and fitted[0] == "PFC_left_switch_vs_stay"
+    assert all(path.read_bytes() == data for path, data in published.items())
