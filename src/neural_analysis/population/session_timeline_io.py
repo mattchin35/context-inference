@@ -267,6 +267,7 @@ def select_timeline_population(
 def find_compatible_regional_timeline(
     session: ResolvedSession, region: str, probe_id: str, bin_width_s: float, *,
     population_quality: str = "good_mua", missing_label_policy: str = "exclude",
+    algorithm: str = "pca", sparse_alpha: float | None = None,
 ) -> Path | None:
     """Find an exact existing regional basis without loading raw neural activity.
 
@@ -286,6 +287,10 @@ def find_compatible_regional_timeline(
         requires explicit manual good/mua labels. A default/legacy basis is
         eligible only if its actual input IDs equal the requested population.
 
+    algorithm, sparse_alpha : str, float or None, keyword-only
+        Ordinary pca (default) or capped sparse_pca with dimensionless alpha.
+        Algorithm-specific configuration and score contracts must match.
+
     Returns
     -------
     Path or None
@@ -298,6 +303,7 @@ def find_compatible_regional_timeline(
     current = timeline_configuration(
         session, {region: probe_id}, bin_width_s,
         population_quality=population_quality, missing_label_policy=missing_label_policy,
+        algorithm=algorithm, sparse_alpha=sparse_alpha,
     )
     if "unavailable" in current["selection"][region]:
         return None
@@ -321,7 +327,7 @@ def find_compatible_regional_timeline(
             # metadata before decompressing any regional score tensors.
             with np.load(path, allow_pickle=True) as archive:
                 meta = archive["meta"].item()
-            if (meta.get("schema_version") != 1 or meta.get("analysis_version") != ANALYSIS_VERSION
+            if (meta.get("schema_version") != 1 or meta.get("analysis_version") != current["analysis_version"]
                     or meta.get("regions", {}).get(region, {}).get("probe_id") != probe_id):
                 continue
             configuration = _regional_candidate_configuration(path, meta)
@@ -694,6 +700,9 @@ def _regional_candidate_configuration(path: Path, meta: dict) -> dict | None:
         for key in ("population_quality", "missing_label_policy"):
             if key in meta:
                 configuration[key] = meta[key]
+        if meta.get("analysis_version") == SPARSE_ANALYSIS_VERSION:
+            for key in ("algorithm", "sparse_pca", "component_count_policy", "requested_components", "scikit_learn"):
+                configuration[key] = meta[key]
         if _configuration_digest(configuration) != configuration["configuration_id"]:
             return None
     else:
@@ -724,6 +733,10 @@ def _regional_sources_match(
     for field in ("analysis_version", "session_id", "bin_width_s", "window_s"):
         if candidate.get(field) != current[field]:
             return False
+    if current["analysis_version"] == SPARSE_ANALYSIS_VERSION:
+        for field in ("algorithm", "sparse_pca", "component_count_policy", "requested_components", "scikit_learn"):
+            if candidate.get(field) != current[field]:
+                return False
     if candidate["probe_roles"].get(region) != current["probe_roles"][region]:
         return False
     if candidate["acquisition_families"].get(region) != source.acquisition_family:
@@ -775,14 +788,27 @@ def _regional_arrays_match(
     unit_ids = tuple(current["selection"][region]["unit_ids"])
     observations = len(positions) * (len(edges) - 1)
     components = min(observations, len(fitted.retained_unit_ids))
+    sparse = current["analysis_version"] == SPARSE_ANALYSIS_VERSION
+    if sparse:
+        components = min(COMPONENT_LIMIT, components)
+        if (not isinstance(fitted, SparseTimelineTransform)
+                or fitted.parameters != dict(current["sparse_pca"], n_components=components)):
+            return False
+    elif not isinstance(fitted, RegionalPCATransform) or fitted.whiten:
+        return False
     if (fitted.input_unit_ids != unit_ids or fitted.n_training_observations != observations
-            or fitted.actual_components != components or fitted.whiten
+            or fitted.actual_components != components
             or saved.scores.shape != (len(positions), len(edges) - 1, components)
             or not np.isfinite(saved.scores).all()):
         return False
     for labels in (fitted.retained_unit_ids, fitted.omitted_unit_ids):
         if tuple(unit for unit in unit_ids if unit in labels) != labels:
             return False
+    if sparse:
+        return (
+            candidate.meta.get("units", {}).get("scores") == "ridge coefficients in standardized-unit activity space"
+            and candidate.meta.get("axes", {}).get("scores") == ["choice_window", "time_bin", "session_component"]
+        )
     if not np.allclose(fitted.components @ fitted.components.T, np.eye(components), atol=1e-7):
         return False
     if (np.any(fitted.explained_variance < 0) or np.any(fitted.explained_variance_ratio < 0)

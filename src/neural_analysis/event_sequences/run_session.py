@@ -26,6 +26,7 @@ from src.neural_analysis.phase_synchrony.results import parse_unit_id
 from src.neural_analysis.population import run_session_timeline as timeline_runner
 from src.neural_analysis.population import session_timeline as timeline
 from src.neural_analysis.population import session_timeline_io as timeline_io
+from src.neural_analysis.population.timeline_sparse_pca import COMPONENT_LIMIT, sparse_pca_parameters
 from src.neural_analysis.session_metadata import (
     ResolvedSession, load_session_metadata, resolve_probe_sources, resolve_session_metadata,
 )
@@ -42,12 +43,14 @@ class EventSequenceRequest:
     """Small explicit per-session preparation request; no display state or arrays.
 
     metadata_path is an existing neural_session.json Path/string; source_kind
-    is unit/pc. Unit requests require probe-qualified unit_id and resolve quality
+    is unit/pc/sparse_pc. Unit requests require probe-qualified unit_id and resolve quality
     None to good. PC requests require region PFC/HPC, allow probe_id override,
     and resolve quality None to good_mua. Explicit good/good_mua PC populations
     both exclude missing manual labels. bin_width_s is .5/.1/.05/.02 seconds.
     Region/probe override are PC-only; unit ID is unit-only. Rank, motif and
     z-scoring are live display settings, absent from this immutable record.
+    sparse_pc uses dimensionless sparse_alpha (default 1), with at most 30
+    components; other sources reject this setting. Counts/score axes stay (W,B,K).
     """
 
     metadata_path: Path | str
@@ -58,11 +61,17 @@ class EventSequenceRequest:
     probe_id: str | None = None
     bin_width_s: float = 0.5
     population_quality: str | None = None
+    sparse_alpha: float | None = None
 
     def __post_init__(self) -> None:
         """Validate scalar request fields/units; canonicalize metadata Path and actual quality or raise ValueError."""
-        if self.source_kind not in ("unit", "pc"):
-            raise ValueError("source_kind must be unit or pc.")
+        if self.source_kind not in ("unit", "pc", "sparse_pc"):
+            raise ValueError("source_kind must be unit, pc or sparse_pc.")
+        if self.source_kind == "sparse_pc":
+            alpha = sparse_pca_parameters(1.0 if self.sparse_alpha is None else self.sparse_alpha)["alpha"]
+            object.__setattr__(self, "sparse_alpha", alpha)
+        elif self.sparse_alpha is not None:
+            raise ValueError("sparse_alpha is only valid for sparse_pc sources.")
         timeline.choice_bin_edges(self.bin_width_s)
         quality = self.population_quality if self.population_quality is not None else ("good" if self.source_kind == "unit" else "good_mua")
         if quality not in ("good", "good_mua"):
@@ -82,7 +91,7 @@ class EventSequenceRequest:
 def prepare_event_sequences(
     request: EventSequenceRequest, *, rerun: bool = False, dry_run: bool = False,
 ) -> dict:
-    """Prepare/reuse one explicit unit or fixed-population PC product.
+    """Prepare/reuse one explicit unit or fixed-population ordinary/sparse component product.
 
     Parameters
     ----------
@@ -207,11 +216,17 @@ def _resolve_parameters(session: ResolvedSession, request: EventSequenceRequest)
         resolve_probe_sources(session, probe)
     except KeyError as error:
         raise ValueError(f"Unknown metadata probe selection: {probe}") from error
-    return {
+    parameters = {
         "source_kind": request.source_kind, "unit_id": request.unit_id,
         "region": request.region, "probe_id": probe, "bin_width_s": request.bin_width_s,
         "population_quality": request.population_quality, "missing_label_policy": "exclude",
     }
+    if request.source_kind == "sparse_pc":
+        parameters.update(algorithm="sparse_pca", sparse_alpha=request.sparse_alpha,
+                          sparse_pca=sparse_pca_parameters(request.sparse_alpha),
+                          requested_components=COMPONENT_LIMIT, component_count_policy="capped",
+                          scikit_learn=version("scikit-learn"))
+    return parameters
 
 
 def _source_configuration(session: ResolvedSession, parameters: dict) -> dict:
@@ -234,7 +249,8 @@ def _source_configuration(session: ResolvedSession, parameters: dict) -> dict:
         source.cluster_info_file, source.channel_quality_file,
     )
     configuration = {
-        "analysis_version": io.ANALYSIS_VERSION, "session_id": session.session_id,
+        "analysis_version": io.SPARSE_ANALYSIS_VERSION if parameters["source_kind"] == "sparse_pc" else io.ANALYSIS_VERSION,
+        "session_id": session.session_id,
         "parameters": parameters, "acquisition_family": source.acquisition_family,
         "channels": channels.tolist(),
         "unit_ids": [f"{parameters['probe_id']}:{cluster}" for cluster in rows.cluster_id],
@@ -247,8 +263,9 @@ def _source_configuration(session: ResolvedSession, parameters: dict) -> dict:
 def _prepare_source(session: ResolvedSession, trials: pd.DataFrame, parameters: dict) -> dict:
     """Input: session/(N,C) trials/scalar source settings. Return activity packet core with UTC coverage.
 
-    Units contain Hz (W,B). PCs contain shared/regional maps plus a relative
-    reference and runtime-only fixed timeline; no PC scores enter event NPZs.
+    Units contain Hz (W,B). Components contain shared/regional maps plus a
+    relative reference and runtime-only fixed timeline; no scores enter event
+    NPZs. Sparse scores use upstream ridge coefficients, never PCA variance units.
     """
     probe = parameters["probe_id"]
     source = resolve_probe_sources(session, probe)
@@ -280,10 +297,13 @@ def _prepare_source(session: ResolvedSession, trials: pd.DataFrame, parameters: 
         packet["meta"]["source_label"] = parameters["unit_id"]
     else:
         role = parameters["region"]
+        algorithm_settings = ({"algorithm": "sparse_pca", "sparse_alpha": parameters["sparse_alpha"]}
+                              if parameters["source_kind"] == "sparse_pc" else {})
         stage_started = perf_counter()
         path = timeline_io.find_compatible_regional_timeline(
             session, role, probe, parameters["bin_width_s"],
             population_quality=parameters["population_quality"], missing_label_policy="exclude",
+            **algorithm_settings,
         )
         timings["pca_lookup_s"] = perf_counter() - stage_started
         timings["pca_preparation_s"] = 0.0
@@ -294,6 +314,7 @@ def _prepare_source(session: ResolvedSession, trials: pd.DataFrame, parameters: 
             report = timeline_runner.run_session_timeline(
                 session.metadata_path, {role: probe}, parameters["bin_width_s"], rerun=True,
                 population_quality=parameters["population_quality"], missing_label_policy="exclude",
+                **algorithm_settings,
             )
             timings["pca_preparation_s"] = perf_counter() - stage_started
             path = report.result_path
@@ -306,7 +327,8 @@ def _prepare_source(session: ResolvedSession, trials: pd.DataFrame, parameters: 
         packet["shared_choices"] = result.choices.copy(deep=True)
         packet["regional_choice_positions"] = result.regions[role].choice_positions.copy()
         activity = select_pc_activity(trials, result.choices, result.regions[role], 1)
-        packet["meta"]["source_label"] = f"{role}/{probe} PCs ({parameters['population_quality']})"
+        component_label = "sparse components" if parameters["source_kind"] == "sparse_pc" else "PCs"
+        packet["meta"]["source_label"] = f"{role}/{probe} {component_label} ({parameters['population_quality']})"
         stage_started = perf_counter()
         packet["meta"]["pca_reference"] = io.make_pca_reference(
             session.session_root, path, role, probe, result.meta["configuration_id"],
@@ -317,21 +339,27 @@ def _prepare_source(session: ResolvedSession, trials: pd.DataFrame, parameters: 
 
 
 def _provenance(session: ResolvedSession, parameters: dict, configuration: dict, transition_reason: str) -> dict:
-    """Input: session/settings/config/reason. Return saved provenance dict, with explicit units/axes and no randomness."""
+    """Input: session/settings/config/reason. Return provenance with units/axes and upstream fit seed.
+
+    Sparse random_seed=0 describes upstream fitting; behavioral matching and
+    rendering are deterministic. Ordinary sources retain their prior metadata.
+    """
     process = subprocess.run(["git", "rev-parse", "HEAD"], cwd=Path(__file__).parent, capture_output=True, text=True, check=False)
     return {
-        "analysis_version": io.ANALYSIS_VERSION, "schema_version": io.SCHEMA_VERSION,
+        "analysis_version": configuration["analysis_version"], "schema_version": io.SCHEMA_VERSION,
         "generator": "src.neural_analysis.event_sequences.run_session.prepare_event_sequences",
         "session_id": session.session_id, "source_kind": parameters["source_kind"],
         "parameters": parameters, "configuration": configuration,
-        "configuration_id": configuration["configuration_id"], "random_seed": None,
-        "randomness_used": False, "python": platform.python_version(),
+        "configuration_id": configuration["configuration_id"],
+        "random_seed": 0 if parameters["source_kind"] == "sparse_pc" else None,
+        "randomness_used": parameters["source_kind"] == "sparse_pc", "python": platform.python_version(),
         "code_revision": process.stdout.strip() if process.returncode == 0 else "unknown",
         "completed_utc": datetime.now(timezone.utc).isoformat(), "machine": platform.platform(),
         "library_versions": {name: version(name) for name in ("numpy", "pandas", "pynapple", "scikit-learn")},
         "metadata_source": io.source_file_identity(session.metadata_path),
         "transition_unavailable_reason": transition_reason,
-        "units": {"absolute_time": "UTC Unix seconds", "relative_time": "seconds", "unit_rates_hz": "Hz", "scores": "unwhitened standardized-unit scores"},
+        "units": {"absolute_time": "UTC Unix seconds", "relative_time": "seconds", "unit_rates_hz": "Hz",
+                  "scores": io.SPARSE_SCORE_UNITS if parameters["source_kind"] == "sparse_pc" else "unwhitened standardized-unit scores"},
         "axes": {"unit_rates_hz": ["choice_window", "time_bin"], "episode": ["episode", "trial_segment", "time_bin"]},
     }
 

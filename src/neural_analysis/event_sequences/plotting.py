@@ -8,7 +8,7 @@ Transition offsets are display coordinates, never physical elapsed session time.
 from __future__ import annotations
 
 from copy import deepcopy
-from numbers import Integral
+from numbers import Integral, Real
 from pathlib import Path
 import textwrap
 
@@ -34,7 +34,9 @@ _TRANSITION_FIELDS = (
 )
 
 
-def prepare_display_source(packet: dict, *, pc_rank: int = 1, zscore: bool = False) -> dict:
+def prepare_display_source(
+    packet: dict, *, pc_rank: int = 1, zscore: bool = False, color_limit: float | None = None,
+) -> dict:
     """Select/scale one loaded source once before changing behavioral view selectors.
 
     Input packet is the saved-data dict from io.load_event_sequences; pc_rank
@@ -42,19 +44,37 @@ def prepare_display_source(packet: dict, *, pc_rank: int = 1, zscore: bool = Fal
     scale_activity's values (W,B)/original row_positions (W,)/relative-second
     edges (B+1,), global limits/units/reference availability, plus saved source
     identity fields. Units are Hz, unwhitened PC scores or source SD units.
+    color_limit is None for automatic limits or a positive finite scalar L
+    in displayed units. Manual limits are [-L,L], except raw Hz uses [0,L].
+    This changes color saturation only; values remain unclipped. Sparse scores
+    are ridge coefficients in standardized-unit activity space.
     No source files, binning, fitting or result publication occur.
     """
     selected = io.get_source_activity(packet, pc_rank=pc_rank)
     source = activity.scale_activity(selected, zscore=zscore)
+    if color_limit is not None:
+        if (isinstance(color_limit, bool) or not isinstance(color_limit, Real)
+                or not np.isfinite(color_limit) or color_limit <= 0):
+            raise ValueError("color_limit must be a finite positive real number.")
+        if source["values"] is not None:
+            source["color_limits"] = (0.0 if selected.source_kind == "unit" and not zscore else -float(color_limit),
+                                      float(color_limit))
+    source["color_limit_mode"] = "automatic" if color_limit is None else "manual"
+    source["component_warnings"] = []
     meta = packet["meta"]
     parameters = meta["parameters"]
     source.update(
         session_id=meta["session_id"], configuration_id=meta["configuration_id"],
         probe_id=parameters["probe_id"], population_quality=parameters["population_quality"],
-        bin_width_s=parameters["bin_width_s"], pc_rank=pc_rank if selected.source_kind == "pc" else None,
+        bin_width_s=parameters["bin_width_s"], pc_rank=pc_rank if selected.source_kind != "unit" else None,
         zscore=zscore, pca_reference=deepcopy(meta["pca_reference"]),
         packet_source_label=meta["source_label"], bound_source_label=selected.source_label,
     )
+    if selected.source_kind == "sparse_pc":
+        fitted = packet["timeline_result"].regions[parameters["region"]].transform
+        source["component_warnings"] = list(fitted.warnings)
+        if fitted.iteration_limit_reached:
+            source["component_warnings"].append("SparsePCA reached its iteration limit; convergence is unconfirmed.")
     return source
 
 
@@ -546,6 +566,12 @@ def _caption(source: dict, panels: list[dict], selection: str) -> str:
     if source["pca_reference"] is not None:
         reference = source["pca_reference"]
         caption += f" Exact PCA reference configuration={reference['configuration_id']}; archive SHA256={reference['sha256'][:12]}."
+    if source["color_limits"] is not None:
+        lower, upper = source["color_limits"]
+        caption += (f" Color range ({source['color_limit_mode']}): [{lower:g}, {upper:g}] {source['value_units']}."
+                    " Values outside the range saturate in color; activity values remain unchanged.")
+    for warning in source["component_warnings"]:
+        caption += " " + warning
     if source["constant_activity"]:
         caption += " Constant activity; session SD is zero."
     if source["unavailable_reason"]:

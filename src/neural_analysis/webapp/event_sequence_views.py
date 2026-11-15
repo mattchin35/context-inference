@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import math
 from pathlib import Path
 
 import streamlit as st
@@ -68,7 +69,7 @@ def render_event_sequence_view(
 
     default_kind = products[0]["meta"]["source_kind"] if products else "unit"
     source_kind = st_module.selectbox(
-        "Neural source", options=("unit", "pc"), index=("unit", "pc").index(default_kind),
+        "Neural source", options=("unit", "pc", "sparse_pc"), index=("unit", "pc", "sparse_pc").index(default_kind),
         format_func=_source_kind_label, key=f"event_source_kind_{scope}",
     )
     if source_kind == "unit":
@@ -77,13 +78,13 @@ def render_event_sequence_view(
         if request is not None:
             selected_product = _resolve_unit_product(st_module, session, scope, request, unit_products)
     else:
-        pc_products = [product for product in products if product["meta"]["source_kind"] == "pc"]
-        request, selected_product = _render_pc_source(st_module, session, scope, pc_products)
+        pc_products = [product for product in products if product["meta"]["source_kind"] == source_kind]
+        request, selected_product = _render_pc_source(st_module, session, scope, pc_products, source_kind=source_kind)
 
     selectors = _render_display_selectors(st_module, scope, kind)
     action = None
     if request is not None:
-        if selected_product is None and source_kind == "pc":
+        if selected_product is None and source_kind != "unit":
             if st_module.button("Prepare", key=f"event_prepare_{scope}"):
                 action = "prepare"
         elif selected_product is not None and st_module.button("Recompute", key=f"event_recompute_{scope}"):
@@ -134,6 +135,11 @@ def render_event_sequence_view(
         event_plotting.prepare_display_source(packet, pc_rank=rank, zscore=True)
         if zscore else raw_source
     )
+    limit = _selected_color_limit(st_module, scope, display_source)
+    if limit is not None:
+        display_source = event_plotting.prepare_display_source(packet, pc_rank=rank, zscore=zscore, color_limit=limit)
+    for warning in display_source["component_warnings"]:
+        st_module.warning(warning)
     if kind == CENTRAL_VIEW:
         view = event_plotting.build_central_view(
             packet,
@@ -283,14 +289,15 @@ def _resolve_unit_product(
 
 def _render_pc_source(
     st_module: object, session: ResolvedSession, scope: str, products: list[dict],
+    *, source_kind: str = "pc",
 ) -> tuple[EventSequenceRequest | None, dict | None]:
-    """Input: UI/session/scope/saved PC headers. Return PC request/product, with new preparation always explicit."""
+    """Input: UI/session/scope/saved headers and pc/sparse_pc kind. Return request/product with explicit preparation."""
     configure = not products or st_module.checkbox("Configure a new source", key=f"event_configure_{scope}")
     if configure:
-        request = _render_pc_configuration(st_module, session, scope)
+        request = _render_pc_configuration(st_module, session, scope, source_kind=source_kind)
         product = None if request is None else _find_matching_product(products, session, request)
         if product is None and request is not None:
-            st_module.info("This PC source is not prepared yet. Click Prepare to create it.")
+            st_module.info("This component source is not prepared yet. Click Prepare to create it.")
         elif product is not None:
             st_module.caption("Saved run with these source settings: " + _product_label(product))
         return request, product
@@ -300,8 +307,10 @@ def _render_pc_source(
     return _request_from_product(session, product), product
 
 
-def _render_pc_configuration(st_module: object, session: ResolvedSession, scope: str) -> EventSequenceRequest | None:
-    """Input: Streamlit/session/scope. Return selected regional PC request; bin width is seconds."""
+def _render_pc_configuration(
+    st_module: object, session: ResolvedSession, scope: str, *, source_kind: str = "pc",
+) -> EventSequenceRequest | None:
+    """Input: UI/session/scope/pc or sparse_pc kind. Return request (width seconds, alpha dimensionless)."""
     bin_width_s = st_module.selectbox(
         "Preparation bin width",
         options=NEW_BIN_WIDTHS_S,
@@ -329,13 +338,19 @@ def _render_pc_configuration(st_module: object, session: ResolvedSession, scope:
     if default_probe is None and probe_id is None:
         st_module.info("No metadata probe role is configured; choose a probe override to prepare this region.")
         return None
+    sparse_alpha = None
+    if source_kind == "sparse_pc":
+        sparse_alpha = st_module.number_input("SparsePCA alpha", min_value=0.0, value=1.0,
+                                              key=f"event_sparse_alpha_{scope}")
+        st_module.caption("Up to 30 sparse components per region; SC numbers are component indices, not variance ranks.")
     return EventSequenceRequest(
         session.metadata_path,
-        "pc",
+        source_kind,
         region=region,
         probe_id=probe_id,
         bin_width_s=bin_width_s,
         population_quality=quality,
+        sparse_alpha=sparse_alpha,
     )
 
 
@@ -403,8 +418,8 @@ def _metadata_probe_for_region(session: ResolvedSession, region: str) -> str | N
 
 
 def _source_kind_label(source_kind: str) -> str:
-    """Input: unit/pc source-kind string; return readable configuration label."""
-    return "Single unit" if source_kind == "unit" else "Regional PCs"
+    """Input: unit/pc/sparse_pc source-kind string; return readable configuration label."""
+    return {"unit": "Single unit", "pc": "Regional PCs", "sparse_pc": "Regional sparse components"}[source_kind]
 
 
 def _format_bin_width(bin_width_s: float) -> str:
@@ -424,6 +439,7 @@ def _find_matching_product(products: list[dict], session: ResolvedSession, reque
             and parameters.get("probe_id") == requested_probe
             and parameters.get("bin_width_s") == request.bin_width_s
             and parameters.get("population_quality") == request.population_quality
+            and parameters.get("sparse_alpha") == request.sparse_alpha
         ):
             return product
     return None
@@ -448,11 +464,12 @@ def _request_from_product(session: ResolvedSession, product: dict) -> EventSeque
         )
     return EventSequenceRequest(
         session.metadata_path,
-        "pc",
+        parameters["source_kind"],
         region=parameters["region"],
         probe_id=parameters["probe_id"],
         bin_width_s=parameters["bin_width_s"],
         population_quality=parameters["population_quality"],
+        sparse_alpha=parameters.get("sparse_alpha"),
     )
 
 
@@ -476,6 +493,8 @@ def _product_label(product: dict) -> str:
         "event_sequence_heatmaps_"
     )
     run_tag = "_".join(run_name.split("_")[:3])
+    if meta["source_kind"] == "sparse_pc":
+        run_tag += f" | alpha={parameters['sparse_alpha']:g}"
     return (
         f"{meta['source_label']} | probe {parameters['probe_id']} | "
         f"{parameters['population_quality']} | {width_ms} ms | {run_tag}"
@@ -558,20 +577,21 @@ def _initial_side_label(initial_side: str) -> str:
 
 def _selected_pc_rank(st_module: object, scope: str, packet: dict) -> int:
     """Input: Streamlit/session scope/loaded packet; return valid one-based PC rank or fixed unit rank 1."""
-    if packet["meta"]["source_kind"] != "pc":
+    if packet["meta"]["source_kind"] == "unit":
         return 1
     region = packet["meta"]["pca_reference"]["region"]
     component_count = packet["timeline_result"].regions[region].scores.shape[2]
+    label = "Sparse component" if packet["meta"]["source_kind"] == "sparse_pc" else "PC rank"
     key = f"event_pc_rank_{scope}"
     previous = int(st_module.session_state.get(key, 1))
     rank = min(max(previous, 1), component_count)
     if rank != previous:
         st_module.session_state[key] = rank
     if component_count == 1:
-        st_module.caption("PC rank: 1 (only one component is available).")
+        st_module.caption(f"{label}: 1 (only one component is available).")
         return 1
     return st_module.slider(
-        "PC rank", min_value=1, max_value=component_count, value=rank, step=1, key=key
+        label, min_value=1, max_value=component_count, value=rank, step=1, key=key
     )
 
 
@@ -586,6 +606,32 @@ def _selected_zscore(st_module: object, scope: str, source: dict) -> bool:
         reason = source["unavailable_reason"] or "Session activity has zero SD."
         st_module.caption(f"Z-scoring unavailable: {reason}")
     return bool(checked)
+
+
+def _selected_color_limit(st_module: object, scope: str, source: dict) -> float | None:
+    """Input: UI/session scope/prepared (W,B) source. Return optional positive limit in displayed units.
+
+    One non-widget dictionary retains per-configuration/component/scaling
+    preferences across Streamlit cleanup and both event tools. Temporary widget
+    keys are restored before creation, never changed after rendering.
+    """
+    state = st_module.session_state
+    preferences = state.setdefault("event_color_preferences", {})
+    identity = (scope, source["configuration_id"], source["source_label"], source["zscore"])
+    preference = preferences.setdefault(identity, {"manual": False, "limit": None})
+    token = hashlib.sha256(repr(identity).encode("utf-8")).hexdigest()[:16]
+    toggle_key, limit_key = f"event_manual_{token}", f"event_limit_{token}"
+    available = source["color_limits"] is not None
+    if toggle_key not in state:
+        state[toggle_key] = preference["manual"]
+    manual = st_module.checkbox("Manual color limit", key=toggle_key, disabled=not available)
+    if limit_key not in state:
+        automatic = source["color_limits"][1] if available else 1.0
+        state[limit_key] = preference["limit"] or float(automatic)
+    limit = st_module.number_input("Color limit L", min_value=math.nextafter(0.0, 1.0), key=limit_key,
+                                   disabled=not available or not manual, format="%.6g")
+    preference.update(manual=bool(manual), limit=float(limit))
+    return float(limit) if manual and available else None
 
 
 def _load_saved_product(product: dict) -> dict:

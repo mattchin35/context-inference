@@ -22,7 +22,8 @@ class SourceActivity:
     """One selected source over all its eligible complete session windows.
 
     values is float (W,B): unsmoothed Hz for source_kind='unit', or signed
-    unwhitened standardized-unit scores for 'pc'. row_positions is unique
+    unwhitened standardized-unit scores for 'pc', or signed ridge coefficients
+    in standardized-unit activity space for 'sparse_pc'. row_positions is unique
     nonnegative integer (W,), indexing the full original trial table; neither
     trial IDs nor DataFrame labels belong on this axis. bin_edges_s is float
     (B+1,), choice-relative seconds covering [-2,+2) at a supported width.
@@ -41,8 +42,8 @@ class SourceActivity:
         values = np.asarray(self.values, dtype=float)
         positions = np.asarray(self.row_positions)
         edges = np.asarray(self.bin_edges_s, dtype=float)
-        if self.source_kind not in ("unit", "pc"):
-            raise ValueError("source_kind must be unit or pc.")
+        if self.source_kind not in ("unit", "pc", "sparse_pc"):
+            raise ValueError("source_kind must be unit, pc or sparse_pc.")
         if not isinstance(self.source_label, str) or not self.source_label.strip():
             raise ValueError("source_label must be a nonempty source identity.")
         if values.ndim != 2 or not np.isfinite(values).all():
@@ -127,7 +128,7 @@ def select_pc_activity(
     full_trials: pd.DataFrame, shared_choices: pd.DataFrame,
     regional: timeline.RegionalTimelinePCA, pc_rank: int,
 ) -> SourceActivity:
-    """Select one saved PC and verify its original behavioral row identities.
+    """Select one saved ordinary/sparse component and verify original behavioral row identities.
 
     Parameters
     ----------
@@ -143,7 +144,8 @@ def select_pc_activity(
         indexing shared_choices and bin_edges_s (B+1,) in relative seconds.
         Coverage eligibility has already been established for these windows.
     pc_rank : int
-        One-based PC rank from the existing fixed basis. No fitting or scaling.
+        One-based PC rank or sparse component index from the existing fixed
+        basis. Sparse indices are not variance ranks. No fitting or scaling.
 
     Returns
     -------
@@ -183,8 +185,10 @@ def select_pc_activity(
             raise ValueError(f"Shared choice {column} identity differs from the original trial row.")
     if not _ordinary_choices(original_choices).all():
         raise ValueError("Shared choice identity refers to a nonordinary original trial.")
-    label = f"{regional.region}/{regional.probe_id} PC{pc_rank}"
-    return SourceActivity(scores[:, :, pc_rank - 1], positions, regional.bin_edges_s, "pc", label)
+    sparse = isinstance(regional.transform, timeline.SparseTimelineTransform)
+    label = f"{regional.region}/{regional.probe_id} {'SC' if sparse else 'PC'}{pc_rank}"
+    return SourceActivity(scores[:, :, pc_rank - 1], positions, regional.bin_edges_s,
+                          "sparse_pc" if sparse else "pc", label)
 
 
 def scale_activity(source: SourceActivity, *, zscore: bool = False) -> dict:
@@ -205,7 +209,7 @@ def scale_activity(source: SourceActivity, *, zscore: bool = False) -> dict:
         row_positions/bin_edges_s; source_kind/source_label; value_units;
         session_mean/session_sd; color_limits (lower,upper) or None;
         zscore_available, constant_activity and unavailable_reason. Raw unit
-        values are Hz with limits (0,session max); raw PC limits are symmetric.
+        values are Hz with limits (0,session max); raw PC/sparse limits are symmetric.
         Z-scored values are source SD units with symmetric limits. Zero SD
         leaves raw values valid but disables z-scoring. W=0 has no reference,
         values or limits. No source arrays/basis/ranks are changed.
@@ -217,7 +221,9 @@ def scale_activity(source: SourceActivity, *, zscore: bool = False) -> dict:
         "bin_edges_s": source.bin_edges_s.copy(), "source_kind": source.source_kind,
         "source_label": source.source_label,
         "value_units": "source SD units" if zscore else (
-            "Hz" if source.source_kind == "unit" else "unwhitened standardized-unit scores"
+            "Hz" if source.source_kind == "unit" else (
+                "ridge coefficients in standardized-unit activity space" if source.source_kind == "sparse_pc"
+                else "unwhitened standardized-unit scores")
         ),
         "session_mean": None, "session_sd": None, "color_limits": None,
         "zscore_available": False, "constant_activity": False, "unavailable_reason": "",
@@ -234,7 +240,7 @@ def scale_activity(source: SourceActivity, *, zscore: bool = False) -> dict:
         return result
     values = (source.values - mean) / sd if zscore else source.values.copy()
     maximum = float(np.abs(values).max()) or 1.0
-    symmetric = zscore or source.source_kind == "pc"
+    symmetric = zscore or source.source_kind != "unit"
     result.update(values=values, color_limits=(-maximum if symmetric else 0.0, maximum))
     return result
 

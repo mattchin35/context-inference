@@ -20,6 +20,7 @@ import pandas as pd
 
 from src.neural_analysis.population import session_timeline as timeline
 from src.neural_analysis.population import session_timeline_io as timeline_io
+from src.neural_analysis.population.timeline_sparse_pca import COMPONENT_LIMIT
 from src.neural_analysis.session_metadata import ResolvedSession, resolve_probe_sources
 from src.neural_analysis.spike_behavior import loading
 from . import selection
@@ -31,6 +32,8 @@ from .selection import (
 
 
 ANALYSIS_VERSION = "event-sequence-heatmaps-v1"
+SPARSE_ANALYSIS_VERSION = "event-sequence-sparse-heatmaps-v1"
+SPARSE_SCORE_UNITS = "ridge coefficients in standardized-unit activity space"
 SCHEMA_VERSION = 1
 _TABLES = ("trials", "central_summary", "transition_summary")
 _ARRAYS = ("bin_edges_s", "activity_row_positions", "full_to_activity")
@@ -185,8 +188,8 @@ def load_event_sequences(input_path: Path | str) -> dict:
                 central_matches={key: archive["central__" + "__".join(key)] for key in CENTRAL_CONDITIONS},
                 transition_matches={key: archive[f"transition__{key[0]}__{key[1]}"] for key in TRANSITION_CONDITIONS},
                 unit_rates_hz=archive["unit_rates_hz"] if meta["source_kind"] == "unit" else None,
-                shared_choices=pd.DataFrame.from_records(archive["shared_choices"]) if meta["source_kind"] == "pc" else pd.DataFrame(),
-                regional_choice_positions=archive["regional_choice_positions"] if meta["source_kind"] == "pc" else np.empty(0, dtype=int),
+                shared_choices=pd.DataFrame.from_records(archive["shared_choices"]) if meta["source_kind"] != "unit" else pd.DataFrame(),
+                regional_choice_positions=archive["regional_choice_positions"] if meta["source_kind"] != "unit" else np.empty(0, dtype=int),
             )
         _validate_packet(packet)
         absent = sorted({"cur_block", "state_int"} - set(packet["trials"].columns))
@@ -232,7 +235,7 @@ def discover_event_sequences(session_root: Path | str) -> list[dict]:
                 if not required.issubset(archive.files):
                     continue
             reason = ""
-            if meta["source_kind"] == "pc":
+            if meta["source_kind"] != "unit":
                 reference = meta["pca_reference"]
                 pca = _reference_path(root, reference)
                 if not pca.is_file():
@@ -248,7 +251,8 @@ def discover_event_sequences(session_root: Path | str) -> list[dict]:
 def get_source_activity(packet: dict, *, pc_rank: int = 1) -> SourceActivity:
     """Input: loaded plain packet/one-based PC rank. Return selected SourceActivity (W,B).
 
-    Unit values are saved Hz; PC values are the saved signed unwhitened axis.
+    Unit values are saved Hz; PC values are signed unwhitened scores. Sparse
+    values are signed ridge coefficients in standardized-unit activity space.
     Uses bound arrays and labels only, with no raw reads, binning, fitting or
     publication. Full packet loading must precede display; rank is not a cache key.
     """
@@ -295,9 +299,10 @@ def _sha256_file(path: Path) -> str:
 
 def _check_meta(meta: dict) -> None:
     """Input: saved metadata dict. Return None for supported version/source or raise ValueError."""
-    if meta.get("analysis_version") != ANALYSIS_VERSION or meta.get("schema_version") != SCHEMA_VERSION:
+    expected_version = SPARSE_ANALYSIS_VERSION if meta.get("source_kind") == "sparse_pc" else ANALYSIS_VERSION
+    if meta.get("analysis_version") != expected_version or meta.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("Unsupported event sequence analysis/schema version.")
-    if meta.get("source_kind") not in ("unit", "pc"):
+    if meta.get("source_kind") not in ("unit", "pc", "sparse_pc"):
         raise ValueError("Invalid saved event source kind.")
     if not isinstance(meta.get("configuration_id"), str) or not meta["configuration_id"]:
         raise ValueError("Missing event source configuration identity.")
@@ -312,6 +317,8 @@ def _check_meta(meta: dict) -> None:
         "absolute_time": "UTC Unix seconds", "relative_time": "seconds",
         "unit_rates_hz": "Hz", "scores": "unwhitened standardized-unit scores",
     }
+    if meta["source_kind"] == "sparse_pc":
+        expected_units["scores"] = SPARSE_SCORE_UNITS
     if meta.get("units") != expected_units:
         raise ValueError("Unsupported saved event activity/time units.")
 
@@ -352,11 +359,24 @@ def _bind_pca(packet: dict) -> None:
     fitted = regional.transform
     observations = len(regional.choice_positions) * (len(regional.bin_edges_s) - 1)
     components = min(observations, len(fitted.retained_unit_ids))
+    sparse = packet["meta"]["source_kind"] == "sparse_pc"
+    if sparse:
+        components = min(COMPONENT_LIMIT, components)
+        parameters = packet["meta"]["parameters"]
+        if (not isinstance(fitted, timeline.SparseTimelineTransform)
+                or result.meta.get("component_count_policy") != "capped"
+                or result.meta.get("requested_components") != parameters["requested_components"]
+                or result.meta.get("scikit_learn") != parameters["scikit_learn"]
+                or fitted.parameters != dict(parameters["sparse_pca"], n_components=components)):
+            raise ValueError("Referenced sparse algorithm/parameters/component policy differ.")
+    elif isinstance(fitted, timeline.SparseTimelineTransform):
+        raise ValueError("Ordinary PCA cannot reference a sparse transform.")
+    expected_units = SPARSE_SCORE_UNITS if sparse else "unwhitened standardized-unit scores"
     if (fitted.input_unit_ids != tuple(packet["meta"]["configuration"]["unit_ids"])
             or fitted.n_training_observations != observations or fitted.actual_components != components
             or regional.scores.shape != (len(regional.choice_positions), len(regional.bin_edges_s) - 1, components)
             or not np.isfinite(regional.scores).all()
-            or result.meta.get("units", {}).get("scores") != "unwhitened standardized-unit scores"):
+            or result.meta.get("units", {}).get("scores") != expected_units):
         raise ValueError("Referenced PCA full population/basis/score contract differs.")
     previous, saved = result.choices, packet["shared_choices"]
     if len(previous) != len(saved) or not timeline.trial_identities_match(previous["trial_id"], saved["trial_id"]):
