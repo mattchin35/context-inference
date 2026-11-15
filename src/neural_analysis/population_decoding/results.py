@@ -115,19 +115,59 @@ def load_cell(path: Path) -> dict:
     if any(cell[f"{representation}_probabilities"].shape != expected for representation in ("units", "pcs")):
         raise ValueError("Invalid saved probability axes")
     if cell["meta"]["target"] in CONDITIONAL_SWITCH_TARGETS:
-        comparison = cell["meta"].get("switch_comparison")
-        mapping = cell.get("comparison_reference_window_indices")
-        side = "left" if cell["meta"]["target"] == "left_switch_vs_stay" else "right"
-        if (not isinstance(comparison, dict) or mapping is None or mapping.shape != (expected[0],)
-                or not np.issubdtype(mapping.dtype, np.integer) or np.any(mapping < 0)
-                or np.any(np.diff(mapping) <= 0) or comparison.get("required_trials") != expected[0]
-                or comparison.get("reference_target") != f"{side}_choice_switch"
-                or comparison.get("reference_model_id") != cell["meta"].get("model_id")
-                or comparison.get("reference_cell") != f"cells/{cell['meta']['region']}_{side}_choice_switch.npz"
-                or comparison.get("conditioning_side") != cell["meta"].get("conditioning_side")
-                or comparison.get("class_names") != ["stay", "switch"]):
-            raise ValueError("Invalid saved switch comparison mapping/provenance")
+        _validate_switch_comparison(cell)
     return cell
+
+
+def _validate_switch_comparison(cell: dict) -> None:
+    """Validate saved conditional cell's W,B,2 scope/count/provenance metadata; return None.
+
+    Counts describe dimensionless trial/bin observations. This reader checks
+    structure and required support without loading reference data or rescoring.
+    """
+    comparison = cell["meta"].get("switch_comparison")
+    mapping = cell.get("comparison_reference_window_indices")
+    windows, bins = len(cell["row_positions"]), len(cell["bin_indices"])
+    side = "left" if cell["meta"]["target"] == "left_switch_vs_stay" else "right"
+    if (not isinstance(comparison, dict) or mapping is None or mapping.shape != (windows,)
+            or not np.issubdtype(mapping.dtype, np.integer) or np.any(mapping < 0)
+            or np.any(np.diff(mapping) <= 0) or comparison.get("required_trials") != windows
+            or comparison.get("reference_target") != f"{side}_choice_switch"
+            or comparison.get("reference_model_id") != cell["meta"].get("model_id")
+            or comparison.get("reference_cell") != f"cells/{cell['meta']['region']}_{side}_choice_switch.npz"
+            or comparison.get("conditioning_side") != side or cell["meta"].get("conditioning_side") != side
+            or comparison.get("class_names") != ["stay", "switch"]
+            or cell["meta"]["class_names"] != ["stay", "switch"]):
+        raise ValueError("Invalid saved switch comparison mapping/provenance")
+    try:
+        for representation in ("units", "pcs"):
+            record = comparison["representations"][representation]
+            total = record["reference_all_trials"]["trial_count"]
+            if total < windows or (windows and mapping[-1] >= total):
+                raise ValueError("Invalid saved switch comparison reference support")
+            for scope in ("reference_all_trials", "reference_matched_side", "within_side"):
+                count = total if scope == "reference_all_trials" else windows
+                if record[scope]["trial_count"] != count:
+                    raise ValueError("Invalid saved switch comparison trial support")
+                _validate_comparison_score(record[scope]["scores"], count * bins)
+            if [fold["fold"] for fold in record["folds"]] != list(range(5)):
+                raise ValueError("Invalid saved switch comparison folds")
+            for fold in record["folds"]:
+                count = int(np.sum(cell["fold_ids"] == fold["fold"]))
+                if fold["trial_count"] != count:
+                    raise ValueError("Invalid saved switch comparison fold support")
+                for scope in ("reference_matched_side", "within_side"):
+                    _validate_comparison_score(fold[scope], count * bins)
+    except (KeyError, TypeError, IndexError) as error:
+        raise ValueError("Invalid saved switch comparison summaries") from error
+
+
+def _validate_comparison_score(scores: dict, required_bins: int) -> None:
+    """Check binary score dict against integer required bin count; return None, no rescoring."""
+    if (scores["required_rows"] != required_bins or not 0 <= scores["predicted_rows"] <= required_bins
+            or len(scores["class_counts"]) != 2 or sum(scores["class_counts"]) != required_bins
+            or any(len(scores[name]) != 2 for name in ("prevalence", "roc_auc", "average_precision"))):
+        raise ValueError("Invalid saved switch comparison score support")
 
 
 def compute_identities(config: PopulationDecodingConfig) -> dict:
