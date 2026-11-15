@@ -56,6 +56,18 @@ class TimelineRunReport:
     elapsed_s: float
 
 
+def validate_timeline_output_root(output_root: Path | str) -> None:
+    """Reject repository-contained experimental output Path; return None, with no filesystem writes.
+
+    This policy seam allows synthetic UI fixtures to substitute a test-local
+    validator without weakening the production output-location restriction.
+    Paths carry no physical units. Invalid locations raise ValueError.
+    """
+    repository = Path(__file__).resolve().parents[3]
+    if Path(output_root).resolve().is_relative_to(repository):
+        raise ValueError("Experimental analysis outputs must be outside the source repository.")
+
+
 def run_session_timeline(
     metadata_path: Path | str,
     probe_roles: dict[str, str] | None = None,
@@ -101,11 +113,7 @@ def run_session_timeline(
                 "reused", saved, identity, perf_counter() - started
             )
     output_root = session.session_root / "analysis_runs"
-    repository = Path(__file__).resolve().parents[3]
-    if output_root.resolve().is_relative_to(repository):
-        raise ValueError(
-            "Experimental analysis outputs must be outside the source repository."
-        )
+    validate_timeline_output_root(output_root)
     stamp = datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d_%H%M%S_%f")
     run_directory = output_root / f"session_timeline_pca_{stamp}_{identity}"
     run_directory.mkdir(parents=True, exist_ok=False)
