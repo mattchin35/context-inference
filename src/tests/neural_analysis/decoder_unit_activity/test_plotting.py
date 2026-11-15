@@ -8,7 +8,7 @@ import pytest
 from PIL import Image
 
 from src.neural_analysis.decoder_unit_activity.plotting import (
-    build_unit_activity_data, plot_unit_activity, export_unit_activity_png,
+    build_unit_activity_data, plot_unit_activity, export_unit_activity_png, viewport_unit_activity_data,
 )
 from src.neural_analysis.population.session_timeline import SessionTimelineResult
 
@@ -72,6 +72,16 @@ def test_panning_keeps_global_lanes_statistics_and_color_limits(activity_example
     np.testing.assert_equal(tail["values"], full["values"])
     assert tail["color_limits"] == full["color_limits"]
     assert tail["bin_width_s"] == 1
+
+
+def test_viewport_slicing_reuses_full_pool_activity(activity_example):
+    """Input cached full-pool data; panning only slices native edges and reuses normalization arrays."""
+    full = make_data(activity_example, "zscore")
+    tail = viewport_unit_activity_data(full, (7, 9))
+    assert tail["values"] is full["values"] and tail["mean_hz"] is full["mean_hz"]
+    assert tail["lane_ids"] is full["lane_ids"] and tail["color_limits"] == full["color_limits"]
+    assert len(tail["lanes"]) == 1
+    np.testing.assert_equal(tail["lanes"][0]["x"], [7, 8, 9])
 
 
 def test_touching_windows_need_one_lane_and_ids_are_not_indices(activity_example):
