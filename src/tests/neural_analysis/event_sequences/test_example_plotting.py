@@ -23,6 +23,7 @@ def test_both_renderers_show_original_trials_reward_correctness_and_context(exam
     assert interactive.layout.plot_bgcolor == "white"
     names = {trace.name for trace in interactive.data}
     assert {"Rewarded", "Unrewarded", "Incorrect"}.issubset(names)
+    assert {"Left context", "Right context", "Matched episode"}.issubset(names)
     assert list(interactive.layout.yaxis.ticktext) == ["Right", "Left"]
     assert interactive.layout.shapes
     static = plotting.matplotlib_figure(view)
@@ -48,3 +49,14 @@ def test_unknown_reward_and_manual_rows_are_distinct_and_missing_choices_break_l
     choices = next(trace for trace in figure.data if trace.name == "Choices")
     assert np.isnan(np.asarray(choices.y, dtype=float)[3])
     assert choices.connectgaps is False
+
+
+def test_transition_caption_describes_its_own_reward_rule(example_trials):
+    """Input: saved-style (N,C) trials and ideal transition (S,) positions. Keep its definition explicit."""
+    plotting = importlib.import_module("src.neural_analysis.event_sequences.example_plotting")
+    examples = importlib.import_module("src.neural_analysis.event_sequences.examples")
+    key = ("ideal_transition", "right", 1)
+    positions = examples.find_behavior_examples(example_trials)[key][0]
+    view = plotting.build_example_view(example_trials, positions, session_id="test", condition=key)
+    assert "rewarded opposite-side choice" in view["caption"]
+    assert "correct rewarded or omission" not in view["caption"]

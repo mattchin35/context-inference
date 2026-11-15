@@ -30,6 +30,12 @@ def _forbid(*args, **kwargs) -> None:
     raise AssertionError("Unexpected IO while browsing behavior examples")
 
 
+def _changed_selector_token(path):
+    """Map Path to actual size/mtime, simulating a size change for the selector file."""
+    details = path.stat()
+    return details.st_size + int(path.name == "selection.py"), details.st_mtime_ns
+
+
 def test_early_metadata_dispatch_skips_neural_inventory(example_session, monkeypatch):
     """Input: resolved session and fake sidebar. Dispatch before shared neural availability."""
     from src.neural_analysis.webapp import app, session_inputs
@@ -83,3 +89,16 @@ def test_malformed_trial_fields_report_error(example_session):
     app_test = AppTest.from_function(_render_examples, args=(str(example_session.metadata_path),), default_timeout=30).run()
     assert not app_test.exception
     assert any("correct" in error.value for error in app_test.error)
+
+
+def test_changed_analysis_code_rechecks_saved_configuration(example_session, monkeypatch):
+    """Input: changed selector file-stat token. Re-enter preparation once before reusing current data."""
+    view_module = importlib.import_module("src.neural_analysis.webapp.behavior_examples_view")
+    app_test = AppTest.from_function(_render_examples, args=(str(example_session.metadata_path),), default_timeout=30).run()
+    assert not app_test.exception
+    prepare = Mock(wraps=view_module.prepare_behavior_examples)
+    monkeypatch.setattr(view_module, "prepare_behavior_examples", prepare)
+    monkeypatch.setattr(view_module, "_file_token", _changed_selector_token)
+    _widget(app_test, "number_input", "Trials after").set_value(4).run()
+    assert not app_test.exception
+    prepare.assert_called_once()
