@@ -111,6 +111,8 @@ def test_plot_and_png_share_exact_edges_and_rows(activity_example, tmp_path):
     assert figure.layout.meta["caption"].startswith("example PFC")
     assert "<br>" in figure.layout.annotations[-1].text
     assert figure.layout.annotations[-1].y == 0 and figure.layout.annotations[-1].yshift < 0
+    assert figure.layout.annotations[-1].xshift <= -200
+    assert all(len(line) <= 80 for line in figure.layout.annotations[-1].text.split("<br>"))
     group_labels = [item for item in figure.layout.annotations if item.text in ("Left context", "Left choice")]
     assert all(item.x == 0 and item.xshift <= -100 for item in group_labels)
     domain = figure.layout.yaxis2.domain
