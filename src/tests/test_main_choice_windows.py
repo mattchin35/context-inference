@@ -201,6 +201,37 @@ def test_saved_window_plot_adds_and_backfills_both_presentation_groups(main_modu
     assert all(path.read_bytes() == contents for path, contents in hashes.items())
 
 
+@pytest.mark.parametrize("sizes", [(10, 20), (20,)])
+def test_saved_window_plot_backfills_all_and_restricted_summaries(main_module, tmp_path, monkeypatch, sizes):
+    """Saved rows[T,C] add three summaries per size without scoring or changing earlier PNGs/NPZ."""
+    from src.behavior_analysis import choice_window_results
+
+    trial = pd.DataFrame({"action": [0] * 43, "Qlearning_rel_value": [-1.] * 43})
+    _, result = choice_window_results.save_choice_window_results(trial, tmp_path / "processed", "session", sizes)
+    directory = tmp_path / "figures/choice_window_agreement" / result.parent.name
+    directory.mkdir(parents=True)
+    existing = [directory / "session_choice_window_agreement.png"]
+    for size in sizes:
+        for suffix in ("", "_main_comparison_v1", "_strategy_comparison_v2"):
+            existing.append(directory / f"session_choice_window_{size}{suffix}_agreement.png")
+    for path in existing:
+        path.write_bytes(b"existing timeline figure")
+    original = {path: path.read_bytes() for path in [result, *existing]}
+    monkeypatch.setattr(choice_window_results, "compute_trial_agent_agreements", fail_if_reached)
+    table, combined = main_module._plot_saved_choice_window_results(result, "session", tmp_path / "figures")
+    assert not table.empty and combined == existing[0]
+    outputs = [directory / f"session_choice_window_{size}{suffix}_summary.png"
+               for size in sizes for suffix in ("", "_main_comparison_v1", "_strategy_comparison_v2")]
+    assert all(path.is_file() for path in outputs)
+    assert len(list(directory.glob("*_summary.png"))) == 3 * len(sizes)
+    original.update({path: path.read_bytes() for path in outputs[:-1]})
+    outputs[-1].unlink()
+    main_module._plot_saved_choice_window_results(result, "session", tmp_path / "figures")
+    assert outputs[-1].is_file()
+    assert all(path.read_bytes() == contents for path, contents in original.items())
+    assert not list((tmp_path / "processed").rglob("*.png"))
+
+
 def test_multisession_collection_resets_windows_and_preserves_blocks(main_module, tmp_path):
     """Each 13-choice session yields one ten-choice window, not a joined window."""
     sessions = []
