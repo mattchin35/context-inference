@@ -2557,6 +2557,110 @@ def run_cross_mouse_session_metric_curves(
         )
 
 
+def run_cross_mouse_choice_window_agreement_curves(
+    data_root: Path,
+    output_path: Path,
+    collection_runs: Mapping[str, Path],
+    window_sizes: Sequence[int] = (10, 20),
+    figure_id: str = "cross_mouse",
+) -> tuple[pd.DataFrame, Path]:
+    """Export Ideal-agent curves from explicit saved mouse collections only.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Mouse-folder root. Each mouse requires an identified overall-performance
+        CSV as its expected session roster; no raw trial tables are read.
+    output_path : pathlib.Path
+        Parent for choice_window_ideal_agreement/<dated run>/ exports.
+    collection_runs : Mapping[str, pathlib.Path]
+        Requested mouse IDs mapped to explicit saved window-collection directories.
+    window_sizes : Sequence[int], default=(10, 20)
+        Distinct valid-choice sizes present in every selected collection.
+    figure_id : str, default="cross_mouse"
+        Filename prefix. Display titles omit this identifier and run timestamps.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pathlib.Path]
+        Prepared session/size rows (one unitless Ideal median or NaN per row)
+        and new run directory with PNGs, session values, group means/coverage,
+        provenance/logs and source snapshots. All inputs are validated before
+        output creation. Existing sources/exports are never overwritten. No
+        fitting, trial scoring, window aggregation or experimental rerun occurs.
+    """
+    from datetime import datetime
+    import shutil
+    from time import perf_counter
+    from zoneinfo import ZoneInfo
+    from src.behavior_analysis.cross_mouse_choice_windows import (
+        load_cross_mouse_choice_window_data, summarize_cross_mouse_choice_window_data,
+    )
+    from src.behavior_analysis.performance_plots import plot_cross_mouse_session_metric_curve
+
+    started = perf_counter()
+    table, provenance = load_cross_mouse_choice_window_data(data_root, collection_runs, window_sizes)
+    group = summarize_cross_mouse_choice_window_data(table)
+    sizes = table.window_size.unique().tolist()
+    timestamp = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d_%H-%M-%S_%f")
+    directory = Path(output_path) / "choice_window_ideal_agreement" / timestamp
+    directory.mkdir(parents=True, exist_ok=False)
+    record = {
+        "generator": "main.run_cross_mouse_choice_window_agreement_curves",
+        "analysis_version": "cross_mouse_choice_windows_v1", "created_at": timestamp,
+        "source_provenance": provenance, "window_sizes": sizes, "mice": list(collection_runs),
+        "session_ids": {mouse: table.loc[table.mouse.eq(mouse), "session_id"].drop_duplicates().tolist()
+                        for mouse in collection_runs},
+        "parameters": {"agent": "observer_mouse_agreement", "session_statistic": "median across windows",
+                       "group_statistic": "equal-mouse arithmetic mean of session medians"},
+        "units": {"metric_value": "agreement fraction", "training_day": "chronological session number",
+                  "n_mice": "finite contributing mice"},
+        "random_seed": None, "figures": [], "warnings": [], "errors": [], "status": "running",
+    }
+    unavailable = table.loc[table.status.ne("ok"), ["mouse", "session_id", "window_size", "status"]]
+    record["warnings"] = unavailable.to_dict("records")
+    try:
+        table.to_csv(directory / "session_values.csv", index=False, na_rep="None")
+        group.to_csv(directory / "group_summary.csv", index=False, na_rep="None")
+        for size in sizes:
+            caption = (
+                f"Ideal agreement: median across complete {size}-choice windows within each session.\n"
+                "Black curve: mean of available mouse medians, with equal weight per mouse.\n"
+                "Training Day is chronological session number; unavailable values retain gaps.\n"
+                "Contributing mouse counts are saved in group_summary.csv; no statistical tests."
+            )
+            path = plot_cross_mouse_session_metric_curve(
+                cross_mouse_df=table.loc[table.window_size.eq(size)], plot_path=directory,
+                figure_id=figure_id, metric_column=f"ideal_{size}_choice", metric_label="Ideal-agent agreement",
+                ylim=(0, 1), title=f"Ideal agreement: {size}-choice windows", caption=caption,
+                show_points=True,
+            )
+            record["figures"].append(str(path))
+        record["status"] = "ok"
+    except Exception as error:
+        record.update(status="error", errors=[f"{type(error).__name__}: {error}"])
+        raise
+    finally:
+        record["runtime_seconds"] = perf_counter() - started
+        serialized = json.dumps(record, indent=2)
+        (directory / "metadata.json").write_text(serialized, encoding="utf-8")
+        (directory / "run.log").write_text(serialized, encoding="utf-8")
+        sources = [Path(__file__), Path(__file__).parent / "behavior_analysis/cross_mouse_choice_windows.py",
+                   Path(__file__).parent / "behavior_analysis/performance_plots.py"]
+        for source in sources:
+            shutil.copy2(source, directory / source.name)
+        (directory / "summary.md").write_text(
+            "# Cross-mouse choice-window Ideal agreement\n\n"
+            f"Mice: {list(collection_runs)}. Sessions: {record['session_ids']}.\n\n"
+            "Goal: compare saved session medians across mice without rerunning session analysis.\n\n"
+            "Main/batch entry point: main.run_cross_mouse_choice_window_agreement_curves; "
+            "loading: cross_mouse_choice_windows.py; plotting: performance_plots.py. Source snapshots included.\n\n"
+            "Training positions precede missing-value filtering. Group means give each available mouse equal weight; "
+            "coverage is saved in group_summary.csv. No statistical tests were performed.\n", encoding="utf-8",
+        )
+    return table, directory
+
+
 def run_cross_mouse_learning_curve(
     data_root: Path,
     output_path: Path,

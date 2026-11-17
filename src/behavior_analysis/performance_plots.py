@@ -4429,6 +4429,10 @@ def plot_cross_mouse_session_metric_curve(
     metric_column: str,
     metric_label: str,
     ylim: tuple[float, float] | None = None,
+    *,
+    title: str | None = None,
+    caption: str | None = None,
+    show_points: bool = False,
 ) -> Path:
     """Plot mouse-specific and group-mean session metric curves.
 
@@ -4452,6 +4456,14 @@ def plot_cross_mouse_session_metric_curve(
     ylim : tuple[float, float] or None, default=None
         Optional y-axis limits in `metric_value` units. None lets matplotlib
         choose limits from the data.
+    title : str or None, keyword-only
+        Optional short display title; None preserves the existing metric title.
+    caption : str or None, keyword-only
+        Optional descriptive text below the axes. Does not change metric data
+        or filename. Missing metric values remain NaN gaps in each mouse line.
+    show_points : bool, default=False, keyword-only
+        Draw small circles at finite session values, including isolated values
+        beside NaN gaps. False preserves the existing line-only curve style.
 
     Returns
     -------
@@ -4476,6 +4488,8 @@ def plot_cross_mouse_session_metric_curve(
         ax.plot(
             mouse_df["training_day"].to_numpy(dtype=int),
             mouse_df["metric_value"].to_numpy(dtype=float),
+            marker="o" if show_points else None,
+            markersize=4,
             linewidth=1.5,
             color=all_colors[mouse_index % len(all_colors)],
             alpha=0.75,
@@ -4490,6 +4504,8 @@ def plot_cross_mouse_session_metric_curve(
     ax.plot(
         mean_df["training_day"].to_numpy(dtype=int),
         mean_df["metric_value"].to_numpy(dtype=float),
+        marker="o" if show_points else None,
+        markersize=4,
         linewidth=3.0,
         color="black",
         label="group mean",
@@ -4499,7 +4515,7 @@ def plot_cross_mouse_session_metric_curve(
         ax.set_ylim(*ylim)
     ax.set_xlabel("Training Day")
     ax.set_ylabel(metric_label)
-    ax.set_title(f"{figure_id} {metric_column} Across Training")
+    ax.set_title(title if title is not None else f"{figure_id} {metric_column} Across Training")
     ax.spines["right"].set_visible(False)
     ax.spines["top"].set_visible(False)
     handles, _labels = ax.get_legend_handles_labels()
@@ -4507,7 +4523,14 @@ def plot_cross_mouse_session_metric_curve(
         ax.legend(fancybox=False, frameon=False)
 
     save_path = plot_path / f"{figure_id}_{metric_column}_session_metric_curve.png"
-    save_performance_figure(fig, save_path)
+    if caption is None:
+        save_performance_figure(fig, save_path)
+    else:
+        _apply_light_summary_style(fig)
+        fig.text(.02, .015, caption, fontsize=10, va="bottom", color="black")
+        fig.tight_layout(rect=(0, .20, 1, 1))
+        fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
+        plt.close(fig)
     return save_path
 
 
