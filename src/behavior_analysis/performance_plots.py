@@ -1807,17 +1807,14 @@ def plot_session_choice_window_agreement(
     if missing:
         raise ValueError(f"window_table is missing plotting columns: {missing}")
     agent_labels = {column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()}
-    style = {
-        "figure.facecolor": "white", "axes.facecolor": "white",
-        "text.color": "black", "axes.labelcolor": "black", "axes.edgecolor": "black",
-        "xtick.color": "black", "ytick.color": "black", "font.size": 13,
-    }
-    with plt.rc_context(style):
+    with plt.rc_context(_choice_window_plot_style()):
         fig, axes = plt.subplots(len(sizes), 2, figsize=(15, 4.5 * len(sizes)), squeeze=False)
         for row, size in enumerate(sizes):
             agreement_ax, count_ax = axes[row]
             selected = window_table.loc[window_table["window_size"].eq(size)]
             agents = metadata["parameters"].get("agent_value_columns", {})
+            boundaries = metadata.get("context_transition_trial_positions", [])
+            _plot_choice_window_agreement_on_ax(agreement_ax, selected, agents, boundaries, size)
             for agent_index, agent in enumerate(agents):
                 agent_rows = selected.loc[selected["agent"].eq(agent)]
                 if agent_rows.empty:
@@ -1825,24 +1822,14 @@ def plot_session_choice_window_agreement(
                 positions = (agent_rows["trial_start"] + agent_rows["trial_stop"] - 1) / 2
                 label = agent_labels.get(agent, agent)
                 color = AGENT_MOUSE_AGREEMENT_COLORS.get(label, all_colors[agent_index % len(all_colors)])
-                agreement_ax.plot(positions, agent_rows["agreement"], marker="o", color=color, label=label)
                 count_ax.plot(positions, agent_rows["n_comparisons"], marker="o", color=color, label=label)
-            if selected.empty:
-                agreement_ax.text(0.5, 0.5, "No complete choice windows", ha="center", va="center",
-                                  transform=agreement_ax.transAxes)
-            agreement_ax.set_ylim(-0.05, 1.05)
             count_ax.set_ylim(-0.5, size + 0.5)
-            agreement_ax.set_ylabel("Mouse-agent agreement")
             count_ax.set_ylabel("Usable comparisons (choices)")
-            agreement_ax.set_title(f"{size}-choice windows")
             count_ax.set_title(f"{size}-choice prediction coverage")
-            for ax in (agreement_ax, count_ax):
-                for boundary in metadata.get("context_transition_trial_positions", []):
-                    ax.axvline(boundary - 0.5, color="gray", linewidth=0.6, linestyle=":", alpha=0.5)
-                ax.set_xlabel("Original recorded trial position (zero-based)")
-                ax.spines[["right", "top"]].set_visible(False)
-            if agreement_ax.get_legend_handles_labels()[0]:
-                agreement_ax.legend(fontsize=9, ncol=3, loc="best")
+            for boundary in boundaries:
+                count_ax.axvline(boundary - 0.5, color="gray", linewidth=0.6, linestyle=":", alpha=0.5)
+            count_ax.set_xlabel("Original recorded trial position (zero-based)")
+            count_ax.spines[["right", "top"]].set_visible(False)
         fig.suptitle(f"{sess_id_full} Choice-Window Agreement", fontsize=17)
         tails = metadata.get("discarded_choices", {})
         caption = (
@@ -1856,6 +1843,120 @@ def plot_session_choice_window_agreement(
         fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
         plt.close(fig)
     return save_path
+
+
+def plot_session_choice_window_agreement_panel(
+    window_table: pd.DataFrame,
+    metadata: dict,
+    plot_path: Path,
+    sess_id_full: str,
+    window_size: int,
+) -> Path:
+    """Export one agreement panel directly from saved window results.
+
+    Parameters
+    ----------
+    window_table : pandas.DataFrame, shape (n_window_agent_rows, n_columns)
+        Saved rows with window_size, agent, trial_start, trial_stop and
+        agreement. Bounds are zero-based half-open original trial positions;
+        agreement is a unitless fraction. Missing agreement remains missing.
+    metadata : dict
+        Saved parameters.agent_value_columns (ordered agent mapping), optional
+        context_transition_trial_positions, and discarded_choices by size.
+        No scoring, aggregation, or input mutation occurs.
+    plot_path : pathlib.Path
+        Session figures directory. An existing matching PNG is reused.
+    sess_id_full : str
+        Full session identity for the title and filename.
+    window_size : int
+        Positive number of valid choices per window, selecting saved rows.
+
+    Returns
+    -------
+    pathlib.Path
+        Opaque-white, 150-dpi PNG named
+        ``{sess_id_full}_choice_window_{window_size}_agreement.png``.
+        Its single agreement axis shares drawing code with the diagnostic.
+    """
+    from .choice_window_analysis import validate_window_size
+
+    size = validate_window_size(window_size)
+    plot_path = Path(plot_path)
+    save_path = plot_path / f"{sess_id_full}_choice_window_{size}_agreement.png"
+    if save_path.exists():
+        return save_path
+    required = {"window_size", "agent", "trial_start", "trial_stop", "agreement"}
+    missing = sorted(required.difference(window_table.columns))
+    if missing:
+        raise ValueError(f"window_table is missing plotting columns: {missing}")
+    selected = window_table.loc[window_table["window_size"].eq(size)]
+    agents = metadata["parameters"].get("agent_value_columns", {})
+    boundaries = metadata.get("context_transition_trial_positions", [])
+    plot_path.mkdir(parents=True, exist_ok=True)
+    with plt.rc_context(_choice_window_plot_style()):
+        fig, ax = plt.subplots(figsize=(10, 5.5))
+        _plot_choice_window_agreement_on_ax(ax, selected, agents, boundaries, size)
+        fig.suptitle(f"{sess_id_full} Choice-Window Agreement", fontsize=17)
+        discarded = metadata.get("discarded_choices", {}).get(str(size), "unknown")
+        caption = (
+            "Consecutive non-overlapping valid mouse choices; no-choice/manual-reward trials excluded.\n"
+            f"{size}-choice windows; incomplete tail discarded: {discarded} choices. "
+            "Agent history continues across windows and contexts.\n"
+            "Missing predictions reduce each agent's denominator; dotted lines mark context transitions.\n"
+            "Descriptive agreement; no statistical tests."
+        )
+        fig.text(0.02, 0.015, caption, fontsize=10, va="bottom")
+        fig.tight_layout(rect=(0, 0.22, 1, 0.95))
+        fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
+        plt.close(fig)
+    return save_path
+
+
+def _plot_choice_window_agreement_on_ax(
+    ax: plt.Axes,
+    window_rows: pd.DataFrame,
+    agents: Iterable[str],
+    context_transition_trial_positions: Iterable[float],
+    window_size: int,
+) -> None:
+    """Draw one agreement axis from aligned saved rows; return None.
+
+    ax is caller-owned. window_rows has shape (n_size_agent_rows,C), already
+    filtered to positive integer window_size, with agent/trial_start/trial_stop/
+    agreement columns. Bounds and transition positions use zero-based original
+    trial rows; agreement is a unitless fraction. agents supplies ordered keys.
+    Only the axis is mutated; data, labels, units and missing values are kept.
+    No figure creation, file IO, scoring or aggregation occurs here.
+    """
+    agent_labels = {column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()}
+    for agent_index, agent in enumerate(agents):
+        agent_rows = window_rows.loc[window_rows["agent"].eq(agent)]
+        if agent_rows.empty:
+            continue
+        positions = (agent_rows["trial_start"] + agent_rows["trial_stop"] - 1) / 2
+        label = agent_labels.get(agent, agent)
+        color = AGENT_MOUSE_AGREEMENT_COLORS.get(label, all_colors[agent_index % len(all_colors)])
+        ax.plot(positions, agent_rows["agreement"], marker="o", color=color, label=label)
+    if window_rows.empty:
+        ax.text(0.5, 0.5, "No complete choice windows", ha="center", va="center", transform=ax.transAxes)
+    ax.set_ylim(-0.05, 1.05)
+    ax.set_ylabel("Mouse-agent agreement")
+    ax.set_title(f"{window_size}-choice windows")
+    for boundary in context_transition_trial_positions:
+        ax.axvline(boundary - 0.5, color="gray", linewidth=0.6, linestyle=":", alpha=0.5)
+    ax.set_xlabel("Original recorded trial position (zero-based)")
+    ax.spines[["right", "top"]].set_visible(False)
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(fontsize=9, ncol=3, loc="best")
+
+
+def _choice_window_plot_style() -> dict[str, str | int]:
+    """Return shared light Matplotlib settings; font size is points and no global style is changed."""
+    return {
+        "figure.facecolor": "white", "axes.facecolor": "white",
+        "text.color": "black", "axes.labelcolor": "black", "axes.edgecolor": "black",
+        "xtick.color": "black", "ytick.color": "black", "font.size": 13,
+    }
 
 
 def plot_session_side_bias_ratios(
