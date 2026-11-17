@@ -15,10 +15,11 @@ import pandas as pd
 
 from .choice_window_analysis import (
     ANALYSIS_VERSION,
-    DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS,
+    CHOICE_WINDOW_AGENT_VALUE_COLUMNS,
     RESULT_COLUMNS,
     RESULT_DTYPES,
     compute_trial_agent_agreements,
+    prepare_choice_window_agent_values,
     resolve_agent_value_columns,
     summarize_choice_window_agreement,
     valid_choice_positions,
@@ -28,7 +29,7 @@ from .choice_window_analysis import (
 
 ANALYSIS_SOURCE_FILES = (
     "choice_window_analysis.py", "choice_window_results.py", "session_analysis.py",
-    "ideal_observer.py", "project_utils.py",
+    "ideal_observer.py", "project_utils.py", "trial_features.py",
 )
 
 
@@ -70,6 +71,8 @@ def save_choice_window_results(
     trial_df : pandas.DataFrame, shape (n_trials, n_columns)
         Chronological single-session augmented trials. Choices use 0=right,
         1=left; values are signed and left-positive. Input is never modified.
+        Inverse WSLS is prepared on a copy from saved WSLS or observed history;
+        metadata records its source and both original/prepared table shapes.
     processed_data_path : pathlib.Path
         Source session's processed-data directory. Outputs live beneath its
         ``choice_window_agreement`` subdirectory, outside tracked source files.
@@ -98,7 +101,8 @@ def save_choice_window_results(
     if not sizes or len(set(sizes)) != len(sizes):
         raise ValueError("window_sizes must contain distinct positive integers.")
     positions = valid_choice_positions(trial_df)
-    mapping = resolve_agent_value_columns(trial_df, agent_value_columns)
+    prepared, derived_values = prepare_choice_window_agent_values(trial_df)
+    mapping = resolve_agent_value_columns(prepared, agent_value_columns)
     parameters = {
         "window_sizes": sizes, "agent_value_columns": mapping,
         "initial_tie_choice": 0, "feature_parameters": feature_parameters,
@@ -123,14 +127,15 @@ def save_choice_window_results(
         "analysis_version": ANALYSIS_VERSION, "session_id": str(session_id),
         "parameters": parameters, "input_digest": input_hash.hexdigest(),
         "input_shape": list(trial_df.shape), "random_seed": None,
+        "prepared_input_shape": list(prepared.shape), "derived_agent_values": derived_values,
         "analysis_source_digest": _analysis_source_digest(),
         "context_transition_trial_positions": context_transitions,
         "n_valid_choices": len(positions),
         "discarded_choices": {str(size): len(positions) % size for size in sizes},
         "n_windows": {str(size): len(positions) // size for size in sizes},
         "unavailable_default_agents": [
-            agent for agent, column in DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS.items()
-            if column not in trial_df
+            agent for agent, column in CHOICE_WINDOW_AGENT_VALUE_COLUMNS.items()
+            if column not in prepared
         ],
         "units": {"agreement": "fraction", "counts": "valid mouse choices",
                   "trial_coordinates": "recorded trial rows"},
@@ -155,7 +160,7 @@ def save_choice_window_results(
     metadata["created_at"] = timestamp
     metadata["code_revision"] = _code_revision()
     try:
-        scores = compute_trial_agent_agreements(trial_df, mapping)
+        scores = compute_trial_agent_agreements(prepared, mapping)
         table = pd.concat([
             summarize_choice_window_agreement(trial_df, scores, size, session_id)
             for size in sizes

@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from .project_utils import normalize_experimenter_reward_column
+from . import trial_features
 from .session_analysis import (
     DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS,
     compute_agent_mouse_agreement_by_trial,
@@ -18,7 +19,12 @@ from .session_analysis import (
 )
 
 
-ANALYSIS_VERSION = "1.0.0"
+ANALYSIS_VERSION = "1.1.0"
+# Keep the block-agreement registry unchanged; this extra rule is window-specific.
+CHOICE_WINDOW_AGENT_VALUE_COLUMNS = {
+    **DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS,
+    "win_switch_lose_stay_mouse_agreement": "win_switch_lose_stay_regressor",
+}
 RESULT_DTYPES = {
     "session_id": "str", "window_size": "int64", "window_index": "int64",
     "choice_start": "int64", "choice_stop": "int64",
@@ -28,6 +34,49 @@ RESULT_DTYPES = {
     "n_comparisons": "int64", "n_agreements": "int64", "agreement": "float64",
 }
 RESULT_COLUMNS = tuple(RESULT_DTYPES)
+
+
+def prepare_choice_window_agent_values(trial_df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Add inverse WSLS values on a copy, retaining full-session history.
+
+    Parameters
+    ----------
+    trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Chronological trials, with unitless left-positive ``wsls_regressor``
+        or action (0=right, 1=left) and reward. Manual flag aliases are accepted.
+        Saved WSLS values take priority, including their missing predictions.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, dict]
+        Copy with one additional float column ``win_switch_lose_stay_regressor``
+        and provenance keyed by that column. Values negate WSLS, preserving
+        zeros and missing values. Replay uses the shared completed-pair rule;
+        excluded choices freeze history and missing rewards do not update it.
+        If neither source exists, return an unchanged copy and empty provenance.
+        Row order, index, attributes, original columns and units are preserved.
+        No CSV is written and no trial-policy HMM is run.
+    """
+    prepared = trial_df.copy()
+    if "wsls_regressor" in trial_df:
+        values = pd.to_numeric(trial_df["wsls_regressor"], errors="coerce").to_numpy(dtype=float)
+        source = "wsls_regressor"
+    elif {"action", "reward"}.issubset(trial_df.columns):
+        normalized = normalize_experimenter_reward_column(trial_df)
+        # Explicit skip flags also freeze history for unknown manual flags,
+        # matching the trial-policy adapter rather than treating them as zero.
+        skip = ~make_behavioral_choice_mask(normalized)
+        values = trial_features.win_stay_lose_switch_regressor(
+            normalized["action"].to_numpy(), normalized["reward"].to_numpy(), skip,
+        )
+        values = pd.to_numeric(pd.Series(values), errors="coerce").to_numpy(dtype=float)
+        source = "trial_features.win_stay_lose_switch_regressor"
+    else:
+        return prepared, {}
+    column = "win_switch_lose_stay_regressor"
+    prepared[column] = -values
+    return prepared, {column: {"source": source, "operation": "negate signed WSLS values",
+                              "units": "unitless signed left-positive", "axis": "original trial rows"}}
 
 
 def valid_choice_positions(trial_df: pd.DataFrame) -> np.ndarray:
@@ -72,7 +121,7 @@ def resolve_agent_value_columns(
         Trial table containing signed left-positive agent decision values.
     agent_value_columns : Mapping[str, str] or None
         Output agent identifiers mapped to input value columns. None selects
-        available members of the existing block-agreement registry.
+        available members of the window-specific agreement registry.
 
     Returns
     -------
@@ -82,7 +131,7 @@ def resolve_agent_value_columns(
     """
     if agent_value_columns is None:
         selected = {
-            agent: column for agent, column in DEFAULT_AGENT_MOUSE_AGREEMENT_VALUE_COLUMNS.items()
+            agent: column for agent, column in CHOICE_WINDOW_AGENT_VALUE_COLUMNS.items()
             if column in trial_df
         }
     else:

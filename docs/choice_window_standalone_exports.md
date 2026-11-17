@@ -29,14 +29,14 @@ views. Both keep Ideal as a common reference and retain existing model colors:
 | Profile | Models in legend order |
 | --- | --- |
 | `main_comparison_v1` | QL, HMM, Home E + Doubt, Ideal |
-| `strategy_comparison_v1` | Perseveration, WSLS, Probe + persistence, Ideal |
+| `strategy_comparison_v2` | Perseveration, WSLS, Win-switch/lose-stay, Ideal |
 
 The four additional default-size filenames are:
 
 - `<session>_choice_window_10_main_comparison_v1_agreement.png`
-- `<session>_choice_window_10_strategy_comparison_v1_agreement.png`
+- `<session>_choice_window_10_strategy_comparison_v2_agreement.png`
 - `<session>_choice_window_20_main_comparison_v1_agreement.png`
-- `<session>_choice_window_20_strategy_comparison_v1_agreement.png`
+- `<session>_choice_window_20_strategy_comparison_v2_agreement.png`
 
 These views use a four-entry legend below the data axis, readable model names,
 and a group title. Curves, markers, limits, window definitions and context
@@ -53,6 +53,28 @@ standalone exporter. Both keyword arguments must be supplied together.
 The profile identifies the selection in the filename; change its version
 when membership/order changes. Omitting both arguments preserves the original
 all-model API, filename and layout. Existing output files are reused.
+
+### Win-switch/lose-stay values
+
+Choice-window analysis version `1.1.0` adds the inverse WSLS rule before
+scoring. `choice_window_analysis.prepare_choice_window_agent_values` copies
+the trial table and negates its full-session `wsls_regressor` values. If that
+column is absent, it reuses the existing WSLS feature computation on observed
+choices/rewards, excluding manual/no-choice/unknown-flag rows from history.
+Missing rewards freeze the last completed choice/reward pair. Tables lacking
+both sources remain supported without the extra model.
+
+Values are signed and left-positive, with zeros and missing predictions
+preserved. The existing greedy scorer applies its initial-right/repeat-last
+tie rule across all windows; agreement is not computed as `1 - WSLS agreement`.
+The input CSV and shared block-analysis model registry are unchanged.
+
+New numerical runs record the derived-column source, original/prepared table
+shapes, version, and a snapshot/digest including `trial_features.py`. The
+original input table determines the input digest. New results use a separate
+`1.1.0` directory; earlier results and `strategy_comparison_v1` figures remain
+available. Plotting an older NPZ alone cannot add the rule: the caption lists
+it as unavailable until a new numerical run is generated from the trials.
 
 ## Loading saved results directly
 

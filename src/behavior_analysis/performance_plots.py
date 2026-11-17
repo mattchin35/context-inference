@@ -51,6 +51,10 @@ DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS = {
     "Probe+P+D": "probe_persistence_doubt_mouse_agreement",
     "Home E+D": "home_referenced_expectancy_doubt_mouse_agreement",
 }
+CHOICE_WINDOW_AGENT_LABELS = {
+    **{column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()},
+    "win_switch_lose_stay_mouse_agreement": "Win-switch/lose-stay",
+}
 AGENT_MOUSE_AGREEMENT_COLORS = {
     "QL": "#1f77b4",
     "FQL": "#d62728",
@@ -64,6 +68,7 @@ AGENT_MOUSE_AGREEMENT_COLORS = {
     "Expect+D+P": "#7f7f7f",
     "Probe+P+D": "#0072B2",
     "Home E+D": "#D55E00",
+    "Win-switch/lose-stay": "#bcbd22",
 }
 EXPECTANT_DIAGNOSTIC_AGREEMENT_COLUMNS = {
     "simple_probe_persistence_mouse_agreement": "simple_probe_persistence_value",
@@ -1806,7 +1811,7 @@ def plot_session_choice_window_agreement(
     missing = sorted(required.difference(window_table.columns))
     if missing:
         raise ValueError(f"window_table is missing plotting columns: {missing}")
-    agent_labels = {column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()}
+    agent_labels = CHOICE_WINDOW_AGENT_LABELS
     with plt.rc_context(_choice_window_plot_style()):
         fig, axes = plt.subplots(len(sizes), 2, figsize=(15, 4.5 * len(sizes)), squeeze=False)
         for row, size in enumerate(sizes):
@@ -1857,9 +1862,9 @@ def choice_window_presentation_groups() -> dict[str, tuple[str, ...]]:
             "qlearning_mouse_agreement", "hmm_logodds_mouse_agreement",
             "home_referenced_expectancy_doubt_mouse_agreement", "observer_mouse_agreement",
         ),
-        "strategy_comparison_v1": (
+        "strategy_comparison_v2": (
             "perseveration_mouse_agreement", "wsls_mouse_agreement",
-            "simple_probe_persistence_mouse_agreement", "observer_mouse_agreement",
+            "win_switch_lose_stay_mouse_agreement", "observer_mouse_agreement",
         ),
     }
 
@@ -1925,7 +1930,7 @@ def plot_session_choice_window_agreement_panel(
     if missing:
         raise ValueError(f"window_table is missing plotting columns: {missing}")
     selected = window_table.loc[window_table["window_size"].eq(size)]
-    labels = {column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()}
+    labels = dict(CHOICE_WINDOW_AGENT_LABELS)
     if presentation_profile is not None:
         labels.update({
             "perseveration_mouse_agreement": "Perseveration",
@@ -1991,7 +1996,7 @@ def _resolve_choice_window_agents(
     requested = tuple(agent_selection)
     if not requested or any(not isinstance(agent, str) for agent in requested) or len(set(requested)) != len(requested):
         raise ValueError("agent_selection must contain distinct string identifiers.")
-    known = set(DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.values()) | set(saved)
+    known = set(CHOICE_WINDOW_AGENT_LABELS) | set(saved)
     if set(requested) - known:
         raise ValueError(f"Unknown agent identifiers: {sorted(set(requested) - known)}")
     return tuple(agent for agent in requested if agent in saved), tuple(agent for agent in requested if agent not in saved)
@@ -2018,7 +2023,7 @@ def _plot_choice_window_agreement_on_ax(
     changing their original model colors; empty_message labels empty rows.
     No figure creation, file IO, scoring or aggregation occurs here.
     """
-    agent_labels = {column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()}
+    agent_labels = CHOICE_WINDOW_AGENT_LABELS
     for agent_index, agent in enumerate(agents):
         agent_rows = window_rows.loc[window_rows["agent"].eq(agent)]
         if agent_rows.empty:
@@ -5973,7 +5978,7 @@ def plot_multisession_choice_window_agreement(
         raise ValueError(f"summary_df is missing choice-window plotting columns: {missing}")
     selected = summary_df.loc[summary_df["window_size"].eq(size)].copy()
     sessions = selected[["session_id", "date"]].drop_duplicates()
-    labels_by_agent = {column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()}
+    labels_by_agent = CHOICE_WINDOW_AGENT_LABELS
     selected["agent"] = selected["agent"].map(labels_by_agent).fillna(selected["agent"])
     # The existing agreement plot uses date as its categorical key. Supply
     # session IDs as keys, then restore readable labels, so repeated dates do
