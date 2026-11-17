@@ -139,11 +139,12 @@ def inspect_session_inputs(config: CommunicationConfig) -> SessionInspection:
 
     unit_ids = {}
     cluster_ids = {}
+    channels = {}
     coverage_s = {}
     source_paths = [metadata_path, trial_path]
     for region in ("PFC", "HPC"):
         probe = roles[region]
-        source, _, clusters = timeline_io.select_timeline_population(
+        source, selected_channels, clusters = timeline_io.select_timeline_population(
             session, probe, population_quality="good", missing_label_policy="exclude",
         )
         for path in (source.alignment_file, source.spike_clusters_file,
@@ -157,6 +158,7 @@ def inspect_session_inputs(config: CommunicationConfig) -> SessionInspection:
         coverage_s[region] = (coverage.start_s, coverage.end_s)
         selected_ids = clusters.cluster_id.to_numpy(dtype=int)
         cluster_ids[region] = selected_ids
+        channels[region] = [int(channel) for channel in selected_channels]
         unit_ids[region] = tuple(f"{probe}:{unit}" for unit in selected_ids)
     common = np.arange(len(choices), dtype=int)
     for bounds in coverage_s.values():
@@ -180,6 +182,7 @@ def inspect_session_inputs(config: CommunicationConfig) -> SessionInspection:
         "population_quality": "good",
         "missing_label_policy": "exclude",
         "unit_ids": {region: list(ids) for region, ids in unit_ids.items()},
+        "channels": channels,
         "coverage_s": {region: list(bounds) for region, bounds in coverage_s.items()},
         "sources": source_identity,
     }
