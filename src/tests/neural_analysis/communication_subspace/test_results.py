@@ -127,3 +127,25 @@ def test_tampered_fit_factor_dimensions_are_rejected(communication_result, tmp_p
     np.savez(malformed, **arrays)
     with pytest.raises(ValueError, match="fit|coefficient|shape|axis"):
         load_result(malformed)
+
+
+def test_corrupt_archive_is_reported_and_missing_required_field_rejected(
+    communication_result, tmp_path,
+):
+    """Discovery warns on corrupt bytes; load reports absent required members cleanly."""
+    result_root = tmp_path / "communication_subspace" / "results"
+    result_root.mkdir(parents=True)
+    broken = result_root / "broken.npz"
+    broken.write_bytes(b"not an npz archive")
+    with pytest.warns(RuntimeWarning, match="corrupt|invalid|unreadable"):
+        assert discover_results(tmp_path) == ()
+    with pytest.raises(ValueError, match="corrupt|invalid|unreadable|archive"):
+        load_result(broken)
+
+    valid = save_result(result_root / "valid.npz", communication_result)
+    with np.load(valid, allow_pickle=True) as archive:
+        arrays = {name: archive[name] for name in archive.files if name != "bin_edges_s"}
+    missing = result_root / "missing.npz"
+    np.savez(missing, **arrays)
+    with pytest.raises(ValueError, match="missing|bin_edges_s|archive"):
+        load_result(missing)
