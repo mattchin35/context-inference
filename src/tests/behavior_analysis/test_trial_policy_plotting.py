@@ -260,3 +260,75 @@ def test_thirty_source_caption_does_not_overlap_last_axis(tmp_path, capture_figu
     caption_top = caption.get_window_extent(renderer).y1
     axis_bottom = figure.axes[-1].get_tightbbox(renderer).y0
     assert caption_top + 6 < axis_bottom
+
+
+@pytest.mark.parametrize("smoothing", [True, False])
+def test_multisession_hides_blocks_and_keeps_light_session_markers(tmp_path, capture_figure, smoothing):
+    """Two saved (5,K) sources have one light session marker per panel and no block markers."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+
+    first, first_meta = diagnostic_result(smoothing=smoothing, session_id="first")
+    second, second_meta = diagnostic_result(smoothing=smoothing, session_id="second")
+    plotting.plot_multisession_trial_policy_diagnostic(
+        [first, second], [first_meta, second_meta], output_path=tmp_path / "clean.png")
+    figure = capture_figure[-1]
+    for axis in figure.axes:
+        assert not any(line.get_gid() == "block-boundary" for line in axis.lines)
+        markers = [line for line in axis.lines if line.get_gid() == "session-boundary"]
+        assert len(markers) == 1
+        marker = markers[0]
+        np.testing.assert_allclose(marker.get_xdata(), [4.5, 4.5])
+        assert marker.get_linestyle() == "--" and marker.get_linewidth() < 1.
+        assert 0 < marker.get_alpha() <= .6
+        assert to_rgba(marker.get_color()) != to_rgba("black")
+    caption = " ".join(" ".join(text.get_text() for text in figure.texts).lower().split())
+    assert "light dashed vertical lines mark source-session changes" in caption
+    assert "block boundaries are hidden" in caption
+
+
+@pytest.mark.parametrize("smoothing", [True, False])
+def test_multisession_restore_option_changes_only_boundary_artists(tmp_path, capture_figure, smoothing):
+    """Display override restores block markers without altering saved (T,K) traces/images/shading."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+
+    first, first_meta = diagnostic_result(smoothing=smoothing, session_id="first")
+    second, second_meta = diagnostic_result(smoothing=smoothing, session_id="second")
+    for restore in (False, True):
+        plotting.plot_multisession_trial_policy_diagnostic(
+            [first, second], [first_meta, second_meta], output_path=tmp_path / f"restore_{restore}.png",
+            show_block_boundaries=restore)
+    clean, restored = capture_figure[-2:]
+    for left, right in zip(clean.axes, restored.axes):
+        blocks = [line for line in right.lines if line.get_gid() == "block-boundary"]
+        assert [line.get_xdata()[0] for line in blocks] == [1.5, 6.5]
+        left_data = [line for line in left.lines if line.get_gid() != "block-boundary"]
+        right_data = [line for line in right.lines if line.get_gid() != "block-boundary"]
+        assert len(left_data) == len(right_data)
+        for original, actual in zip(left_data, right_data):
+            np.testing.assert_array_equal(original.get_xdata(), actual.get_xdata())
+            np.testing.assert_array_equal(original.get_ydata(), actual.get_ydata())
+            assert original.get_color() == actual.get_color()
+        assert len(left.images) == len(right.images) and len(left.collections) == len(right.collections)
+        for original, actual in zip(left.images, right.images):
+            np.testing.assert_array_equal(original.get_array(), actual.get_array())
+        for original, actual in zip(left.collections, right.collections):
+            np.testing.assert_array_equal(original.get_offsets(), actual.get_offsets())
+        assert len(left.patches) == len(right.patches)
+        for original, actual in zip(left.patches, right.patches):
+            np.testing.assert_array_equal(original.get_path().vertices, actual.get_path().vertices)
+    caption = " ".join(" ".join(text.get_text() for text in restored.texts).lower().split())
+    assert "dotted vertical lines mark block changes" in caption
+    assert "block boundaries are hidden" not in caption
+
+
+def test_boundary_defaults_follow_exporter_even_with_one_source(tmp_path, capture_figure):
+    """Single-session exporter retains blocks; a one-source cross-session export still hides them."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+
+    result, metadata = diagnostic_result()
+    plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "single.png")
+    plotting.plot_multisession_trial_policy_diagnostic([result], [metadata], output_path=tmp_path / "cross.png")
+    single, cross = capture_figure[-2:]
+    for axis in single.axes:
+        assert [line.get_xdata()[0] for line in axis.lines if line.get_gid() == "block-boundary"] == [1.5]
+    assert not any(line.get_gid() in ("block-boundary", "session-boundary") for axis in cross.axes for line in axis.lines)
