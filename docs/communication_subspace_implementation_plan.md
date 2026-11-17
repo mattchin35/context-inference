@@ -1,6 +1,6 @@
 # Communication Subspace: Implementation Plan and Live Handoff
 
-Status: Implementation approved, 2026-11-16; WP1/WP2 tests in progress.
+Status: Implementation complete and synthetic acceptance passed, 2026-11-16.
 Experimental execution awaits a designated session after synthetic acceptance.
 
 The [scientific spec](communication_subspace_spec_v1.md) owns scientific scope.
@@ -21,17 +21,17 @@ This is an implementation record, not runtime checkpoint/resume machinery.
 
 | Field | Current value |
 | --- | --- |
-| Observation / checkout | 2026-11-16; branch `refactor`; inspected HEAD `c702784`. Recheck on resume; this is not a reset target. |
+| Observation / checkout | 2026-11-16; branch `refactor`; implementation HEAD `5720a7f`. Recheck on resume; this is not a reset target. |
 | Authorization | User: "yep yep, go ahead with implementation". Plan/defaults and implementation approved; no experimental session designated. |
-| Phase | WP1/WP2 tests-first work dispatched; other packages pending dependencies. |
+| Phase | WP1-WP6 accepted; WP7 awaits session designation and user inspection. |
 | Orchestrator | Planned Astra lead; owns scientific acceptance, integration, Git and this handoff. Current documentation writer is `/root`; runtime model/effort not independently recorded. Do not infer actual model from planned role. |
-| Workers / ownership | `/root/scientific` and `/root/inputs`, both `gpt-6-sol`, active on WP1/WP2 tests only until test commits. Exact scopes in Section 0.3. |
-| Feature files | `docs/communication_subspace_spec_v1.md` and this plan; no feature source/tests implemented. No feature commit recorded. |
+| Workers / ownership | `/root/scientific` and `/root/inputs` (`gpt-6-sol`), `/root/ui` (`gpt-6-luna`). All workers finished and relinquished source ownership; Section 0.3 records scopes. |
+| Feature files | New `src/neural_analysis/communication_subspace/` package and matching tests; webapp view/routing, package guide, root README, spec and plan. Commits recorded below. |
 | Existing worktree | Eleven pre-existing modified tracked files in prediction/spec/view code, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve all. Record exact owned paths/diffs before implementation. |
-| Latest checks | Documentation inspection only. No RED/GREEN, synthetic, browser or experimental checks run for this feature. |
-| Live commands / artifacts | No feature worker, test, preview server or analysis started; no result archives. This does not assert that unrelated project processes are stopped. |
+| Latest checks | 108 feature/regression tests passed (19.76 s); Ruff and owned diff whitespace checks passed; both bin widths and browser saved-view inspection passed. No experimental run. |
+| Live commands / artifacts | All feature workers/tests finished; loopback preview on port 8532 stopped (tool session 63420 exit 0). Synthetic archives/PNGs retained under `/tmp/pytest-of-matt/pytest-212/`; temporary test files may be cleaned by later pytest runs. |
 | Pending decisions | Designated experimental session after synthetic acceptance. |
-| Next action / owner | Root reviews WP1/WP2 contracts/RED, commits tests, then authorizes GREEN. |
+| Next action / owner | User designates one session; root runs/preflights that session and presents outputs for inspection before any broader execution. |
 
 ### 0.2 Work-package ledger
 
@@ -42,29 +42,29 @@ acceptance. Record actual agent IDs at dispatch, not just planned model names.
 | Package | Planned owner | State / next gate | RED command/result and test commit | GREEN checks/commit and Astra review |
 | --- | --- | --- | --- | --- |
 | WP0 spec/plan/handoff | Astra orchestrator | Approved | Not applicable | Documentation only |
-| WP1 model/scoring | `/root/scientific` Sol | Tests in progress | Pending | None |
-| WP2 inputs/splits | `/root/inputs` Sol | Tests in progress | Pending | None |
-| WP3 CV composition | Sol scientific | Not started; WP1/WP2 acceptance | None | None |
-| WP4 results/runner | Sol input | Not started; WP3 and runner ownership transfer | None | None |
-| WP5a plots | Sol scientific | Not started; accepted result contract | None | None |
-| WP5b webapp | Luna UI + Astra routing | Not started; WP4/WP5a acceptance | None | None |
-| WP6a synthetic acceptance | Sol scientific + Astra acceptance | Not started; integrated pipeline | None | None |
-| WP6b usage docs | Luna UI + Astra review | Not started; accepted behavior/evidence | Not applicable | None |
+| WP1 model/scoring | `/root/scientific` Sol | Accepted | 2 missing-package collection errors; tests committed `6fb9bb9` | Root 13 passed; code/oracle reviewed; `a7a49e9` |
+| WP2 inputs/splits | `/root/inputs` Sol | Accepted | Missing-module RED; `b46c2b8`, fixture correction `fe1a177`; channels RED `f53f27a` | Root 13 passed; `3cb8c73`, provenance `146c06f` |
+| WP3 CV composition | `/root/scientific` Sol | Accepted | Missing-computation RED `2d04e16`; input/progress RED `41dc596` | Root 6 passed; worker 19 numerical/CV passed; `a9763ae` |
+| WP4 results/runner | `/root/inputs` Sol | Accepted | Missing-results RED `a5aea28`; supplemental RED `07b9658`, `defadb8` | Root 13 passed; lifecycle/source identity reviewed; `69950a6` |
+| WP5a plots | `/root/scientific` Sol | Accepted | `07d67dd`, caption RED `a569f56`, gap RED `1c88e5e` | `84c676c`, `2ff0b02`, `5720a7f`; visual review accepted |
+| WP5b webapp | `/root/ui` Luna + root routing | Accepted | Routing RED `6fb9bb9`; UI `a7e7f94`, diagnostics `4ab4b4a`; fixture correction `cfa8f12` | Root 9 passed; `a4cd141`; live synthetic browser review passed |
+| WP6a synthetic acceptance | Sol scientific + Astra acceptance | Accepted | Integration checks passed existing implementation; no artificial RED claimed; tests `1c88e5e` | Both widths, exact saved-factor score replay, low-rank/higher-rank/null recovery; full suite 108 passed |
+| WP6b usage docs | Luna UI + Astra review | Accepted | Not applicable | Package guide, root README, spec status and live handoff reviewed |
 | WP7 designated session | Astra + user inspection | Not started; synthetic gate and session designation | As needed for discovered defects | None |
 
 ### 0.3 Active work and interruption checkpoint
 
-Active assignments (no worker Git writes):
+Completed assignments (all workers confirmed finished; no pending source writes):
 
-- `/root/scientific`, `gpt-6-sol`: WP1 tests `test_modeling.py` and
-  `test_scoring.py`; future GREEN ownership `modeling.py`, `scoring.py`,
-  `__init__.py`. Must report RED and wait for root test commit.
-- `/root/inputs`, `gpt-6-sol`: WP2 tests `test_preparation.py`,
-  `test_validation_splits.py`, `conftest.py`; future GREEN ownership
-  `configuration.py`, `preparation.py`. Must report RED and wait for root commit.
-- Root owns this plan, Git, integration and later shared routing. No experimental
-  process or preview started. Source paths are in the new communication_subspace
-  package; test paths in its matching test directory.
+- `/root/scientific`, `gpt-6-sol`: modeling, scoring, computation, plotting and
+  their tests; synthetic end-to-end acceptance. Final plot correction `5720a7f`.
+- `/root/inputs`, `gpt-6-sol`: configuration, preparation, results, runner and
+  matching tests/fixtures. Accepted through `69950a6`.
+- `/root/ui`, `gpt-6-luna`: dedicated view, UI tests and package README.
+  View accepted `a4cd141`; root reviewed and finalized guide.
+- Root owns shared routing, Git, documentation, review and the next session gate.
+  No experimental process is running. Preview servers 4552 and 63420 exited 0.
+  Existing unrelated changes remain untouched. No worker reassignment needed.
 
 At each dispatch or interruption, update each record with:
 
@@ -86,8 +86,8 @@ does not require committing unfinished implementation.
 
 For worker replacement, first verify the old writer is stopped or has relinquished
 the exact scope, record its final diff/evidence, then transfer ownership. In
-particular, never overlap WP3/WP4 writes to `run_session.py` or concurrent writes
-to `conftest.py`. A new orchestrator must reconcile live workers before dispatch.
+particular, keep WP3 in `computation.py`, WP4 in `run_session.py`, and avoid
+concurrent writes to `conftest.py`. Reconcile live workers before dispatch.
 
 ### 0.4 Resume procedure
 
@@ -132,6 +132,45 @@ implementation-transfer record. Read CCA/prediction handoff precedents and
 inspected branch `refactor`, HEAD `c702784`, and tracked worktree status.
 Changed this plan only; no workers, code, tests, analysis or commits initiated.
 Next gate: implementation approval, then Astra-owned contract/TDD dispatch.
+
+2026-11-16 - WP0/WP1 / implementation authorized. User: "yep yep, go ahead
+with implementation". Plan baseline committed `d16798b`. Dispatched Sol workers
+`/root/scientific` (WP1) and `/root/inputs` (WP2), no overlapping files.
+Verified installed NumPy 2.4.3, SciPy 1.17.1, Pynapple 0.11.0, Streamlit 1.58.0.
+Use `env UV_CACHE_DIR=.cache/uv uv run --no-sync` because global UV cache is
+read-only; local cache is ignored. WP1 pytest produced two expected missing-package
+collection errors. Root routing tests produced two expected failures. Reviewed
+independent augmented-design oracle; committed tests `6fb9bb9` and authorized
+WP1 GREEN. No experimental session selected.
+
+2026-11-16 - WP1-WP6 / implementation and synthetic acceptance complete.
+All source packages were implemented after their test-only RED commits; supplemental
+integration tests passed existing code, and two newly exposed incomplete-rank
+plot tests failed before correction `5720a7f`. The ledger records accepted commits.
+Root reviewed numerical oracle, train-only preprocessing/tuning, shared splits,
+source fingerprints, additive publication, source-independent reload, early
+webapp routing and saved/current configuration separation. Model factors replay
+every scored target row. Low-rank, higher-rank and independent null synthetic
+cases pass; both bin widths produce NPZ and light PNG outputs.
+
+Final command:
+`env UV_CACHE_DIR=.cache/uv MPLCONFIGDIR=.cache/matplotlib uv run --no-sync pytest -q src/tests/neural_analysis/communication_subspace src/tests/neural_analysis/session_cca/test_webapp.py src/tests/neural_analysis/session_cca/test_webapp_navigation.py src/tests/neural_analysis/test_webapp_package.py src/tests/neural_analysis/test_session_timeline_webapp.py`
+Result: 108 passed in 19.76 s. Ruff on the new package/view/tests and owned
+`git diff --check` passed. Synthetic 45-choice, eight-good-unit-per-region runner
+timings were 1.03 s (100 ms) and 0.73 s (500 ms), not real-session estimates.
+Higher ranks intentionally have incomplete support in that fixture; baseline
+and rank-one curves are complete, so run status is success.
+
+Live browser inspected `/tmp/pytest-of-matt/pytest-212/test_real_on_disk_pipeline_reo0/communication/neural_session.json`
+on loopback port 8532. Communication view showed matched n=4, 45 choices,
+light curves with disconnected incomplete means, saved seed 11 and 100 ms caption
+while current controls changed to 500 ms. No automatic fit occurred. Default
+raster view initially complained about the synthetic fixture's absent optional
+`led_on_time`; switching to Communication worked and confirms independent routing.
+Existing Streamlit `use_container_width` deprecation warnings remain nonblocking.
+The earlier preview pointed at an expired pytest fixture; restarted against the
+current retained fixture. Both preview processes confirmed stopped. No experimental
+data were run. All workers finished; next action is user session designation.
 
 ## 1. Delivery and design decisions
 
@@ -211,7 +250,8 @@ verify any newly used library API against installed source or official docs.
 | `modeling.py` | `TrainingTransform`, `RidgeDecomposition`, `fit_training_transform`, `transform_counts`, `fit_ridge_decomposition`, `predict_rank`, `select_alphas`; numerical functions with no filesystem/UI dependency. |
 | `scoring.py` | `score_target_predictions`, `summarize_fold_scores`, `summarize_draw_scores`; explicit validity masks and descriptive summaries. |
 | `results.py` | `CommunicationResult`, `ResultInfo`, `save_result`, `load_result`, `discover_results`; result records, schema checks, metadata and named-array persistence. |
-| `run_session.py` | `compute_communication_subspace`, `run_session`, `main`; pure composition of prepared inputs separated from side-effecting run/reuse/log/save orchestration. Return a small `RunReport` to the UI/CLI. |
+| `computation.py` | `ComputationResult`, `compute_communication_subspace`; pure CV composition, fit records and score tables. Imports no persistence or webapp code. |
+| `run_session.py` | `run_session`, `main`; side-effecting run/reuse/log/save orchestration; return a small `RunReport` to the UI/CLI. |
 | `plotting.py` | `plot_rank_curves`, `save_rank_figure`; figure construction from results and explicit export, no refitting. |
 | `webapp/communication_subspace_view.py` | `render_communication_subspace_view`, cached saved loading, readiness and run controls. No scientific calculations. |
 
@@ -466,8 +506,7 @@ RED/GREEN commands, results, and commits. No tests ran during this plan review.
 
 Use an **Astra orchestrator**, **Sol scientific/engineering workers**, and a
 **Luna presentation/documentation worker**. These are planned assignments, not
-claims about agents already running. No workers are launched by this planning
-update; implementation approval remains the next gate.
+claims about agents already running. Section 0 records actual dispatch and gates.
 
 ### Ownership and acceptance
 
@@ -475,12 +514,12 @@ update; implementation approval remains the next gate.
 | --- | --- | --- |
 | WP1 numerical model/scoring | Sol scientific worker: `modeling.py`, `scoring.py`, their tests | Independently verify the penalized-RRR derivation and test oracle before GREEN; inspect rank, scaling, constants, masks and maximal-rank equivalence. Passing worker tests alone is insufficient. |
 | WP2 preparation/splits | Sol input worker: `configuration.py`, `preparation.py`, preparation/split tests and initial local `conftest.py` | Approve data contracts, inspect actual loader/API behavior, audit trial identity, half-open bins, overlap handling, seeded matching and train/test purging. |
-| WP3 CV composition | Sol scientific worker after WP1/WP2 acceptance: computational portion of `run_session.py`, `test_validation.py` | Trace one fold end to end; verify outer-test perturbation invariance, inner-only tuning, refit transforms, support masks and aggregation. Own cross-module contract changes. |
-| WP4 results/runner | Sol input worker after WP3 handoff: `results.py`, side-effecting runner/CLI portion of `run_session.py`, result/runner tests | Approve archive schema and configuration identity; review replay, stale reuse, partial results, source-free loading and no-overwrite behavior. Sole write ownership of `run_session.py` transfers from WP3. |
+| WP3 CV composition | Sol scientific worker after WP1/WP2 acceptance: `computation.py`, `test_validation.py` | Trace one fold end to end; verify outer-test perturbation invariance, inner-only tuning, refit transforms, support masks and aggregation. Own cross-module contract changes. |
+| WP4 results/runner | Sol input worker after result-contract handoff: `results.py`, `run_session.py`, result/runner tests | Approve archive schema and configuration identity; review replay, stale reuse, partial results, source-free loading and no-overwrite behavior. |
 | WP5a scientific plots | Sol scientific worker: `plotting.py`, `test_plotting.py` | Review actual PNGs and paired-support semantics, baseline markers, negative R2, labels and captions. Plotting includes scientific aggregation semantics, so it is not a Luna task. |
 | WP5b webapp controls | Luna UI worker after runner/result/plot APIs are stable: `webapp/communication_subspace_view.py`, `test_webapp.py` | Supply exact callable contracts; review readiness, saved-result identity, no implicit fits and failure display. Astra alone edits shared `webapp/app.py` and `webapp/session_inputs.py` routing. Escalate nonlocal integration problems to Sol. |
 | WP6a synthetic acceptance | Sol scientific worker: `test_synthetic_integration.py`, fixture extensions after ownership transfer, measured runtime report | Approve signal/noise construction and tolerances independently; execute final acceptance, inspect browser/PNG results, and decide whether remaining limitations permit a real-session run. |
-| WP6b usage documentation | Luna UI worker: new package README and proposed usage text | Verify scientific claims, commands and exclusions; Astra applies the shared `src/neural_analysis/README.md` change. |
+| WP6b usage documentation | Luna UI worker: new package README and proposed usage text | Verify scientific claims, commands and exclusions; Astra applies the shared root `README.md` change. |
 | WP7 designated session | Astra owns the run and interpretation; Sol may diagnose a narrowly assigned defect | Confirm session designation, inspect inputs/results, present measured performance and limitations, and wait for user inspection before broader execution. Luna does not interpret scientific results. |
 
 Workers write tests first, demonstrate RED, and hand the exact test paths and
@@ -494,8 +533,8 @@ test error or changed requirement and obtaining orchestrator review.
 1. Astra freezes the small configuration/input/model contracts and assigns
    exclusive file ownership. WP1 and WP2 may run concurrently after that point.
    WP2 owns `conftest.py`; WP1 uses its own analytic fixtures until handoff.
-2. Accept WP1/WP2, then dispatch WP3. Do not overlap WP3 and WP4 edits to
-   `run_session.py`; use an explicit handoff even if workers are idle.
+2. Accept WP1/WP2, then implement WP3 in `computation.py`; WP4 owns the separate
+   side-effecting `run_session.py` after the result-contract handoff.
 3. Once WP3 fixes the result contract, WP4 and WP5a may proceed in parallel.
    WP5a consumes the agreed contract and may not edit `results.py`.
 4. After WP4/WP5a acceptance, dispatch WP5b. WP6a may run concurrently with
@@ -530,9 +569,12 @@ escalating models or broadening the analysis.
 
 There are 100 outer comparison tasks (5 draws x 5 folds x 4 directions).
 Thirteen inner alpha candidates and up to n ranks make independent repeated
-fitting expensive. Compute training transforms and cross-products once per
-partition/comparison; one factorization/decomposition per alpha supports every
-rank. Refit only unique selected alphas on outer training. Accumulate predictions
+fitting expensive. Training transforms are computed once per partition/comparison;
+one factorization/decomposition per alpha supports every rank. Cross-products
+and source-rank SVD currently repeat per alpha: a single-thread synthetic
+benchmark (2,000 rows, 30 source/target units) measured a median 8.33 ms for
+the 13-alpha grid, with 6.46 ms in repeated Gram/SVD work. Caching is deferred
+until designated-session timing justifies the additional interface complexity. Refit only unique selected alphas on outer training. Accumulate predictions
 rank by rank or in bounded arrays; do not allocate
 `(all_ranks, all_observations, all_targets)` by default.
 

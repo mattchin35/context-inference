@@ -1,8 +1,8 @@
 # Exploratory PFC-HPC Communication Subspace Inspection
 
-Status: Scientific scope approved in conversation on 2026-11-16. This document
-records that scope and proposes explicit implementation details for review.
-Implementation and experimental-data execution have not started or been approved.
+Status: Scientific scope and implementation approved on 2026-11-16.
+Implemented and validated on synthetic data. Experimental-data execution awaits
+a user-designated session, followed by user inspection of its outputs.
 
 ## 1. Purpose and interpretation
 
