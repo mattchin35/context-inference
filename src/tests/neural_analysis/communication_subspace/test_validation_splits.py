@@ -43,18 +43,18 @@ def test_outer_and_inner_purges_use_physical_half_open_intervals():
     # meets test 17's right endpoint and must remain eligible.
     times[8] = times[9] - 2.0
     times[18] = times[17] + 4.0
-    # Inner validation for outer fold 1 uses the latest outer-training choices.
-    # Position 36 overlaps 37 and must leave inner training.
-    times[36] = times[37] - 2.0
+    # Outer purge leaves 35 training choices, so inner validation is 38..44.
+    # Position 37 overlaps 38 and must leave inner training.
+    times[37] = times[38] - 2.0
     splits = build_validation_splits(times)
     split = splits[1]
 
     assert 8 in split.outer_purged_indices
     assert 8 not in split.outer_train_indices
     assert 18 in split.outer_train_indices
-    assert 36 in split.inner_purged_indices
-    assert 36 not in split.inner_train_indices
-    assert 37 in split.inner_validation_indices
+    assert 37 in split.inner_purged_indices
+    assert 37 not in split.inner_train_indices
+    assert 38 in split.inner_validation_indices
     for train in split.outer_train_indices:
         for test in split.outer_test_indices:
             assert abs(times[train] - times[test]) >= 4.0
