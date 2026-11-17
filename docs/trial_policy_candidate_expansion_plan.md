@@ -4,6 +4,56 @@ Status: implemented and validated on 2026-11-08 after user approval. This extend
 first round in `trial_dynamax_hmm_implementation_plan.md` and follows the causal
 history and probability contracts in `trial_dynamax_hmm_spec.md`.
 
+2026-11-16 default revision (v7): the user approved replacing default
+`probe_persistence_doubt` with `win_switch_lose_stay` and removing standalone
+`reward_decay_hmm` from the defaults. Both displaced candidates remain selectable;
+the ideal observer retains its decay-HMM dependency. The eight defaults are FQL,
+Bayesian HMM, WSLS, Q-learning, ideal observer, immediate persistence,
+win-switch/lose-stay, and home-referenced expectancy doubt, in that order.
+
+The new candidate is a simple reward-switch/omission-stay rule, not the existing
+equal-weight `simple_probe_persistence` readout, whose signals cancel after a
+reward. It reuses WSLS's observed-history replay with its signed recommendation
+negated and matches the benchmark model's signed values. The trial comparison
+uses the same discrete .10 error as WSLS/persistence, with 50/50 initialization
+and missing-reward history freezing. Existing optional temperature keys remain
+valid in shared configurations even when those models are not selected.
+
+No dependencies or additional history loops are needed. Existing main defaults
+inherit the revised tuple; metadata version v7 invalidates prior default caches,
+and a stable Win-switch label/color is added to the existing membership grids.
+Tests were written and confirmed failing before implementation, then committed
+as `197bbf2`. They cover hand rules and 90/10 likelihoods, reuse/parity with the
+existing rule, ordinary exclusions, missing rewards, causality/cropped starts,
+eight-state metadata/round trips, optional-model selection/configuration, and
+single/multisession defaults and plot labels.
+
+Validation passed: 286 policy/benchmark-model/plotting checks and 18 single and
+multisession trial-workflow checks (304 total). The historical nine-model subset
+remains covered explicitly, alongside the revised defaults and optional models.
+One old graded-rule test now selects its original five graded models explicitly,
+including the no-longer-default decay HMM; its temperature expectations are unchanged.
+
+The deterministic synthetic pipeline passed with 140 retained trials and 137
+eligible choices, including missing-reward prediction/history freezing. The
+approved CT026 2026-08-28 run passed with 699 retained trials and 696 scored choices.
+The seven retained models have exactly unchanged raw scores, choice probabilities,
+log likelihoods, and prediction masks compared with v6 on the same input history.
+The new rule is the inverse of WSLS on every trial. All posterior rows normalize;
+NPZ round trip, non-policy columns, ten prior numerical artifacts, and block and
+parameter files were preserved. No upstream analysis or experimental batch ran.
+
+The inspected eight-model PNG and validation report/script/log snapshots are in
+this directory (UTC timestamp, November 16 local date):
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/figures/trial_policy_hmm/2026-11-17_04-21-20_205568_UTC/`
+
+Independent maxima are unique on 527 scored choices and tied on 169; smoothed
+marginal maxima are unique on all 699 retained rows. These are conditional,
+retrospective assignments rather than evidence of unique behavioral mechanisms.
+User changes to main.py were explicitly authorized to remain untouched while
+finishing this validation. User inspection precedes any broader experimental run.
+
 2026-11-11 probe extension (v6): the user approved `probe_persistence_doubt` and
 `home_referenced_expectancy_doubt` as the eighth and ninth default candidates,
 using existing TaskParams defaults and native probabilities. Ordered subsets

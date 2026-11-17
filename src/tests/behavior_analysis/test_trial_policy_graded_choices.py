@@ -38,7 +38,8 @@ def compare(table, ids=None, temperatures=None):
 
 def test_approved_five_logistic_rules_and_two_discrete_rules():
     """No inputs; validate the approved choice rules and temperatures in score units."""
-    settings = models.effective_trial_policy_choice_parameters(models.resolve_trial_policy_candidates())
+    selected_ids = (*TEMPERATURES, "win_stay_lose_switch", "immediate_persistence")
+    settings = models.effective_trial_policy_choice_parameters(models.resolve_trial_policy_candidates(selected_ids))
     for model_id, temperature in TEMPERATURES.items():
         assert settings[model_id] == {"rule": "logistic", "temperature": temperature}
     for model_id in ("win_stay_lose_switch", "immediate_persistence"):

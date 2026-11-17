@@ -30,8 +30,8 @@ if TYPE_CHECKING:
 
 DEFAULT_MODEL_IDS = (
     "forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
-    "q_learning", "reward_decay_hmm", "ideal_observer",
-    "immediate_persistence", "probe_persistence_doubt", "home_referenced_expectancy_doubt",
+    "q_learning", "ideal_observer", "immediate_persistence",
+    "win_switch_lose_stay", "home_referenced_expectancy_doubt",
 )
 FLAG_COLUMN_NAMES = ("give_reward", "experimenter_reward_given")
 _BELIEF_PARAMETER_NAMES = (
@@ -244,6 +244,7 @@ def resolve_trial_policy_candidates(
         TrialPolicyCandidate("bayesian_hmm", "Bayesian HMM", _replay_bayesian, _BELIEF_PARAMETER_NAMES,
                              choice_rule="logistic", choice_temperature=.40),
         TrialPolicyCandidate("win_stay_lose_switch", "Win-stay lose-switch", _replay_wsls),
+        TrialPolicyCandidate("win_switch_lose_stay", "Win-switch lose-stay", _replay_win_switch_lose_stay),
         TrialPolicyCandidate("q_learning", "Q-learning", _replay_q_learning, ("QL_learning_rate", "n_actions"),
                              choice_rule="logistic", choice_temperature=.14),
         TrialPolicyCandidate("reward_decay_hmm", "Reward-decay HMM", _replay_reward_decay_hmm,
@@ -338,7 +339,8 @@ def effective_trial_policy_choice_parameters(
     if not np.isfinite(error) or not 0 < error < .5 or not 0 < 1 - error < 1:
         raise ValueError("error probability and its complement must be representable inside (0,1), error < .5")
     overrides = {} if temperatures is None else dict(temperatures)
-    known_graded = {candidate.model_id for candidate in (*resolve_trial_policy_candidates(), *candidates)
+    selectable_ids = (*DEFAULT_MODEL_IDS, "reward_decay_hmm", "probe_persistence_doubt")
+    known_graded = {candidate.model_id for candidate in (*resolve_trial_policy_candidates(selectable_ids), *candidates)
                     if candidate.choice_rule == "logistic"}
     unknown = set(overrides) - known_graded
     if unknown:
@@ -522,6 +524,17 @@ def _replay_wsls(history: PreparedTrialHistory, params: "TaskParams") -> tuple[n
         actions=history.actions, rewards=history.rewards,
         experimenter_reward_given=history.adapter_skip_flags,
     ), history.adapter_skip_flags)
+
+
+def _replay_win_switch_lose_stay(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
+    """Return inverse WSLS scores and availability, both aligned [T], unitless.
+
+    Reward recommends the opposite side; omission recommends the same side.
+    Reuse WSLS's causal completed-pair history, exclusions, missing-reward freeze,
+    and neutral initialization. The common discrete readout supplies 90/10 choices.
+    """
+    scores, available = _replay_wsls(history, params)
+    return -scores, available
 
 
 def _replay_immediate_persistence(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:

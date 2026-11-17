@@ -1,5 +1,19 @@
 # Codex specification: trialwise comparison of fixed behavioral policies
 
+**Current defaults (2026-11-16, v7):** FQL, Bayesian HMM, WSLS, Q-learning,
+ideal observer, immediate persistence, win-switch/lose-stay, and home-referenced
+expectancy doubt, in that order. `win_switch_lose_stay` replaces probe-doubt;
+standalone `reward_decay_hmm` also leaves the defaults. Both displaced models
+remain selectable. The ideal observer still uses the decay-HMM computation.
+
+Win-switch/lose-stay recommends switching sides after reward and repeating the
+previous side after omission. It uses the same .10 opposite-action error as
+WSLS and persistence, not a logistic readout or weighted probe/persistence sum.
+It is initially indifferent and uses the last usable choice/outcome pair;
+missing rewards retain current predictions while freezing that history.
+The adapter reuses the existing WSLS replay with scores negated, matching the
+benchmark model's rule. Previous versions below record the historical extensions.
+
 ## Goal and scope
 
 Extend the **existing block-level fixed-exemplar/Dynamax analysis** to operate on individual trials.
@@ -165,7 +179,7 @@ Temperature overrides are explicit, fixed, keyed by stable graded-model IDs,
 and saved in metadata/cache identity. They are not automatically recalibrated
 when a session's learning parameters change.
 
-For WSLS and immediate persistence, retain one configurable discrete error rate:
+For WSLS, immediate persistence, and win-switch/lose-stay, retain one configurable discrete error rate:
 
 ```python
 opposite_action_error_prob = 0.10
