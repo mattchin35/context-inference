@@ -43,6 +43,9 @@ def test_good_only_paired_counts_and_original_trial_annotations(
         assert prepared.coverage_s[region] == (1_700_000_000.0, 1_700_000_470.0)
     assert prepared.configuration["population_quality"] == "good"
     assert prepared.configuration["missing_label_policy"] == "exclude"
+    assert prepared.configuration["channels"] == {
+        "PFC": list(range(11)), "HPC": list(range(11)),
+    }
 
 
 def test_metadata_inspection_is_spike_free_and_events_optional(
