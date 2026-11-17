@@ -44,6 +44,27 @@ def _plot_result() -> SimpleNamespace:
     )
 
 
+def test_large_rank_range_has_readable_labels_without_dropping_curve_points():
+    """A 62-rank result keeps every score while tick-label boxes do not overlap."""
+    result = _plot_result()
+    template = result.computation.curve_scores.query("model == 'rrr' and rank == 1")
+    result.computation.curve_scores = pd.concat(
+        [result.computation.curve_scores.query("model == 'ridge'")] +
+        [template.assign(rank=rank) for rank in range(1, 63)], ignore_index=True)
+    figure = plot_rank_curves(result)
+    try:
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        for axis in figure.axes:
+            boxes = [label.get_window_extent(renderer) for label in axis.get_xticklabels()]
+            assert all(left.x1 < right.x0 for left, right in zip(boxes, boxes[1:]))
+            assert 1 in axis.get_xticks() and 62 in axis.get_xticks()
+            mean_lines = [line for line in axis.lines if line.get_label().endswith(' RRR')]
+            assert all(len(line.get_xdata()) == 62 for line in mean_lines)
+    finally:
+        plt.close(figure)
+
+
 def test_two_light_panels_show_faint_draws_means_ridge_and_zero_reference():
     """No inputs; four directions and dimensionless R2 use two source panels."""
     figure = plot_rank_curves(_plot_result())
