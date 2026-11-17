@@ -12,7 +12,6 @@ from streamlit.testing.v1 import AppTest
 from src.neural_analysis.communication_subspace import preparation
 from src.neural_analysis.communication_subspace import run_session as runner
 from src.neural_analysis.communication_subspace import results
-from src.neural_analysis.communication_subspace import plotting
 
 
 def _render(metadata_path: str) -> None:
@@ -77,6 +76,11 @@ def test_view_inspects_metadata_but_waits_for_explicit_run(
 def _install_saved_result(monkeypatch, tmp_path):
     """Install a minimal immutable saved product and a real Matplotlib figure."""
     import matplotlib.pyplot as plt
+    from src.neural_analysis.webapp import communication_subspace_view
+
+    def make_figure(*args, **kwargs):
+        """Return a fresh blank Matplotlib figure for each saved-plot request."""
+        return plt.figure()
 
     saved_configuration = {
         "configuration_id": "saved-500ms", "session_id": "synthetic-communication",
@@ -90,9 +94,26 @@ def _install_saved_result(monkeypatch, tmp_path):
         bin_edges_s=[-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0],
         probe_roles={"PFC": "A", "HPC": "B"},
         computation=SimpleNamespace(
-            fold_scores=pd.DataFrame(), inner_scores=pd.DataFrame(),
+            fold_scores=pd.DataFrame({"valid": [True]}), inner_scores=pd.DataFrame(),
             draw_scores=pd.DataFrame(), curve_scores=pd.DataFrame(),
             status="success",
+            draws=(SimpleNamespace(
+                source_indices={"PFC": [0], "HPC": [0]},
+                target_indices={"PFC": [1], "HPC": [1]},
+            ),),
+            splits=(SimpleNamespace(
+                outer_train_indices=[0, 1], outer_test_indices=[2],
+                inner_train_indices=[0], inner_validation_indices=[1],
+                outer_purged_indices=[3], inner_purged_indices=[4],
+            ),),
+            fit_records=(SimpleNamespace(
+                draw=0, direction="PFC->HPC", fold=0, alpha=0.1,
+                source_indices=[0], target_indices=[1],
+                source_unit_ids=("A:0",), target_unit_ids=("B:1",),
+                source_transform=SimpleNamespace(variable_mask=[True]),
+                target_transform=SimpleNamespace(variable_mask=[True]),
+                decomposition=SimpleNamespace(max_rank=1),
+            ),),
         ),
         meta={"configuration": saved_configuration},
     )
@@ -104,7 +125,7 @@ def _install_saved_result(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(results, "discover_results", Mock(return_value=(info,)))
     monkeypatch.setattr(results, "load_result", Mock(return_value=result))
-    monkeypatch.setattr(plotting, "plot_rank_curves", Mock(side_effect=plt.figure))
+    monkeypatch.setattr(communication_subspace_view, "plot_rank_curves", Mock(side_effect=make_figure))
     return result, info
 
 
@@ -120,12 +141,12 @@ def test_saved_result_displays_without_raw_sources_and_keeps_saved_caption(
     (synthetic_communication_session.parent / "B" / "spike_clusters.npy").unlink()
     at = AppTest.from_function(_render, args=(str(synthetic_communication_session),)).run()
     assert not at.exception
-    assert any("500 ms" in item.value for item in at.caption + at.markdown)
+    assert any("500 ms" in item.value for item in (*at.caption, *at.markdown))
     assert next(button for button in at.button if button.label == "Run").disabled
 
     next(widget for widget in at.selectbox if widget.label == "Bin width (ms)").select(100).run()
     assert not at.exception
-    assert any("500 ms" in item.value for item in at.caption + at.markdown)
+    assert any("500 ms" in item.value for item in (*at.caption, *at.markdown))
 
 
 def test_recompute_is_explicit_and_passes_rerun_true(
@@ -158,13 +179,44 @@ def test_failed_recompute_preserves_saved_result(
     """A failed explicit recompute reports its error while retaining the prior saved curve."""
     _install_saved_result(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "run_session", Mock(side_effect=ValueError("synthetic failure")))
-    plot_calls = plotting.plot_rank_curves
+    from src.neural_analysis.webapp import communication_subspace_view
+    plot_calls = communication_subspace_view.plot_rank_curves
     at = AppTest.from_function(_render, args=(str(synthetic_communication_session),)).run()
     assert not at.exception
     next(button for button in at.button if button.label == "Recompute").click().run()
     assert not at.exception
     assert any("synthetic failure" in item.value for item in at.error)
     assert plot_calls.call_count >= 2
+
+
+def test_saved_result_rerenders_close_figures(synthetic_communication_session: Path, monkeypatch, tmp_path):
+    """Repeated saved displays do not leave Matplotlib figures registered."""
+    import matplotlib.pyplot as plt
+
+    _install_saved_result(monkeypatch, tmp_path)
+    initial_figures = set(plt.get_fignums())
+    at = AppTest.from_function(_render, args=(str(synthetic_communication_session),)).run()
+    assert not at.exception
+    assert set(plt.get_fignums()) == initial_figures
+    at.run()
+    assert not at.exception
+    assert set(plt.get_fignums()) == initial_figures
+
+
+def test_saved_diagnostics_show_population_split_and_fit_identity(
+    synthetic_communication_session: Path, monkeypatch, tmp_path,
+):
+    """Saved diagnostic tables expose matched IDs, purge counts, alpha, and effective ranks."""
+    _install_saved_result(monkeypatch, tmp_path)
+    at = AppTest.from_function(_render, args=(str(synthetic_communication_session),)).run()
+    assert not at.exception
+    displayed_tables = [frame.value for frame in at.dataframe]
+    all_columns = {str(column) for table in displayed_tables for column in table.columns}
+    assert {"source_unit_ids", "target_unit_ids", "outer_purged_choices",
+            "inner_purged_choices", "alpha", "effective_source_units",
+            "effective_target_units", "max_rank"} <= all_columns
+    all_values = " ".join(str(value) for table in displayed_tables for value in table.to_numpy().ravel())
+    assert "A:0" in all_values and "B:1" in all_values
 
 
 def test_missing_population_sources_disable_run_without_raw_loading(
@@ -182,7 +234,10 @@ def test_missing_population_sources_disable_run_without_raw_loading(
     monkeypatch.setattr(runner, "run_session", record_run)
     at = AppTest.from_function(_render, args=(str(synthetic_communication_session),)).run()
     assert not at.exception
+    _assign_probe_roles(at)
+    assert not at.exception
     run_button = next(button for button in at.button if button.label == "Run")
     assert run_button.disabled
     assert not run_calls
-    assert any("missing" in element.value.lower() for element in at.warning + at.error + at.info)
+    messages = [element.value for element in (*at.warning, *at.error, *at.info)]
+    assert any("missing" in message.lower() for message in messages)
