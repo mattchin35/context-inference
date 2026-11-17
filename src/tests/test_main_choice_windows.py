@@ -184,13 +184,15 @@ def test_saved_window_plot_adds_and_backfills_both_presentation_groups(main_modu
     directory = tmp_path / "figures/choice_window_agreement" / result.parent.name
     directory.mkdir(parents=True)
     existing = [directory / "session_choice_window_agreement.png",
-                directory / "session_choice_window_10_agreement.png", directory / "session_choice_window_20_agreement.png"]
+                directory / "session_choice_window_10_agreement.png", directory / "session_choice_window_20_agreement.png",
+                directory / "session_choice_window_10_strategy_comparison_v1_agreement.png",
+                directory / "session_choice_window_20_strategy_comparison_v1_agreement.png"]
     for path in existing:
         path.write_bytes(b"earlier diagnostic or standalone")
     monkeypatch.setattr(choice_window_results, "compute_trial_agent_agreements", fail_if_reached)
     main_module._plot_saved_choice_window_results(result, "session", tmp_path / "figures")
     outputs = [directory / f"session_choice_window_{size}_{profile}_agreement.png"
-               for size in (10, 20) for profile in ("main_comparison_v1", "strategy_comparison_v1")]
+               for size in (10, 20) for profile in ("main_comparison_v1", "strategy_comparison_v2")]
     assert all(path.is_file() for path in outputs)
     hashes = {path: path.read_bytes() for path in [*existing, *outputs[:-1]]}
     outputs[-1].unlink()

@@ -14,14 +14,14 @@ from src.tests.behavior_analysis.test_choice_window_panel_plotting import closed
 GROUPS = {
     "main_comparison_v1": ("qlearning_mouse_agreement", "hmm_logodds_mouse_agreement",
                            "home_referenced_expectancy_doubt_mouse_agreement", "observer_mouse_agreement"),
-    "strategy_comparison_v1": ("perseveration_mouse_agreement", "wsls_mouse_agreement",
-                               "simple_probe_persistence_mouse_agreement", "observer_mouse_agreement"),
+    "strategy_comparison_v2": ("perseveration_mouse_agreement", "wsls_mouse_agreement",
+                               "win_switch_lose_stay_mouse_agreement", "observer_mouse_agreement"),
 }
 LABELS = {
     "qlearning_mouse_agreement": "QL", "hmm_logodds_mouse_agreement": "HMM",
     "home_referenced_expectancy_doubt_mouse_agreement": "Home E + Doubt",
     "observer_mouse_agreement": "Ideal", "perseveration_mouse_agreement": "Perseveration",
-    "wsls_mouse_agreement": "WSLS", "simple_probe_persistence_mouse_agreement": "Probe + persistence",
+    "wsls_mouse_agreement": "WSLS", "win_switch_lose_stay_mouse_agreement": "Win-switch/lose-stay",
 }
 
 
@@ -75,7 +75,7 @@ def test_group_curves_order_colors_and_saved_values(presentation_results, closed
         rows = table.loc[table.window_size.eq(size) & table.agent.eq(key)]
         np.testing.assert_allclose(line.get_ydata(), rows.agreement)
         np.testing.assert_allclose(line.get_xdata(), (rows.trial_start + rows.trial_stop - 1) / 2)
-        assert line.get_color() == full_lines[base_labels[key]].get_color()
+        assert line.get_color() == full_lines[base_labels.get(key, LABELS[key])].get_color()
     assert grouped.get_facecolor() == (1, 1, 1, 1)
     pd.testing.assert_frame_equal(table, original)
     assert meta == original_meta
@@ -136,3 +136,15 @@ def test_selection_requires_distinct_output_identity(presentation_results, tmp_p
         plots.plot_session_choice_window_agreement_panel(table, meta, tmp_path, "invalid", 10, agent_selection=GROUPS["main_comparison_v1"])
     with pytest.raises(ValueError, match="agent"):
         plots.plot_session_choice_window_agreement_panel(table, meta, tmp_path, "invalid", 10, agent_selection=("typo",), presentation_profile="custom_v1")
+
+
+def test_older_results_report_missing_inverse_rule(presentation_results, closed_figures, tmp_path):
+    """Old saved rows[T,C] have no inverse rule; caption names it without inventing data."""
+    table, meta = presentation_results
+    key = "win_switch_lose_stay_mouse_agreement"
+    meta["parameters"]["agent_value_columns"].pop(key)
+    plots.plot_session_choice_window_agreement_panel(
+        table.loc[~table.agent.eq(key)], meta, tmp_path, "old", 10,
+        agent_selection=GROUPS["strategy_comparison_v2"], presentation_profile="strategy_comparison_v2")
+    figure = _figures(closed_figures)[0]
+    assert "Unavailable models: Win-switch/lose-stay." in figure.texts[-1].get_text()
