@@ -232,8 +232,13 @@ def test_saved_window_plot_backfills_all_and_restricted_summaries(main_module, t
     assert not list((tmp_path / "processed").rglob("*.png"))
 
 
-def test_multisession_collection_resets_windows_and_preserves_blocks(main_module, tmp_path):
+def test_multisession_collection_resets_windows_and_preserves_blocks(main_module, tmp_path, monkeypatch):
     """Each 13-choice session yields one ten-choice window, not a joined window."""
+    from src.behavior_analysis import performance_plots
+    from unittest.mock import Mock
+
+    exporter = Mock(wraps=performance_plots.plot_multisession_choice_window_agreement)
+    monkeypatch.setattr(performance_plots, "plot_multisession_choice_window_agreement", exporter)
     sessions = []
     for index in range(2):
         processed = tmp_path / str(index)
@@ -259,6 +264,8 @@ def test_multisession_collection_resets_windows_and_preserves_blocks(main_module
         assert Path(figure).exists()
     assert len(list(tmp_path.glob("*_choice-window-10_agreement.png"))) == 1
     assert len(list(tmp_path.glob("*_choice-window-20_agreement.png"))) == 1
+    assert len(exporter.call_args_list) == 2
+    assert all(call.kwargs["subject_label"] == "mouse" for call in exporter.call_args_list)
     summary = pd.read_csv(path.parent / "mouse_choice_window_summary.csv")
     assert {"agreement_q1", "agreement_q3", "n_scored_windows"}.issubset(summary.columns)
     for saved, original in zip(sessions, originals):
