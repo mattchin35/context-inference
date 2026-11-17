@@ -3459,6 +3459,7 @@ def save_and_plot_multisession_choice_window_agreement(
         str(plot_multisession_choice_window_agreement(
             summary_df=summary, plot_path=output_path,
             figure_id=f"{mouse}_{timestamp}", window_size=size,
+            subject_label=mouse,
         ))
         for size in window_sizes
     ]

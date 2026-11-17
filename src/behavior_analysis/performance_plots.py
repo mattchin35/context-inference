@@ -55,6 +55,12 @@ CHOICE_WINDOW_AGENT_LABELS = {
     **{column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()},
     "win_switch_lose_stay_mouse_agreement": "Win-switch/lose-stay",
 }
+# Display selection only; computation and block-agreement defaults retain all models.
+MULTISESSION_CHOICE_WINDOW_AGENTS = (
+    "qlearning_mouse_agreement", "fql_mouse_agreement", "hmm_logodds_mouse_agreement",
+    "perseveration_mouse_agreement", "wsls_mouse_agreement", "observer_mouse_agreement",
+    "home_referenced_expectancy_doubt_mouse_agreement", "win_switch_lose_stay_mouse_agreement",
+)
 AGENT_MOUSE_AGREEMENT_COLORS = {
     "QL": "#1f77b4",
     "FQL": "#d62728",
@@ -6062,6 +6068,8 @@ def plot_multisession_choice_window_agreement(
     plot_path: Path,
     figure_id: str,
     window_size: int,
+    *,
+    subject_label: str | None = None,
 ) -> Path:
     """Plot one choice-window resolution across sessions without coverage axes.
 
@@ -6075,10 +6083,13 @@ def plot_multisession_choice_window_agreement(
     plot_path : pathlib.Path
         Cross-session output directory; the PNG is written directly here.
     figure_id : str
-        Mouse/run identifier used in the title and filename. The caller adds
+        Mouse/run identifier used in the filename and as a fallback title label. The caller adds
         a run timestamp to preserve figures from earlier runs.
     window_size : int
         Positive number of valid mouse choices per non-overlapping window.
+    subject_label : str or None, keyword-only
+        Short mouse/subject name for the title, independent of the timestamped
+        figure_id. None uses figure_id. No identifier parsing is performed.
 
     Returns
     -------
@@ -6086,7 +6097,9 @@ def plot_multisession_choice_window_agreement(
         Saved opaque-white PNG, named
         ``{figure_id}_choice-window-{window_size}_agreement.png``. Contains one
         agreement axis with model medians and Q1-Q3 ranges, using existing
-        agent colors. No prediction coverage or model recomputation occurs.
+        agent colors. Only MULTISESSION_CHOICE_WINDOW_AGENTS are displayed;
+        unavailable models are named in the caption. Saved data and block-based
+        plots are unchanged. No prediction coverage or model recomputation occurs.
     """
     from .choice_window_analysis import validate_window_size
 
@@ -6099,6 +6112,14 @@ def plot_multisession_choice_window_agreement(
     selected = summary_df.loc[summary_df["window_size"].eq(size)].copy()
     sessions = selected[["session_id", "date"]].drop_duplicates()
     labels_by_agent = CHOICE_WINDOW_AGENT_LABELS
+    available = set(selected["agent"])
+    agents = [agent for agent in MULTISESSION_CHOICE_WINDOW_AGENTS if agent in available]
+    unavailable = [labels_by_agent[agent] for agent in MULTISESSION_CHOICE_WINDOW_AGENTS if agent not in available]
+    selected = selected.loc[selected["agent"].isin(agents)]
+    # Keep a placeholder for every session/model pair so filtering cannot
+    # remove an early session and shift later points to the wrong date tick.
+    grid = pd.MultiIndex.from_product([sessions["session_id"], agents], names=["session_id", "agent"])
+    selected = selected.set_index(["session_id", "agent"]).reindex(grid).reset_index()
     selected["agent"] = selected["agent"].map(labels_by_agent).fillna(selected["agent"])
     # The existing agreement plot uses date as its categorical key. Supply
     # session IDs as keys, then restore readable labels, so repeated dates do
@@ -6134,12 +6155,15 @@ def plot_multisession_choice_window_agreement(
         ax.set_xticks(np.arange(1, len(sessions) + 1))
         ax.set_xticklabels(tick_labels, rotation=60, fontsize=9)
         ax.set_xlabel("Session date")
-        ax.set_title(f"{figure_id}: {size}-Choice Model Agreement Across Sessions")
+        label = figure_id if subject_label is None else subject_label
+        ax.set_title(f"{label}: {size}-choice agreement")
         caption = (
             f"Non-overlapping {size}-choice windows; lines show session medians, ranges show Q1-Q3.\n"
             "Windows cross contexts but never sessions; incomplete tails and missing scores are excluded.\n"
             "Missing predictions use per-agent denominators. Descriptive summaries; no statistical tests."
         )
+        if unavailable:
+            caption += "\nUnavailable models: " + ", ".join(unavailable) + "."
         fig.text(0.02, 0.015, caption, fontsize=10, va="bottom")
         fig.tight_layout(rect=(0, 0.14, 1, 1))
         fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)

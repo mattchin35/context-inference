@@ -142,3 +142,25 @@ Only plotting changes: the trusted saved NPZ is loaded once by the workflow,
 with no model fitting, trial rescoring, or numerical analysis version change.
 Missing summary files are backfilled even when earlier figures already exist.
 Current block summaries, timeline plots, and numerical artifacts are preserved.
+
+## Cross-session 10/20-choice presentation plots
+
+Cross-session choice-window plots display eight models: QL, FQL, HMM,
+Perseveration, WSLS, Ideal, Home E + Doubt, and Win-switch/lose-stay.
+HMM decay, Doubt+P, Probe+P, Expect+D+P, and Probe+P+D remain in saved numerical
+results but are omitted from these figures. The display selection is defined
+by `performance_plots.MULTISESSION_CHOICE_WINDOW_AGENTS`; it does not alter
+the shared model registry, single-session plots, or block-based cross-session
+agreement plots.
+
+`plot_multisession_choice_window_agreement` accepts the optional keyword
+`subject_label`, used only for its title. The ordinary workflow supplies the
+mouse ID, producing titles such as `CT016: 10-choice agreement` while retaining
+the timestamped `figure_id` in the filename. Direct calls without the keyword
+remain valid and use `figure_id` as the subject label.
+
+Medians, Q1-Q3 bars, colors and session order retain their saved values.
+Missing models are named in the caption. A session with no retained-model
+predictions keeps its original x-axis position instead of shifting later
+sessions. No model fitting, rescoring, or numerical version change is needed;
+existing saved session summaries can be re-exported to new PNG paths.
