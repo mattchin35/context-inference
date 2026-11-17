@@ -1845,12 +1845,34 @@ def plot_session_choice_window_agreement(
     return save_path
 
 
+def choice_window_presentation_groups() -> dict[str, tuple[str, ...]]:
+    """Return fresh ordered presentation profiles mapped to saved agent-column identifiers.
+
+    No inputs or physical units. Each profile has four model keys; Ideal is
+    shared. Versioned profile names identify output files and must change if
+    membership/order changes, so earlier presentation PNGs remain distinct.
+    """
+    return {
+        "main_comparison_v1": (
+            "qlearning_mouse_agreement", "hmm_logodds_mouse_agreement",
+            "home_referenced_expectancy_doubt_mouse_agreement", "observer_mouse_agreement",
+        ),
+        "strategy_comparison_v1": (
+            "perseveration_mouse_agreement", "wsls_mouse_agreement",
+            "simple_probe_persistence_mouse_agreement", "observer_mouse_agreement",
+        ),
+    }
+
+
 def plot_session_choice_window_agreement_panel(
     window_table: pd.DataFrame,
     metadata: dict,
     plot_path: Path,
     sess_id_full: str,
     window_size: int,
+    *,
+    agent_selection: Iterable[str] | None = None,
+    presentation_profile: str | None = None,
 ) -> Path:
     """Export one agreement panel directly from saved window results.
 
@@ -1870,19 +1892,32 @@ def plot_session_choice_window_agreement_panel(
         Full session identity for the title and filename.
     window_size : int
         Positive number of valid choices per window, selecting saved rows.
+    agent_selection : iterable[str] or None, keyword-only
+        Ordered unique saved agent identifiers to display. None preserves the
+        full saved model set. Known models absent from saved metadata are named
+        in the caption and never recomputed or substituted. Data are unchanged.
+    presentation_profile : str or None, keyword-only
+        Required with agent_selection: a lowercase alphanumeric/underscore
+        output identity, e.g. main_comparison_v1. Change its version when the
+        selection changes. Restricted plots use readable labels and an external
+        legend; original unfiltered figures retain their existing layout.
 
     Returns
     -------
     pathlib.Path
         Opaque-white, 150-dpi PNG named
         ``{sess_id_full}_choice_window_{window_size}_agreement.png``.
-        Its single agreement axis shares drawing code with the diagnostic.
+        A restricted figure inserts ``_{presentation_profile}`` before
+        ``_agreement.png``. Its axis shares drawing code with the diagnostic.
     """
     from .choice_window_analysis import validate_window_size
 
     size = validate_window_size(window_size)
+    saved_agents = metadata["parameters"].get("agent_value_columns", {})
+    agents, unavailable = _resolve_choice_window_agents(saved_agents, agent_selection, presentation_profile)
     plot_path = Path(plot_path)
-    save_path = plot_path / f"{sess_id_full}_choice_window_{size}_agreement.png"
+    suffix = f"_{presentation_profile}" if presentation_profile is not None else ""
+    save_path = plot_path / f"{sess_id_full}_choice_window_{size}{suffix}_agreement.png"
     if save_path.exists():
         return save_path
     required = {"window_size", "agent", "trial_start", "trial_stop", "agreement"}
@@ -1890,13 +1925,30 @@ def plot_session_choice_window_agreement_panel(
     if missing:
         raise ValueError(f"window_table is missing plotting columns: {missing}")
     selected = window_table.loc[window_table["window_size"].eq(size)]
-    agents = metadata["parameters"].get("agent_value_columns", {})
+    labels = {column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()}
+    if presentation_profile is not None:
+        labels.update({
+            "perseveration_mouse_agreement": "Perseveration",
+            "simple_probe_persistence_mouse_agreement": "Probe + persistence",
+            "home_referenced_expectancy_doubt_mouse_agreement": "Home E + Doubt",
+        })
+        selected = selected.loc[selected["agent"].isin(agents)]
     boundaries = metadata.get("context_transition_trial_positions", [])
     plot_path.mkdir(parents=True, exist_ok=True)
     with plt.rc_context(_choice_window_plot_style()):
-        fig, ax = plt.subplots(figsize=(10, 5.5))
-        _plot_choice_window_agreement_on_ax(ax, selected, agents, boundaries, size)
-        fig.suptitle(f"{sess_id_full} Choice-Window Agreement", fontsize=17)
+        fig, ax = plt.subplots(figsize=(10, 6.5) if presentation_profile is not None else (10, 5.5))
+        empty_message = "No requested models available in saved results" if presentation_profile is not None and not agents else "No complete choice windows"
+        _plot_choice_window_agreement_on_ax(
+            ax, selected, agents, boundaries, size, display_labels=labels, empty_message=empty_message,
+        )
+        title = f"{sess_id_full} Choice-Window Agreement"
+        if presentation_profile is not None:
+            group_title = re.sub(r"_v[0-9]+$", "", presentation_profile).replace("_", " ").title()
+            title += f"\n{group_title}"
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend(fontsize=10, ncol=2, loc="upper center", bbox_to_anchor=(.55, .22),
+                          bbox_transform=fig.transFigure, frameon=False)
+        fig.suptitle(title, fontsize=17)
         discarded = metadata.get("discarded_choices", {}).get(str(size), "unknown")
         caption = (
             "Consecutive non-overlapping valid mouse choices; no-choice/manual-reward trials excluded.\n"
@@ -1905,11 +1957,44 @@ def plot_session_choice_window_agreement_panel(
             "Missing predictions reduce each agent's denominator; dotted lines mark context transitions.\n"
             "Descriptive agreement; no statistical tests."
         )
+        if unavailable:
+            caption += "\nUnavailable models: " + ", ".join(labels.get(agent, agent) for agent in unavailable) + "."
         fig.text(0.02, 0.015, caption, fontsize=10, va="bottom")
-        fig.tight_layout(rect=(0, 0.22, 1, 0.95))
+        if presentation_profile is not None:
+            # Reserve independent bands for axis labels, legend and caption.
+            fig.subplots_adjust(left=.12, right=.97, bottom=.37, top=.80)
+        else:
+            fig.tight_layout(rect=(0, 0.22, 1, 0.95))
         fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
         plt.close(fig)
     return save_path
+
+
+def _resolve_choice_window_agents(
+    saved_agents: Iterable[str], agent_selection: Iterable[str] | None, presentation_profile: str | None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Resolve ordered display keys and missing keys from saved-model identifiers.
+
+    Inputs are unitless agent-name iterables and an optional versioned filename
+    profile. Selection/profile must be provided together; None preserves all
+    saved agents. Return (available, unavailable) string tuples in requested
+    order. Unknown identifiers, empty/duplicate selections and unsafe filename
+    profiles raise ValueError. No data, metadata, or filesystem is changed.
+    """
+    saved = tuple(saved_agents)
+    if agent_selection is None and presentation_profile is None:
+        return saved, ()
+    if not isinstance(presentation_profile, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", presentation_profile):
+        raise ValueError("A presentation profile with lowercase letters/digits/underscores is required for a selection.")
+    if agent_selection is None or isinstance(agent_selection, str):
+        raise ValueError("agent_selection must be a nonempty ordered iterable of saved agent identifiers.")
+    requested = tuple(agent_selection)
+    if not requested or any(not isinstance(agent, str) for agent in requested) or len(set(requested)) != len(requested):
+        raise ValueError("agent_selection must contain distinct string identifiers.")
+    known = set(DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.values()) | set(saved)
+    if set(requested) - known:
+        raise ValueError(f"Unknown agent identifiers: {sorted(set(requested) - known)}")
+    return tuple(agent for agent in requested if agent in saved), tuple(agent for agent in requested if agent not in saved)
 
 
 def _plot_choice_window_agreement_on_ax(
@@ -1918,6 +2003,9 @@ def _plot_choice_window_agreement_on_ax(
     agents: Iterable[str],
     context_transition_trial_positions: Iterable[float],
     window_size: int,
+    *,
+    display_labels: dict[str, str] | None = None,
+    empty_message: str = "No complete choice windows",
 ) -> None:
     """Draw one agreement axis from aligned saved rows; return None.
 
@@ -1926,6 +2014,8 @@ def _plot_choice_window_agreement_on_ax(
     agreement columns. Bounds and transition positions use zero-based original
     trial rows; agreement is a unitless fraction. agents supplies ordered keys.
     Only the axis is mutated; data, labels, units and missing values are kept.
+    display_labels optionally maps model keys to readable names without
+    changing their original model colors; empty_message labels empty rows.
     No figure creation, file IO, scoring or aggregation occurs here.
     """
     agent_labels = {column: label for label, column in DEFAULT_AGENT_MOUSE_AGREEMENT_COLUMNS.items()}
@@ -1936,9 +2026,10 @@ def _plot_choice_window_agreement_on_ax(
         positions = (agent_rows["trial_start"] + agent_rows["trial_stop"] - 1) / 2
         label = agent_labels.get(agent, agent)
         color = AGENT_MOUSE_AGREEMENT_COLORS.get(label, all_colors[agent_index % len(all_colors)])
-        ax.plot(positions, agent_rows["agreement"], marker="o", color=color, label=label)
+        displayed = (display_labels or {}).get(agent, label)
+        ax.plot(positions, agent_rows["agreement"], marker="o", color=color, label=displayed)
     if window_rows.empty:
-        ax.text(0.5, 0.5, "No complete choice windows", ha="center", va="center", transform=ax.transAxes)
+        ax.text(0.5, 0.5, empty_message, ha="center", va="center", transform=ax.transAxes)
     ax.set_ylim(-0.05, 1.05)
     ax.set_ylabel("Mouse-agent agreement")
     ax.set_title(f"{window_size}-choice windows")

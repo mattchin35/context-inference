@@ -3337,6 +3337,7 @@ def _plot_saved_choice_window_results(
     in the parent process, outside session computation workers.
     """
     from src.behavior_analysis.performance_plots import (
+        choice_window_presentation_groups,
         plot_session_choice_window_agreement,
         plot_session_choice_window_agreement_panel,
     )
@@ -3347,6 +3348,11 @@ def _plot_saved_choice_window_results(
     # Backfill missing presentation panels even when the combined PNG is cached.
     for size in metadata["parameters"]["window_sizes"]:
         plot_session_choice_window_agreement_panel(table, metadata, plot_directory, session_id, size)
+        for profile, agents in choice_window_presentation_groups().items():
+            plot_session_choice_window_agreement_panel(
+                table, metadata, plot_directory, session_id, size,
+                agent_selection=agents, presentation_profile=profile,
+            )
     return table, plot_path
 
 
