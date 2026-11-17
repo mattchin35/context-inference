@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
@@ -103,11 +104,14 @@ def test_missing_group_models_are_reported_without_substitution(presentation_res
 
 
 @pytest.mark.parametrize("profile", GROUPS)
-def test_group_layout_and_existing_file_reuse(presentation_results, closed_figures, tmp_path, profile):
+@pytest.mark.parametrize("large_labels", [False, True])
+def test_group_layout_and_existing_file_reuse(presentation_results, closed_figures, tmp_path, profile, large_labels):
     """Input: full session ID and four-curve selection. Legend clears data/caption; repeated exports preserve bytes."""
     table, meta = presentation_results
     options = {"agent_selection": GROUPS[profile], "presentation_profile": profile}
-    path = plots.plot_session_choice_window_agreement_panel(table, meta, tmp_path, "CT016_2026-05-29_132812", 10, **options)
+    style = {"axes.labelsize": 18, "axes.titlesize": 18, "xtick.labelsize": 16, "ytick.labelsize": 16} if large_labels else {}
+    with plt.rc_context(style):
+        path = plots.plot_session_choice_window_agreement_panel(table, meta, tmp_path, "CT016_2026-05-29_132812", 10, **options)
     contents = path.read_bytes()
     assert plots.plot_session_choice_window_agreement_panel(table, meta, tmp_path, "CT016_2026-05-29_132812", 10, **options) == path
     assert path.read_bytes() == contents and len(_figures(closed_figures)) == 1
@@ -117,6 +121,7 @@ def test_group_layout_and_existing_file_reuse(presentation_results, closed_figur
     axis = figure.axes[0]
     legend = axis.get_legend().get_window_extent(renderer)
     assert legend.y1 < axis.get_window_extent(renderer).y0
+    assert legend.y1 < axis.xaxis.label.get_window_extent(renderer).y0 - 5
     assert figure.texts[-1].get_window_extent(renderer).y1 < legend.y0
     for artist in [*figure.texts, axis.get_legend()]:
         bounds = artist.get_window_extent(renderer)
