@@ -102,3 +102,21 @@ def test_unavailable_result_renders_diagnostic_and_export_closes_figure(tmp_path
     assert save_rank_figure(empty, path) == path
     assert path.stat().st_size > 1000
     assert set(plt.get_fignums()) == open_before
+
+
+def test_caption_reports_eligible_choices_matched_units_and_sparse_score_table():
+    """No inputs; saved axes supply 40 choices and matched n=2 despite sparse scores."""
+    result = _plot_result()
+    result.choices = pd.DataFrame({"choice_time": np.arange(45.)})
+    result.choice_positions = np.arange(40)
+    result.unit_ids = {region: tuple(f"{region}:{index}" for index in range(4))
+                       for region in ("PFC", "HPC")}
+    result.computation.fold_scores = pd.DataFrame(columns=["draw", "direction"])
+    figure = plot_rank_curves(result)
+    try:
+        caption = " ".join(text.get_text() for text in figure.texts).lower()
+        assert "40 eligible choices" in caption
+        assert "2 matched units" in caption
+        assert "0 valid target scores" in caption
+    finally:
+        plt.close(figure)
