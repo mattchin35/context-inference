@@ -147,6 +147,33 @@ def test_single_session_windows_plot_in_figures_even_for_cached_results(main_mod
     assert first["plot"].exists()
 
 
+@pytest.mark.parametrize("sizes", [(10, 20), (20,)])
+def test_saved_window_plot_backfills_only_missing_standalone_files(main_module, tmp_path, monkeypatch, sizes):
+    """Input: cached NPZ and combined PNG. Add configured standalone plots without scoring or overwriting."""
+    from src.behavior_analysis import choice_window_results
+
+    trial = pd.DataFrame({"action": [0] * 43, "Qlearning_rel_value": [-1.] * 43})
+    _, result_path = choice_window_results.save_choice_window_results(trial, tmp_path / "processed", "session", sizes)
+    directory = tmp_path / "figures" / "choice_window_agreement" / result_path.parent.name
+    directory.mkdir(parents=True)
+    combined = directory / "session_choice_window_agreement.png"
+    combined.write_bytes(b"existing combined diagnostic")
+    monkeypatch.setattr(choice_window_results, "compute_trial_agent_agreements", fail_if_reached)
+    table, path = main_module._plot_saved_choice_window_results(result_path, "session", tmp_path / "figures")
+    assert not table.empty and path == combined
+    outputs = [directory / f"session_choice_window_{size}_agreement.png" for size in sizes]
+    assert all(output.is_file() for output in outputs)
+    assert len(list(directory.glob("session_choice_window_*_agreement.png"))) == len(sizes)
+    original = {output: output.read_bytes() for output in outputs}
+    outputs[-1].unlink()
+    main_module._plot_saved_choice_window_results(result_path, "session", tmp_path / "figures")
+    assert outputs[-1].is_file()
+    for output in outputs[:-1]:
+        assert output.read_bytes() == original[output]
+    assert combined.read_bytes() == b"existing combined diagnostic"
+    assert not list((tmp_path / "processed").rglob("*.png"))
+
+
 def test_multisession_collection_resets_windows_and_preserves_blocks(main_module, tmp_path):
     """Each 13-choice session yields one ten-choice window, not a joined window."""
     sessions = []
