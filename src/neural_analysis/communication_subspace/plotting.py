@@ -50,7 +50,9 @@ def plot_rank_curves(result: "CommunicationResult") -> Figure:
             (curve_scores["direction"].str.startswith(source_region + "->")) &
             (curve_scores["model"] == "rrr"), "rank"], errors="coerce") if not curve_scores.empty else []
         finite_ranks = sorted({int(value) for value in all_ranks if pd.notna(value)})
-        axis.set_xticks(finite_ranks or [1])
+        # Keep all curve points but limit labels for larger recorded populations.
+        tick_indices = np.linspace(0, len(finite_ranks) - 1, min(9, len(finite_ranks)), dtype=int)
+        axis.set_xticks([finite_ranks[index] for index in tick_indices] or [1])
         axis.set_xlim(0.75, max(finite_ranks or [1]) + 0.25)
         axis.grid(axis="y", color="#E4E4E4", linewidth=0.7)
         handles, labels = axis.get_legend_handles_labels()

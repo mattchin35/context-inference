@@ -1,7 +1,7 @@
 # Communication Subspace: Implementation Plan and Live Handoff
 
 Status: Implementation complete and synthetic acceptance passed, 2026-11-16.
-Experimental execution awaits a designated session after synthetic acceptance.
+CT026 2026-08-28 completed at 100 ms; user inspection is pending.
 
 The [scientific spec](communication_subspace_spec_v1.md) owns scientific scope.
 This plan applies [SoftwareDesign.md](SoftwareDesign.md) and
@@ -22,16 +22,16 @@ This is an implementation record, not runtime checkpoint/resume machinery.
 | Field | Current value |
 | --- | --- |
 | Observation / checkout | 2026-11-16; branch `refactor`; implementation HEAD `5720a7f`. Recheck on resume; this is not a reset target. |
-| Authorization | User: "yep yep, go ahead with implementation". Plan/defaults and implementation approved; no experimental session designated. |
-| Phase | WP1-WP6 accepted; WP7 awaits session designation and user inspection. |
+| Authorization | User: "yep yep, go ahead with implementation". Plan/defaults and implementation approved; CT026 2026-08-28 designated by user: "do ct026 8/28". |
+| Phase | WP1-WP6 accepted; WP7 CT026 2026-08-28 computation and technical validation complete; user inspection pending. |
 | Orchestrator | Planned Astra lead; owns scientific acceptance, integration, Git and this handoff. Current documentation writer is `/root`; runtime model/effort not independently recorded. Do not infer actual model from planned role. |
 | Workers / ownership | `/root/scientific` and `/root/inputs` (`gpt-6-sol`), `/root/ui` (`gpt-6-luna`). All workers finished and relinquished source ownership; Section 0.3 records scopes. |
 | Feature files | New `src/neural_analysis/communication_subspace/` package and matching tests; webapp view/routing, package guide, root README, spec and plan. Commits recorded below. |
 | Existing worktree | Eleven pre-existing modified tracked files in prediction/spec/view code, `src/main.py`, `src/neural_analysis/SESSION_TIMELINE.md`, and `src/neural_analysis/sync_ephys.py`; unrelated untracked files also exist. Preserve all. Record exact owned paths/diffs before implementation. |
-| Latest checks | 108 feature/regression tests passed (19.76 s); Ruff and owned diff whitespace checks passed; both bin widths and browser saved-view inspection passed. No experimental run. |
-| Live commands / artifacts | All feature workers/tests finished; loopback preview on port 8532 stopped (tool session 63420 exit 0). Synthetic archives/PNGs retained under `/tmp/pytest-of-matt/pytest-212/`; temporary test files may be cleaned by later pytest runs. |
-| Pending decisions | Designated experimental session after synthetic acceptance. |
-| Next action / owner | User designates one session; root runs/preflights that session and presents outputs for inspection before any broader execution. |
+| Latest checks | 108 feature/regression tests passed (19.76 s); Ruff and owned diff whitespace checks passed; both bin widths and browser saved-view inspection passed. CT026 run completed successfully; large-rank plotting regression/UI checks: 14 passed. |
+| Live commands / artifacts | No feature process remains running. CT026 run session 81206 exited 0; export session 75376 exited 0. CT026 archive and plots are session-local; exact paths are in the final evidence entry. Synthetic fixtures remain temporary. |
+| Pending decisions | User inspection of CT026 outputs after the authorized run. |
+| Next action / owner | User inspects CT026 rank curves; no broader execution authorized. Root preserves the completed archive and logs. |
 
 ### 0.2 Work-package ledger
 
@@ -50,7 +50,7 @@ acceptance. Record actual agent IDs at dispatch, not just planned model names.
 | WP5b webapp | `/root/ui` Luna + root routing | Accepted | Routing RED `6fb9bb9`; UI `a7e7f94`, diagnostics `4ab4b4a`; fixture correction `cfa8f12` | Root 9 passed; `a4cd141`; live synthetic browser review passed |
 | WP6a synthetic acceptance | Sol scientific + Astra acceptance | Accepted | Integration checks passed existing implementation; no artificial RED claimed; tests `1c88e5e` | Both widths, exact saved-factor score replay, low-rank/higher-rank/null recovery; full suite 108 passed |
 | WP6b usage docs | Luna UI + Astra review | Accepted | Not applicable | Package guide, root README, spec status and live handoff reviewed |
-| WP7 designated session | Astra + user inspection | Not started; synthetic gate and session designation | As needed for discovered defects | None |
+| WP7 designated session | Root + user inspection | Technical validation complete; user inspection pending | Large-rank label overlap RED, tests committed `602bf52` | 14 plotting/UI tests passed; saved archive validated; readable PNG visually reviewed |
 
 ### 0.3 Active work and interruption checkpoint
 
@@ -598,3 +598,37 @@ Section 0 is the authoritative live handoff; Section 8 defines team ownership.
 Implementation requires approval of this plan/defaults. After synthetic
 acceptance, obtain a user-designated session and user inspection of its output
 before broader execution. Prior CCA-session authorization does not transfer.
+
+2026-11-16 - WP7 / designated experimental run started. User: "do ct026 8/28".
+Resolved CT026_2026-08-28_134630 at
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/neural_session.json`.
+Metadata assigns PFC ProbeA and HPC ProbeB. Metadata-only dry-run passed,
+configuration `891b887c73c03878`: 125 PFC good units, 245 HPC good units,
+696 eligible choices; matched source/target n=62 per region.
+Running default 100 ms, seed 0, five draws/five outer folds via run_session;
+exec tool session 81206. Authorized external session-local output writes.
+Next: monitor completion, source-independent reload and plot review, then user
+inspection. No batch or other-session authorization inferred.
+
+2026-11-16 - WP7 / CT026 run completed and technically validated.
+Run ID: `communication_subspace_20261116_215653_961031_891b887c73c03878`.
+Session root: `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference`.
+Archive: `communication_subspace/results/<run-id>.npz`; artifacts:
+`communication_subspace/runs/<run-id>/`. Runtime 497.56 s (8.3 min).
+100 ms, seed 0, 696 choices, n=62, all five draws/folds completed.
+Saved reload validated 252 complete curve rows, 390600 valid outer target
+scores and 81900 valid inner rows. All statuses ok; no purged choices were
+needed at the fold boundaries. Rank-62 RRR and ridge agree within 1.4e-17.
+Ridge R2: PFC->PFC 0.074982; PFC->HPC 0.020937; HPC->HPC 0.105310;
+HPC->PFC 0.014765. Cross-region curves visually plateau earlier but explain
+less variance; no automatic rank selection, equivalence or causal claim.
+
+Visual review exposed overlapping labels at 62 ranks. Added geometric overlap
+regression, observed RED, committed tests `602bf52`, then thinned axis labels
+while retaining all score points. Plot/UI tests: 14 passed in 2.68 s; Ruff and
+whitespace checks pass. Exported `rank_curves_readable.png` from saved NPZ,
+with `plotting_readable.py` and `plot_review.md` beside it. Original archive and
+PNG preserved; no refit. Plot source change alters future configuration hashes;
+the completed archive retains its original provenance and remains viewable.
+Tool sessions 81206 and 75376 exited 0; no worker or preview running.
+Next gate: user inspects this session's outputs. No multi-session run authorized.

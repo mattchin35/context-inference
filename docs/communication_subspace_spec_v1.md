@@ -1,8 +1,8 @@
 # Exploratory PFC-HPC Communication Subspace Inspection
 
 Status: Scientific scope and implementation approved on 2026-11-16.
-Implemented and validated on synthetic data. Experimental-data execution awaits
-a user-designated session, followed by user inspection of its outputs.
+Implemented and validated on synthetic data. The user-designated CT026
+2026-08-28 run completed at 100 ms; user inspection of its outputs is pending.
 
 ## 1. Purpose and interpretation
 

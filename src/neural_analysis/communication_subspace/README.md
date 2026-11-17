@@ -104,5 +104,6 @@ summary, and light PNG. A normal Run reuses a compatible successful archive;
 Recompute or `--rerun` keeps earlier archives and writes a new run.
 
 Synthetic acceptance tests cover both bin widths and replay every scored target
-from saved model factors. No experimental session has been validated yet. The
-next gate is one user-designated session and user inspection of its output.
+from saved model factors. The designated CT026 2026-08-28 session completed
+at 100 ms with 696 choices and 62 units per source/target population. Saved
+scores and plots passed technical review; user inspection remains the next gate.
