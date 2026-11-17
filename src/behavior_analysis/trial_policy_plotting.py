@@ -106,22 +106,28 @@ def _block_boundaries(result: Any, positions: np.ndarray) -> list[float]:
             for index in range(1, len(positions)) if block_ids[index] != block_ids[index - 1]]
 
 
-def _draw_boundaries(axes: Sequence[Axes], results: Sequence[Any], offsets: Sequence[int]) -> None:
+def _draw_boundaries(
+    axes: Sequence[Axes], results: Sequence[Any], offsets: Sequence[int], *, show_block_boundaries: bool,
+) -> None:
     """Mark task-block and source-session boundaries on each diagnostic panel.
 
     axes contains the shared-x diagnostic panels, results contains source-local
     arrays, and offsets maps each result's local rows to display positions.
-    Boundary coordinates use trial-position units; returns None.
+    Boundary coordinates use trial-position units. show_block_boundaries controls
+    optional dotted block markers; light dashed session markers are always drawn.
+    Returns None; only axes artists change, never source arrays or offsets.
     """
-    for result, offset in zip(results, offsets):
-        positions = _row_positions(result, offset)
-        for boundary in _block_boundaries(result, positions):
-            for axis in axes:
-                axis.axvline(boundary, color="0.35", linewidth=0.8, linestyle=":", gid="block-boundary")
+    if show_block_boundaries:
+        for result, offset in zip(results, offsets):
+            positions = _row_positions(result, offset)
+            for boundary in _block_boundaries(result, positions):
+                for axis in axes:
+                    axis.axvline(boundary, color="0.35", linewidth=0.8, linestyle=":", gid="block-boundary")
     for source_index in range(1, len(results)):
         boundary = float(offsets[source_index] - 0.5)
         for axis in axes:
-            axis.axvline(boundary, color="black", linewidth=1.0, linestyle="--", gid="session-boundary")
+            axis.axvline(boundary, color="0.5", linewidth=0.7, alpha=0.6,
+                         linestyle="--", gid="session-boundary")
 
 
 def _shade_excluded(axis: Axes, result: Any, positions: np.ndarray) -> None:
@@ -199,12 +205,13 @@ def _draw_winner_grid(axis: Axes, winners: np.ndarray, comparison_valid: np.ndar
 
 
 def _caption(results: Sequence[Any], metadata_records: Sequence[dict[str, Any]],
-             model_ids: Sequence[str]) -> str:
+             model_ids: Sequence[str], *, show_block_boundaries: bool) -> str:
     """Build a scientific caption from metadata and saved assignment arrays.
 
     results contains one or more source-local T-by-K records; metadata_records
     supplies scalar error/stay settings. Returns readable caption text with no
-    additional inference or numerical transformations.
+    additional inference or numerical transformations. show_block_boundaries is
+    the rendering choice used to describe visible markers; it has no units.
     """
     source_names = [str(metadata.get("session_id", result.session_id))
                     for result, metadata in zip(results, metadata_records)]
@@ -252,25 +259,30 @@ def _caption(results: Sequence[Any], metadata_records: Sequence[dict[str, Any]],
     else:
         # Older artifacts used the same fixed-error mapping for every policy.
         choice_text = f"Shared opposite-action error probability: {', '.join(error_values)}. "
+    boundary_text = "Dotted vertical lines mark block changes. " if show_block_boundaries else "Block boundaries are hidden. "
+    if len(results) > 1:
+        boundary_text += "Light dashed vertical lines mark source-session changes. "
     caption = (
         f"Candidates: {', '.join(map(str, model_ids))}. {choice_text}"
         "Filled cells mark winning models; multiple filled cells in a trial column show a tie. "
         f"All tied maxima are shown; no tied winner is selected.{tie_text} "
         "Gray marks excluded comparison evidence; HMM maxima there remain visible. "
-        f"Sources: {', '.join(source_names)}. Policy histories initialize independently by source. "
+        f"{boundary_text}Sources: {', '.join(source_names)}. Policy histories initialize independently by source. "
         f"{temporal_text}"
         f"{status_text}"
     )
-    return textwrap.fill(caption, width=115)
+    return textwrap.fill(caption, width=115, break_on_hyphens=False)
 
 
 def _make_figure(
     results: Sequence[Any], metadata_records: Sequence[dict[str, Any]], *, output_path: str | Path,
+    show_block_boundaries: bool,
 ) -> Path:
     """Render and save source-local trial diagnostics as an opaque white PNG.
 
     results are one or more TrialPolicyResult-like saved records, metadata_records
     are their same-order plain mappings, and output_path is a PNG destination.
+    show_block_boundaries selects dotted block markers without changing data.
     Returns the saved Path; trial coordinates are zero-based retained row indices.
     """
     if not results or len(results) != len(metadata_records):
@@ -316,14 +328,15 @@ def _make_figure(
         axis.grid(axis="y", color="#e5e5e5", linewidth=0.6)
     for axis in (axes[2], axes[4]) if has_hmm else (axes[2],):
         axis.grid(False)
-    _draw_boundaries(axes, results, offsets)
+    _draw_boundaries(axes, results, offsets, show_block_boundaries=show_block_boundaries)
     _set_axes_style(figure, axes)
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
         legend_labels = [_MODEL_LABELS.get(label, label) for label in labels]
         figure.legend(handles, legend_labels, loc="upper center", ncol=min(len(labels), 4),
                       frameon=False, bbox_to_anchor=(0.5, 0.995), fontsize=10)
-    caption = figure.text(0.01, 0.005, _caption(results, metadata_records, model_ids),
+    caption = figure.text(0.01, 0.005, _caption(results, metadata_records, model_ids,
+                                             show_block_boundaries=show_block_boundaries),
                           ha="left", va="bottom", fontsize=12, color="black", linespacing=1.15)
     # Reserve the rendered caption height for ordinary multisession batches.
     figure.canvas.draw()
@@ -343,17 +356,23 @@ def plot_trial_policy_diagnostic(result: Any, metadata: dict[str, Any], *, outpu
     settings/source mapping; output_path is a destination path. Numerical arrays
     retain their saved row/model axes and displayed x coordinates are trial rows.
     """
-    return _make_figure([result], [metadata], output_path=output_path)
+    return _make_figure([result], [metadata], output_path=output_path, show_block_boundaries=True)
 
 
 def plot_multisession_trial_policy_diagnostic(
     results: Sequence[Any], metadata_records: Sequence[dict[str, Any]], *, output_path: str | Path,
+    show_block_boundaries: bool = False,
 ) -> Path:
     """Plot source-local saved results on one display axis with marked resets.
 
     results is an ordered sequence of source-local T_s-by-K records and
     metadata_records has one mapping per source. The saved row/model arrays are
     unchanged; x coordinates concatenate display rows but never infer jointly.
-    Returns the destination PNG Path.
+    show_block_boundaries is a bool (default False): set True to restore dotted
+    source-local block markers for detailed inspection. Light dashed session
+    boundaries remain on every panel either way. Returns the destination PNG
+    Path; all numerical arrays, model identities, units and session resets are
+    unchanged. Existing callers receive the less cluttered display by default.
     """
-    return _make_figure(results, metadata_records, output_path=output_path)
+    return _make_figure(results, metadata_records, output_path=output_path,
+                        show_block_boundaries=show_block_boundaries)
