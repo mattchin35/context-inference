@@ -120,3 +120,46 @@ def test_caption_reports_eligible_choices_matched_units_and_sparse_score_table()
         assert "0 valid target scores" in caption
     finally:
         plt.close(figure)
+
+
+def test_incomplete_mean_is_marked_without_joining_complete_rank_curve():
+    """No inputs; a two-draw rank-2 mean is separate from the rank-1 full line."""
+    figure = plot_rank_curves(_plot_result())
+    try:
+        axis = figure.axes[0]
+        prominent = [line for line in axis.lines if line.get_label() == "Cross to HPC RRR"]
+        assert len(prominent) == 1
+        assert np.isnan(prominent[0].get_ydata()[1])
+        incomplete = [line for line in axis.lines
+                      if "Cross to HPC incomplete mean rank 2" in line.get_label()]
+        assert len(incomplete) == 1
+        np.testing.assert_allclose(incomplete[0].get_xdata(), [2])
+        np.testing.assert_allclose(incomplete[0].get_ydata(), [0.55])
+        assert "2 draws" in incomplete[0].get_label()
+    finally:
+        plt.close(figure)
+
+
+def test_marginal_incomplete_mean_stays_visible_when_paired_intersection_differs():
+    """No inputs; rank-2 marginal two-draw mean and one-draw paired mean differ."""
+    result = _plot_result()
+    draws = result.computation.draw_scores
+    baseline_row = (draws.direction == "PFC->HPC") & (draws.model == "ridge") & (draws.draw == 2)
+    draws.loc[baseline_row, ["status", "mean_r2", "n_folds"]] = ["incomplete", np.nan, 4]
+    curves = result.computation.curve_scores
+    baseline_curve = (curves.direction == "PFC->HPC") & (curves.model == "ridge")
+    curves.loc[baseline_curve, ["mean_r2", "n_draws", "status"]] = [0.05, 2, "incomplete"]
+    curves.at[curves.index[baseline_curve][0], "draw_ids"] = (0, 1)
+    figure = plot_rank_curves(result)
+    try:
+        axis = figure.axes[0]
+        marginal = [line for line in axis.lines
+                    if "Cross to HPC incomplete mean rank 2" in line.get_label()]
+        paired = [line for line in axis.lines
+                  if "Cross to HPC paired RRR rank 2" in line.get_label()]
+        assert len(marginal) == len(paired) == 1
+        np.testing.assert_allclose(marginal[0].get_ydata(), [0.55])
+        np.testing.assert_allclose(paired[0].get_ydata(), [0.5])
+        assert "1 draws" in paired[0].get_label()
+    finally:
+        plt.close(figure)
