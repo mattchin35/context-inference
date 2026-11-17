@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.neural_analysis.communication_subspace.computation import compute_communication_subspace
 from src.neural_analysis.communication_subspace.preparation import build_validation_splits
@@ -157,3 +158,35 @@ def test_complete_fold_and_draw_summaries_keep_exact_support():
     assert ridge_curve.n_draws == 3
     assert tuple(ridge_curve.draw_ids) == (0, 1, 2)
     assert ridge_curve.status == "ok"
+
+
+def test_prepared_counts_and_axes_fail_before_fitting():
+    """No inputs; malformed counts/bin or identity/edge axes raise ValueError."""
+    prepared = _synthetic_prepared()
+    prepared.counts["PFC"][0, 0, 0] = -1.
+    with pytest.raises(ValueError, match="nonnegative|negative"):
+        compute_communication_subspace(prepared)
+
+    prepared = _synthetic_prepared()
+    prepared.bin_edges_s = prepared.bin_edges_s[:-1]
+    with pytest.raises(ValueError, match="bin|edge"):
+        compute_communication_subspace(prepared)
+
+    prepared = _synthetic_prepared()
+    prepared.unit_ids["PFC"] = ("0",) + prepared.unit_ids["PFC"][1:]
+    with pytest.raises(ValueError, match="unit|qualified|probe"):
+        compute_communication_subspace(prepared)
+
+
+def test_progress_reports_completed_tasks_total_and_message():
+    """No inputs; 25 draw/fold completions provide monotone counts and text."""
+    calls = []
+    def record_progress(completed: int, total: int, message: str) -> None:
+        """Store one (completed, total, message) notification; return None."""
+        calls.append((completed, total, message))
+
+    compute_communication_subspace(_synthetic_prepared(), seed=1, progress=record_progress)
+    assert len(calls) == 25
+    assert [call[0] for call in calls] == list(range(1, 26))
+    assert all(call[1] == 25 for call in calls)
+    assert all(isinstance(call[2], str) and call[2] for call in calls)
