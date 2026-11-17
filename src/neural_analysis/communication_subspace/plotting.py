@@ -154,14 +154,27 @@ def _caption(result: "CommunicationResult") -> str:
     configuration = meta.get("configuration", {})
     bin_width = configuration.get("bin_width_ms", meta.get("bin_width_ms", "unknown"))
     fold_scores = getattr(result.computation, "fold_scores", None)
-    valid_targets = (str(int(fold_scores["valid"].sum())) if fold_scores is not None
-                     else "not recorded")
+    if fold_scores is None:
+        valid_targets = "not recorded"
+    elif "valid" in fold_scores:
+        valid_targets = str(int(fold_scores["valid"].sum()))
+    else:
+        valid_targets = "0" if fold_scores.empty else "not recorded"
+    choice_positions = getattr(result, "choice_positions", None)
+    unit_ids = getattr(result, "unit_ids", None)
+    if choice_positions is not None and unit_ids is not None:
+        matched_units = min(len(unit_ids["PFC"]), len(unit_ids["HPC"])) // 2
+        population_counts = (f"{len(choice_positions)} eligible choices, "
+                             f"{matched_units} matched units per population. ")
+    else:
+        population_counts = ""
     status = getattr(result.computation, "status", "unavailable")
-    detail = (f"Valid target scores: {valid_targets}. Status: {status}. "
+    detail = (f"{valid_targets} valid target scores. Status: {status}. "
               "Incomplete rank markers pair RRR and ridge over the same complete draws.")
     if result.computation.curve_scores.empty:
         detail = "Results unavailable: no complete rank curves or ridge baseline. " + detail
     return (f"{session_id} | -2 to +2 s choice window | {bin_width} ms bins | "
-            "raw activity (no condition mean subtraction). Five chronological folds "
+            "raw activity (no condition mean subtraction). " + population_counts +
+            "Five chronological folds "
             "and five population draws; faint lines show draws, not confidence intervals.\n"
             "Negative R2 means worse prediction than the held-out mean. " + detail)
