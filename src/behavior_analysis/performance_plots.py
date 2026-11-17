@@ -1932,11 +1932,7 @@ def plot_session_choice_window_agreement_panel(
     selected = window_table.loc[window_table["window_size"].eq(size)]
     labels = dict(CHOICE_WINDOW_AGENT_LABELS)
     if presentation_profile is not None:
-        labels.update({
-            "perseveration_mouse_agreement": "Perseveration",
-            "simple_probe_persistence_mouse_agreement": "Probe + persistence",
-            "home_referenced_expectancy_doubt_mouse_agreement": "Home E + Doubt",
-        })
+        labels = _choice_window_display_labels()
         selected = selected.loc[selected["agent"].isin(agents)]
     boundaries = metadata.get("context_transition_trial_positions", [])
     plot_path.mkdir(parents=True, exist_ok=True)
@@ -1973,6 +1969,130 @@ def plot_session_choice_window_agreement_panel(
         fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
         plt.close(fig)
     return save_path
+
+
+def plot_session_choice_window_agreement_summary(
+    window_table: pd.DataFrame,
+    metadata: dict,
+    plot_path: Path,
+    sess_id_full: str,
+    window_size: int,
+    *,
+    agent_selection: Iterable[str] | None = None,
+    presentation_profile: str | None = None,
+    rng_seed: int = 0,
+) -> Path:
+    """Export window agreement dots with per-model median and Q1-Q3 range.
+
+    Parameters
+    ----------
+    window_table : pandas.DataFrame, shape (n_window_agent_rows, n_columns)
+        One saved session, with window_size, window_index, agent and agreement.
+        Each agent/window pair occurs once. Agreement is a unitless fraction;
+        missing/nonfinite values are excluded. Every finite window receives
+        equal weight, regardless of its saved prediction denominator.
+    metadata : dict
+        Saved parameters.agent_value_columns defines model order. Optional
+        discarded_choices maps window size strings to incomplete-tail counts.
+        Inputs remain unchanged; no numerical analysis or model fitting occurs.
+    plot_path : pathlib.Path
+        Session figures directory; an existing matching PNG is reused.
+    sess_id_full : str
+        Full source session identity for the title and filename.
+    window_size : int
+        Positive valid-choice count per window, selecting saved rows.
+    agent_selection : iterable[str] or None, keyword-only
+        Ordered unique model identifiers; None selects all saved models.
+        Known unavailable models are named in the caption without substitution.
+    presentation_profile : str or None, keyword-only
+        Versioned filename profile, required together with agent_selection.
+    rng_seed : int, default=0, keyword-only
+        Seed for horizontal jitter only, recorded in the figure caption.
+        Changing it requires a new output directory to avoid cached PNG reuse.
+
+    Returns
+    -------
+    pathlib.Path
+        Opaque-white, 150-dpi PNG named
+        ``{sess_id_full}_choice_window_{window_size}_summary.png``. Restricted
+        exports insert ``_{presentation_profile}`` before ``_summary.png``.
+        Dots retain saved window fractions; medians/quartiles use the same
+        unweighted pandas convention as the existing block-summary renderer.
+    """
+    from .choice_window_analysis import validate_window_size
+
+    size = validate_window_size(window_size)
+    saved_agents = metadata["parameters"].get("agent_value_columns", {})
+    agents, unavailable = _resolve_choice_window_agents(saved_agents, agent_selection, presentation_profile)
+    suffix = f"_{presentation_profile}" if presentation_profile is not None else ""
+    save_path = Path(plot_path) / f"{sess_id_full}_choice_window_{size}{suffix}_summary.png"
+    if save_path.exists():
+        return save_path
+    required = {"window_size", "window_index", "agent", "agreement"}
+    missing = sorted(required.difference(window_table.columns))
+    if missing:
+        raise ValueError(f"window_table is missing summary plotting columns: {missing}")
+    selected = window_table.loc[
+        window_table["window_size"].eq(size) & window_table["agent"].isin(agents),
+        ["window_index", "agent", "agreement"],
+    ].copy()
+    selected["agreement"] = pd.to_numeric(selected["agreement"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    # Adapt saved long-form windows to the block renderer's observation/model
+    # matrix. Rows stay individual windows; only the table layout changes.
+    values = selected.pivot(index="window_index", columns="agent", values="agreement").reindex(columns=agents)
+    base_labels = {CHOICE_WINDOW_AGENT_LABELS.get(agent, agent): agent for agent in agents}
+    display_labels = _choice_window_display_labels()
+    counts = values.count()
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    with plt.rc_context(_choice_window_plot_style()):
+        fig, ax = plt.subplots(figsize=(max(10, 1.15 * len(agents)), 8))
+        if agents:
+            _plot_agent_metric_summary_on_ax(
+                ax, values, base_labels, "Mouse-agent agreement", rng_seed=rng_seed,
+            )
+            labels = [f"{display_labels.get(agent, agent)}\nn={counts[agent]} windows" for agent in agents]
+            ax.set_xticks(np.arange(len(agents)), labels, rotation=35, ha="right")
+        else:
+            ax.set_ylim(-.05, 1.05)
+            ax.set_xticks([])
+            ax.set_xlabel("Agent")
+            ax.set_ylabel("Mouse-agent agreement")
+        if not counts.sum():
+            message = "No requested models available in saved results" if not agents else "No complete windows with usable predictions"
+            ax.text(.5, .5, message, ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(f"{size}-choice windows: median and IQR")
+        ax.spines[["right", "top"]].set_visible(False)
+        group = re.sub(r"_v[0-9]+$", "", presentation_profile).replace("_", " ").title() if presentation_profile else "All Models"
+        fig.suptitle(f"{sess_id_full} Choice-Window Agreement\n{group}", fontsize=17)
+        discarded = metadata.get("discarded_choices", {}).get(str(size), "unknown")
+        caption = (
+            f"Each dot is one non-overlapping {size}-choice window; finite windows receive equal weight.\n"
+            "Thick marks: medians; capped ranges: Q1-Q3 (IQR), not a confidence interval.\n"
+            "No-choice/manual-reward trials excluded; missing predictions reduce per-agent denominators.\n"
+            f"Incomplete tail discarded: {discarded} choices. Horizontal jitter seed={rng_seed}; no statistical tests."
+        )
+        if unavailable:
+            caption += "\nUnavailable models: " + ", ".join(display_labels.get(agent, agent) for agent in unavailable) + "."
+        fig.text(.02, .015, caption, fontsize=10, va="bottom")
+        # Leave separate space for angled model names/counts and the caption.
+        fig.subplots_adjust(left=.10, right=.97, bottom=.38, top=.80)
+        fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
+        plt.close(fig)
+    return save_path
+
+
+def _choice_window_display_labels() -> dict[str, str]:
+    """Return fresh model-key/readable-label mappings for window presentations.
+
+    No inputs or physical units. Labels do not change canonical model/color
+    identifiers or numerical data; callers may safely modify the returned dict.
+    """
+    return {
+        **CHOICE_WINDOW_AGENT_LABELS,
+        "perseveration_mouse_agreement": "Perseveration",
+        "simple_probe_persistence_mouse_agreement": "Probe + persistence",
+        "home_referenced_expectancy_doubt_mouse_agreement": "Home E + Doubt",
+    }
 
 
 def _resolve_choice_window_agents(

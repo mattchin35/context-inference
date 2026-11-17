@@ -3328,7 +3328,7 @@ def _plot_saved_choice_window_results(
     session_id: str,
     figure_path: Path,
 ) -> tuple[pd.DataFrame, Path]:
-    """Load saved results and generate/reuse combined and standalone session PNGs.
+    """Load saved results and generate/reuse timelines and distribution summaries.
 
     Inputs are a trusted results NPZ Path, source session ID string, and session
     figures-directory Path. Returns the long-form DataFrame and combined PNG Path;
@@ -3340,16 +3340,22 @@ def _plot_saved_choice_window_results(
         choice_window_presentation_groups,
         plot_session_choice_window_agreement,
         plot_session_choice_window_agreement_panel,
+        plot_session_choice_window_agreement_summary,
     )
 
     table, metadata = choice_window_results.load_choice_window_results(result_path)
     plot_directory = Path(figure_path) / "choice_window_agreement" / result_path.parent.name
     plot_path = plot_session_choice_window_agreement(table, metadata, plot_directory, session_id)
-    # Backfill missing presentation panels even when the combined PNG is cached.
+    # Backfill timelines and summaries even when the combined PNG is cached.
     for size in metadata["parameters"]["window_sizes"]:
         plot_session_choice_window_agreement_panel(table, metadata, plot_directory, session_id, size)
+        plot_session_choice_window_agreement_summary(table, metadata, plot_directory, session_id, size)
         for profile, agents in choice_window_presentation_groups().items():
             plot_session_choice_window_agreement_panel(
+                table, metadata, plot_directory, session_id, size,
+                agent_selection=agents, presentation_profile=profile,
+            )
+            plot_session_choice_window_agreement_summary(
                 table, metadata, plot_directory, session_id, size,
                 agent_selection=agents, presentation_profile=profile,
             )

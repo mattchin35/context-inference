@@ -102,3 +102,43 @@ values, with all earlier PNG/NPZ hashes preserved. The expanded suite passed
 137 tests, including legend separation from large axis labels. All four group
 exports were visually inspected. Their validation record is
 `presentation_comparisons_v1_validation.json` beside the PNGs.
+
+## Single-session distribution summaries
+
+The plotting workflow also exports three standalone summary figures per
+configured window size: all saved models, `main_comparison_v1`, and
+`strategy_comparison_v2`. For the default 10/20-choice sizes, these are six
+additional PNGs:
+
+- `<session>_choice_window_10_summary.png`
+- `<session>_choice_window_10_main_comparison_v1_summary.png`
+- `<session>_choice_window_10_strategy_comparison_v2_summary.png`
+- `<session>_choice_window_20_summary.png`
+- `<session>_choice_window_20_main_comparison_v1_summary.png`
+- `<session>_choice_window_20_strategy_comparison_v2_summary.png`
+
+Each dot represents one finite saved window agreement. A thick horizontal
+mark shows the median; a capped range shows Q1-Q3, using pandas' default
+linear-interpolation quartiles, as in the block-agreement summary. Windows
+receive equal weight even when prediction denominators differ. These are
+descriptive distributions, not confidence intervals or statistical tests.
+Each model's label reports its number of scored windows. Missing models are
+named in the caption; empty results produce a labeled placeholder.
+
+The summaries use an opaque white background, the existing model colors,
+readable labels, and 150-dpi PNG export. The all-model figure widens with the
+number of models. Horizontal jitter uses seed 0, recorded in the caption.
+No vertical jitter changes the agreement values.
+
+For direct export, call
+`performance_plots.plot_session_choice_window_agreement_summary` with the
+same first five arguments as the standalone timeline exporter. Omit selection
+arguments for all models, or supply both `agent_selection` and
+`presentation_profile` for a restricted figure. The optional `rng_seed`
+changes horizontal jitter only; use a separate output directory when changing
+it because existing filenames are reused.
+
+Only plotting changes: the trusted saved NPZ is loaded once by the workflow,
+with no model fitting, trial rescoring, or numerical analysis version change.
+Missing summary files are backfilled even when earlier figures already exist.
+Current block summaries, timeline plots, and numerical artifacts are preserved.
