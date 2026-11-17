@@ -81,6 +81,13 @@ def test_run_reuse_and_explicit_recompute_create_distinct_runs(
     assert saved.meta["seed"] == 0
     assert saved.computation.status in {"success", "partial", "unavailable"}
     assert "single-session" in (first.run_directory / "summary.md").read_text().lower()
+    summary = (first.run_directory / "summary.md").read_text()
+    log = (first.run_directory / "run.log").read_text()
+    assert "R2" in summary
+    assert "limitations" in summary.lower()
+    assert "warnings=" in log
+    assert "undefined_scores=" in log
+    assert "boundary_alphas=" in log
     original_bytes = first.result_path.read_bytes()
 
     def forbidden_compute(*args, **kwargs):
@@ -131,3 +138,70 @@ def test_reject_repository_output_and_changed_source_identity(
     monkeypatch.setattr(runner, "compute_communication_subspace", mutate_source)
     with pytest.raises(ValueError, match="source|changed|identity|configuration"):
         runner.run_session(config)
+
+
+@pytest.mark.parametrize("failure_stage", ["compute", "plot"])
+def test_failed_run_keeps_log_without_publishing_result(
+    synthetic_communication_session, monkeypatch, failure_stage,
+):
+    """Numerical or PNG failures leave an actionable run log and no reusable NPZ."""
+    config = CommunicationConfig(synthetic_communication_session, ROLES, bin_width_ms=500)
+
+    def failed(*args, **kwargs):
+        """Raise a reproducible failure at the selected run stage."""
+        raise RuntimeError(f"synthetic {failure_stage} failure")
+
+    if failure_stage == "compute":
+        monkeypatch.setattr(runner, "compute_communication_subspace", failed)
+    else:
+        monkeypatch.setattr(runner, "save_rank_figure", failed)
+    with pytest.raises(RuntimeError, match=f"synthetic {failure_stage} failure"):
+        runner.run_session(config)
+    base = synthetic_communication_session.parent / "communication_subspace"
+    runs = list((base / "runs").iterdir())
+    assert len(runs) == 1
+    log = (runs[0] / "run.log").read_text()
+    assert f"synthetic {failure_stage} failure" in log
+    assert "session_id=synthetic-communication" in log
+    assert "parameters=" in log
+    assert not list((base / "results").glob("*.npz"))
+
+
+def test_cli_flag_and_non_success_exit_status(synthetic_communication_session, monkeypatch):
+    """The documented metadata flag is accepted and partial/errors return exit 1."""
+    arguments = ["--session-metadata", str(synthetic_communication_session),
+                 "--pfc-probe", "A", "--hpc-probe", "B", "--dry-run"]
+    assert runner.main(arguments) == 0
+
+    def partial(*args, **kwargs):
+        """Return a diagnostic partial report for CLI status testing."""
+        return runner.RunReport("partial", None, None, "id", 0.1)
+
+    monkeypatch.setattr(runner, "run_session", partial)
+    assert runner.main(arguments) == 1
+
+    def invalid(*args, **kwargs):
+        """Raise an ordinary input failure for CLI status testing."""
+        raise ValueError("invalid synthetic session")
+
+    monkeypatch.setattr(runner, "run_session", invalid)
+    assert runner.main(arguments) == 1
+
+
+def test_identity_includes_dependency_versions_and_upstream_neural_code(monkeypatch):
+    """A dependency version change alters identity, and source list names reused code."""
+    upstream = {path.name for path in runner._code_source_paths()}
+    assert {"session_timeline.py", "session_timeline_io.py", "pca.py",
+            "loading.py", "session_metadata.py", "activity.py"} <= upstream
+    source = {"configuration_id": "source-id", "bin_width_ms": 100}
+    first = runner._effective_configuration(source)
+    assert {"numpy", "pandas", "pynapple", "scipy"} <= set(first["dependency_versions"])
+    changed = dict(first["dependency_versions"])
+    changed["pynapple"] = "synthetic-next-version"
+    def changed_versions():
+        """Return one modified dependency version for identity testing."""
+        return changed
+
+    monkeypatch.setattr(runner, "_dependency_versions", changed_versions)
+    second = runner._effective_configuration(source)
+    assert first["configuration_id"] != second["configuration_id"]
