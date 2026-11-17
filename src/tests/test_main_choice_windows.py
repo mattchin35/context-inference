@@ -163,7 +163,8 @@ def test_saved_window_plot_backfills_only_missing_standalone_files(main_module, 
     assert not table.empty and path == combined
     outputs = [directory / f"session_choice_window_{size}_agreement.png" for size in sizes]
     assert all(output.is_file() for output in outputs)
-    assert len(list(directory.glob("session_choice_window_*_agreement.png"))) == len(sizes)
+    # Each size now has the full standalone plus two presentation comparisons.
+    assert len(list(directory.glob("session_choice_window_*_agreement.png"))) == 3 * len(sizes)
     original = {output: output.read_bytes() for output in outputs}
     outputs[-1].unlink()
     main_module._plot_saved_choice_window_results(result_path, "session", tmp_path / "figures")
@@ -172,6 +173,30 @@ def test_saved_window_plot_backfills_only_missing_standalone_files(main_module, 
         assert output.read_bytes() == original[output]
     assert combined.read_bytes() == b"existing combined diagnostic"
     assert not list((tmp_path / "processed").rglob("*.png"))
+
+
+def test_saved_window_plot_adds_and_backfills_both_presentation_groups(main_module, tmp_path, monkeypatch):
+    """Input: saved QL-only results and existing figures. Add four group PNGs and preserve earlier files."""
+    from src.behavior_analysis import choice_window_results
+
+    trial = pd.DataFrame({"action": [0] * 43, "Qlearning_rel_value": [-1.] * 43})
+    _, result = choice_window_results.save_choice_window_results(trial, tmp_path / "processed", "session")
+    directory = tmp_path / "figures/choice_window_agreement" / result.parent.name
+    directory.mkdir(parents=True)
+    existing = [directory / "session_choice_window_agreement.png",
+                directory / "session_choice_window_10_agreement.png", directory / "session_choice_window_20_agreement.png"]
+    for path in existing:
+        path.write_bytes(b"earlier diagnostic or standalone")
+    monkeypatch.setattr(choice_window_results, "compute_trial_agent_agreements", fail_if_reached)
+    main_module._plot_saved_choice_window_results(result, "session", tmp_path / "figures")
+    outputs = [directory / f"session_choice_window_{size}_{profile}_agreement.png"
+               for size in (10, 20) for profile in ("main_comparison_v1", "strategy_comparison_v1")]
+    assert all(path.is_file() for path in outputs)
+    hashes = {path: path.read_bytes() for path in [*existing, *outputs[:-1]]}
+    outputs[-1].unlink()
+    main_module._plot_saved_choice_window_results(result, "session", tmp_path / "figures")
+    assert outputs[-1].is_file()
+    assert all(path.read_bytes() == contents for path, contents in hashes.items())
 
 
 def test_multisession_collection_resets_windows_and_preserves_blocks(main_module, tmp_path):
