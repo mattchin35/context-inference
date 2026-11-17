@@ -43,9 +43,8 @@ def compare(table, ids=PROBE_IDS, params=None):
     return history, comparison
 
 
-def test_probe_candidates_append_to_defaults_and_retain_native_choice_rule():
-    """No inputs; nine ordered defaults include native logistic drive scale 0.5."""
-    assert models.DEFAULT_MODEL_IDS == PREVIOUS_IDS + PROBE_IDS
+def test_optional_probe_candidates_retain_native_choice_rule():
+    """No inputs; both existing probe candidates retain native drive scale 0.5."""
     candidates = models.resolve_trial_policy_candidates(PROBE_IDS[::-1])
     assert tuple(candidate.model_id for candidate in candidates) == PROBE_IDS[::-1]
     assert models.effective_trial_policy_choice_parameters(candidates) == {
@@ -159,13 +158,14 @@ def test_only_selected_probe_parameters_are_validated(trials, model_id, field, v
 
 def test_nine_state_roundtrip_and_probe_parameters_in_cache_identity(trials, tmp_path):
     """Table/Path fixtures save nine-state [T,9] arrays and effective probe settings."""
-    history, comparison = compare(trials, models.DEFAULT_MODEL_IDS)
+    nine_ids = PREVIOUS_IDS + PROBE_IDS
+    history, comparison = compare(trials, nine_ids)
     smoothed = analysis.smooth_trial_policy_comparison(comparison)
     assert smoothed.hmm_smoothed_probs.shape == (len(trials), 9)
     np.testing.assert_allclose(smoothed.hmm_smoothed_probs.sum(axis=1), 1, atol=2e-6)
-    candidates = models.resolve_trial_policy_candidates()
+    candidates = models.resolve_trial_policy_candidates(nine_ids)
     meta = results.build_trial_policy_metadata(history, candidates, TaskParams(), parameter_source="test")
-    assert meta["analysis_version"] == "trial_policy_hmm_v6"
+    assert meta["analysis_version"] == results.ANALYSIS_VERSION
     assert "../behavior_modeling/expectant_switching.py" in results.ANALYSIS_SOURCE_FILES
     assert meta["candidate_parameters"][PROBE_IDS[0]] == {
         "persistence_weight": 1., "probe_weight": 2., "doubt_weight": 1.4, "doubt_lambda": .5}

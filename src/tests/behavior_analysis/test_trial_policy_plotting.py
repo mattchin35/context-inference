@@ -25,7 +25,7 @@ def capture_figure(monkeypatch):
     return captured
 
 
-def diagnostic_result(models=3, smoothing=True, session_id="source"):
+def diagnostic_result(models=3, smoothing=True, session_id="source", model_ids=None):
     """Return all-tied numerical result (T=5,K) plus plain diagnostic metadata."""
     from src.behavior_analysis import trial_policy_analysis as analysis
     from src.behavior_analysis.trial_policy_models import DEFAULT_MODEL_IDS, prepare_trial_policy_history
@@ -33,7 +33,7 @@ def diagnostic_result(models=3, smoothing=True, session_id="source"):
     table = pd.DataFrame({"cur_trial": [2, 3, 5, 6, 7], "cur_block": [1, 1, 2, 2, 2],
                           "action": [0, 1, "no_choice", 0, 1], "reward": [1, 0, 0, 1, 0]})
     history = prepare_trial_policy_history(table, session_id=session_id)
-    ids = (*DEFAULT_MODEL_IDS, "synthetic_fourth")[:models]
+    ids = (*DEFAULT_MODEL_IDS, "synthetic_fourth")[:models] if model_ids is None else model_ids
     result = analysis.compute_trial_policy_comparison(history, np.zeros((5, models)),
                                                        np.ones((5, models), bool), ids)
     if smoothing:
@@ -43,7 +43,7 @@ def diagnostic_result(models=3, smoothing=True, session_id="source"):
 
 
 @pytest.mark.parametrize("smoothing,panels", [(True, 5), (False, 3)])
-@pytest.mark.parametrize("models", [1, 3, 4, 6, 7, 9])
+@pytest.mark.parametrize("models", [1, 3, 4, 6, 7, 8, 9])
 def test_saved_result_plot_panels_tied_winners_and_excluded_rows(tmp_path, capture_figure, monkeypatch, smoothing, panels, models):
     """Numerical artifacts yield opaque PNG panels without any inference call."""
     from src.behavior_analysis import trial_policy_plotting as plotting
@@ -150,8 +150,11 @@ def test_probe_models_have_distinct_labeled_rows(tmp_path, capture_figure):
         effective_trial_policy_choice_parameters, resolve_trial_policy_candidates,
     )
 
-    result, metadata = diagnostic_result(models=9)
-    metadata["candidate_choice_parameters"] = effective_trial_policy_choice_parameters(resolve_trial_policy_candidates())
+    nine_ids = ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch", "q_learning",
+                "reward_decay_hmm", "ideal_observer", "immediate_persistence",
+                "probe_persistence_doubt", "home_referenced_expectancy_doubt")
+    result, metadata = diagnostic_result(models=9, model_ids=nine_ids)
+    metadata["candidate_choice_parameters"] = effective_trial_policy_choice_parameters(resolve_trial_policy_candidates(nine_ids))
     plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "nine.png")
     figure = capture_figure[-1]
     assert len({plotting._model_color(str(model_id)) for model_id in result.model_ids}) == 9
@@ -160,6 +163,24 @@ def test_probe_models_have_distinct_labeled_rows(tmp_path, capture_figure):
     assert np.asarray(figure.axes[2].images[0].get_array()).shape == (9, 5, 4)
     caption = " ".join(" ".join(text.get_text() for text in figure.texts).lower().split())
     assert "0.5" in caption and "probe doubt" in caption and "home expectancy" in caption
+
+
+def test_default_win_switch_row_and_discrete_caption(tmp_path, capture_figure):
+    """Path/Figure fixtures label eight defaults, retaining the discrete choice rule."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+    from src.behavior_analysis.trial_policy_models import (
+        effective_trial_policy_choice_parameters, resolve_trial_policy_candidates,
+    )
+
+    result, metadata = diagnostic_result(models=8)
+    metadata["candidate_choice_parameters"] = effective_trial_policy_choice_parameters(resolve_trial_policy_candidates())
+    plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "eight.png")
+    figure = capture_figure[-1]
+    labels = [label.get_text() for label in figure.axes[2].get_yticklabels()]
+    assert labels == ["FQL", "Bayes HMM", "WSLS", "QL", "Observer", "Persistence", "Win-switch", "Home expectancy"]
+    assert len({plotting._model_color(str(model_id)) for model_id in result.model_ids}) == 8
+    caption = " ".join(" ".join(text.get_text() for text in figure.texts).lower().split())
+    assert "discrete policies: wsls, persistence, win-switch" in caption
 
 
 def test_model_colors_are_stable_under_candidate_reordering(tmp_path, capture_figure):
