@@ -185,6 +185,7 @@ def test_renderer_preserves_gaps_equal_mouse_weight_and_optional_caption(cohort,
     np.testing.assert_allclose(lines["A"].get_ydata(), [0., np.nan, 1.], equal_nan=True)
     np.testing.assert_allclose(lines["group mean"].get_ydata(), [.5, 0., 1.])
     assert lines["group mean"].get_color() == "black"
+    assert lines["A"].get_marker() == "None"
     assert axis.get_title() == "Ideal agreement: 10-choice windows"
     figure.canvas.draw()
     renderer = figure.canvas.get_renderer()
@@ -211,6 +212,9 @@ def test_synthetic_end_to_end_outputs_and_source_preservation(cohort, closed_fig
     assert metadata["analysis_version"] == "cross_mouse_choice_windows_v1"
     for filename in ("main.py", "cross_mouse_choice_windows.py", "performance_plots.py", "summary.md", "run.log"):
         assert (directory / filename).is_file()
+    for figure in _figures(closed_figures):
+        for line in figure.axes[0].lines:
+            assert line.get_marker() == "o"  # Isolated finite session values remain visible beside NaN gaps.
     assert all(path.read_bytes() == contents for path, contents in before.items())
 
 
@@ -275,3 +279,20 @@ def test_cohort_cannot_mix_consistent_but_different_mouse_versions(cohort):
     path.write_text(json.dumps(meta))
     with pytest.raises(ValueError, match="version"):
         loader()(root, runs)
+
+
+def test_four_line_caption_clears_large_axis_labels(closed_figures, tmp_path):
+    """The production four-line caption stays below the x-axis label at presentation font sizes."""
+    table = pd.DataFrame({"mouse": ["A", "A"], "training_day": [1, 2], "metric_value": [.4, .7]})
+    caption = ("Ideal agreement: median across complete 10-choice windows within each session.\n"
+               "Black curve: mean of available mouse medians, with equal weight per mouse.\n"
+               "Training Day is chronological session number; unavailable values retain gaps.\n"
+               "Contributing mouse counts are saved in group_summary.csv; no statistical tests.")
+    with plt.rc_context({"axes.labelsize": 18, "axes.titlesize": 18, "xtick.labelsize": 16, "ytick.labelsize": 16}):
+        plots.plot_cross_mouse_session_metric_curve(
+            table, tmp_path, "demo", "ideal_10_choice", "Ideal-agent agreement",
+            title="Ideal agreement: 10-choice windows", caption=caption, ylim=(0, 1))
+    figure = _figures(closed_figures)[0]
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    assert figure.texts[-1].get_window_extent(renderer).y1 + 5 < figure.axes[0].get_tightbbox(renderer).y0
