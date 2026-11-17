@@ -99,8 +99,10 @@ def _plot_direction(axis, draw_scores: pd.DataFrame, curve_scores: pd.DataFrame,
 
     rrr_curves = curve_rows.loc[curve_rows["model"] == "rrr"].sort_values("rank")
     if not rrr_curves.empty:
+        complete_means = rrr_curves["mean_r2"].to_numpy(dtype=float).copy()
+        complete_means[rrr_curves["status"].to_numpy() != "ok"] = np.nan
         axis.plot(rrr_curves["rank"].to_numpy(dtype=float),
-                  rrr_curves["mean_r2"].to_numpy(dtype=float), color=color,
+                  complete_means, color=color,
                   linestyle=line_style, linewidth=2.5, marker="o", markersize=5,
                   label=f"{title} RRR")
     baseline = curve_rows.loc[curve_rows["model"] == "ridge"]
@@ -109,7 +111,28 @@ def _plot_direction(axis, draw_scores: pd.DataFrame, curve_scores: pd.DataFrame,
         axis.plot([1, max_rank], [baseline["mean_r2"].iloc[0]] * 2,
                   color=color, linestyle=":", linewidth=1.8,
                   label=f"{title} ridge ({int(baseline['n_draws'].iloc[0])} draws)")
+    _plot_incomplete_means(axis, rrr_curves, title, color)
     _plot_paired_incomplete(axis, draw_rows, rrr_curves, direction, title, color)
+
+
+def _plot_incomplete_means(axis, rrr_curves: pd.DataFrame, title: str, color: str) -> None:
+    """Draw incomplete means on a Matplotlib Axes; return None.
+
+    ``rrr_curves`` is a DataFrame with one row per integer coefficient rank,
+    containing status, dimensionless mean_r2, and n_draws. ``title`` and
+    ``color`` are strings used for legend labels and Matplotlib styling.
+    """
+    labeled = False
+    for curve in rrr_curves.itertuples():
+        if curve.status == "ok" or not np.isfinite(curve.mean_r2):
+            continue
+        rank = int(curve.rank)
+        label = (f"{title} incomplete mean rank {rank} ({int(curve.n_draws)} draws)"
+                 if not labeled else "_nolegend_")
+        axis.plot([rank], [float(curve.mean_r2)], marker="o", linestyle="None",
+                  color=color, markerfacecolor="white", markeredgewidth=1.5,
+                  markersize=9, label=label)
+        labeled = True
 
 
 def _plot_paired_incomplete(axis, draw_rows: pd.DataFrame, rrr_curves: pd.DataFrame,
