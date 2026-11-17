@@ -90,7 +90,7 @@ def _install_saved_result(monkeypatch, tmp_path):
         session_id="synthetic-communication", time_origin_s=0.0,
         choices=pd.DataFrame({"choice_time": [10.0]}),
         selected_trials=pd.DataFrame({"cur_trial": [100]}),
-        choice_positions=[0], unit_ids={"PFC": ("A:0",), "HPC": ("B:0",)},
+        choice_positions=[0], unit_ids={"PFC": ("A:0", "A:1"), "HPC": ("B:0", "B:1")},
         bin_edges_s=[-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0],
         probe_roles={"PFC": "A", "HPC": "B"},
         computation=SimpleNamespace(
