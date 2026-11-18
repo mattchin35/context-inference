@@ -82,7 +82,7 @@ def _choose_examples(episodes: pd.DataFrame | None, roster: pd.DataFrame) -> pd.
         compact = str(name).replace("-", "").replace("_", "").lower()
         priorities[name] = next((j for j, day in enumerate(dates)
                                  if "ct026" in compact and day in compact), len(dates) + i)
-    available = episodes[episodes.status == "ok"].copy()
+    available = episodes[episodes.status == "available"].copy()
     available["priority"] = available.session_id.map(priorities)
     selected = available.sort_values("priority", kind="stable").drop_duplicates("motif")
     return selected.merge(roster[["session_id", "manifest"]], on="session_id")[columns]

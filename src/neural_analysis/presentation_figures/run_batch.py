@@ -5,6 +5,7 @@ from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 import hashlib
 import json
+from multiprocessing import get_context
 from pathlib import Path
 import shutil
 from time import perf_counter
@@ -42,7 +43,7 @@ def run_batch(metadata_paths: list[Path] | tuple[Path, ...], *, output_root: Pat
     if dry_run or count == 1:
         sessions = [action(path) for path in paths]
     else:
-        with ProcessPoolExecutor(max_workers=count) as pool:
+        with ProcessPoolExecutor(max_workers=count, mp_context=get_context("spawn")) as pool:
             sessions = list(pool.map(action, paths))
     report = dict(sessions=sessions, workers=count, manifest=None)
     if dry_run:
@@ -58,7 +59,8 @@ def run_batch(metadata_paths: list[Path] | tuple[Path, ...], *, output_root: Pat
     fields = assemble_cohort(sessions)
     ids = [s["session_id"] for s in sessions]
     directory = new_run_directory(output_root)
-    meta = dict(producer="presentation_figures.assemble_cohort", seed=seed, session_ids=ids,
+    mouse_id = next((s["mouse_id"] for s in sessions if s.get("mouse_id")), "")
+    meta = dict(producer="presentation_figures.assemble_cohort", mouse_id=mouse_id, seed=seed, session_ids=ids,
                 parameters={"alpha": 0.1, "draws": 5}, axes={"tables": "one row per labeled observation"},
                 units={"balanced_accuracy": "fraction", "mean_r2": "dimensionless"})
     results.save_result(directory / "cohort.npz", fields, meta)
