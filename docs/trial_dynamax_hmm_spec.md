@@ -1,6 +1,22 @@
 # Codex specification: trialwise comparison of fixed behavioral policies
 
-**Current defaults (2026-11-17, v8):** FQL, Bayesian HMM, WSLS, Q-learning,
+**Current defaults (2026-11-17, v9):** FQL, Bayesian HMM, WSLS, Q-learning,
+ideal observer, weighted perseveration, win-switch/lose-stay, home-referenced
+expectancy doubt, and chance. The appended `chance` candidate assigns
+`P(Left)=P(Right)=.5` and observed-choice log likelihood `-ln(2)` on every common
+eligible comparison. It has no history, fitted parameters, temperature, error
+rate, or sampled choices. Its explicit readout rule is `constant_half` and its
+history rule is `none`. Missing rewards do not prevent its predictions;
+excluded comparison rows still contribute zero HMM evidence for every state.
+
+The nine states have equal initial priors and the existing .9 stay probability;
+off-diagonal entries are .1/8. All previous policy readouts remain unchanged,
+and the original eight-model subset stays selectable. Chance support describes
+relative predictive adequacy under these models, rather than identifying
+intrinsically random behavior. Its HMM posterior varies despite constant choice
+probabilities. Chance has no greedy side; the 20-choice agreement code is unchanged.
+
+**Previous defaults (2026-11-17, v8):** FQL, Bayesian HMM, WSLS, Q-learning,
 ideal observer, weighted perseveration, win-switch/lose-stay, and home-referenced
 expectancy doubt. `perseveration` replaces default `immediate_persistence`, which
 remains selectable. It reuses the window feature's exponentially weighted

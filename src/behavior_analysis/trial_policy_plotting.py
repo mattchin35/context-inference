@@ -27,6 +27,7 @@ _KNOWN_COLORS = {
     "perseveration": "#e7298a",
     "probe_persistence_doubt": "#e377c2",
     "home_referenced_expectancy_doubt": "#7f7f7f",
+    "chance": "#000000",
     "synthetic_fourth": "#9467bd",
 }
 _MODEL_LABELS = {
@@ -41,6 +42,7 @@ _MODEL_LABELS = {
     "perseveration": "Perseveration",
     "probe_persistence_doubt": "Probe doubt",
     "home_referenced_expectancy_doubt": "Home expectancy",
+    "chance": "Chance",
 }
 
 
@@ -243,6 +245,7 @@ def _caption(results: Sequence[Any], metadata_records: Sequence[dict[str, Any]],
     if any(choice_records):
         graded = []
         discrete = []
+        constant = []
         for model_id in model_ids:
             settings = [record.get(str(model_id), {}) for record in choice_records]
             temperatures = sorted({str(item["temperature"]) for item in settings if item.get("rule") == "logistic"})
@@ -251,6 +254,8 @@ def _caption(results: Sequence[Any], metadata_records: Sequence[dict[str, Any]],
                 graded.append(f"{label}={','.join(temperatures)}")
             if any(item.get("rule") == "fixed_error" for item in settings):
                 discrete.append(label)
+            if any(item.get("rule") == "constant_half" for item in settings):
+                constant.append(label)
         choice_text = ""
         if graded:
             choice_text += ("Logistic P(Left)=sigmoid(score/temperature), without a probability cap or lapse. "
@@ -258,6 +263,8 @@ def _caption(results: Sequence[Any], metadata_records: Sequence[dict[str, Any]],
         if discrete:
             choice_text += (f"Discrete policies: {', '.join(discrete)}; opposite-action error probability: "
                             f"{', '.join(error_values)}. ")
+        if constant:
+            choice_text += (f"Constant baseline: {', '.join(constant)} assigns P(Left)=P(Right)=0.5. ")
     else:
         # Older artifacts used the same fixed-error mapping for every policy.
         choice_text = f"Shared opposite-action error probability: {', '.join(error_values)}. "

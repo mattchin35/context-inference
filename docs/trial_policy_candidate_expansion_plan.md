@@ -4,6 +4,30 @@ Status: implemented and validated on 2026-11-08 after user approval. This extend
 first round in `trial_dynamax_hmm_implementation_plan.md` and follows the causal
 history and probability contracts in `trial_dynamax_hmm_spec.md`.
 
+2026-11-17 chance revision (v9): the user approved a ninth default, `chance`,
+with constant .5 left/right probabilities and `-ln(2)` observed-choice evidence.
+It has no history or free parameters, with explicit `constant_half` readout
+and `none` history metadata. It shares the existing priors, transitions,
+eligibility masks, smoother, arrays, and membership grids. Original eight-model
+subsets remain available. See `trial_policy_chance_implementation_plan.md` for
+the complete approved scope and acceptance checks.
+
+Tests were written, confirmed failing, and committed first as `9a275a9`.
+The adapter, one probability-conversion branch, metadata version/description,
+and Chance label/color/caption are the only production additions. There are no
+new dependencies or changes to existing candidate parameters, main entry points,
+or the 20-choice agreement analysis.
+
+The complete v9 implementation passed 348 distinct tests: 326 policy/model/plot
+checks and 22 main trial-workflow cases. Synthetic validation passed with 140
+retained rows and 137 eligible choices; designated CT016 May 29 validation passed
+with 858 eligible choices. All eight retained models have exactly unchanged
+scores, availability, probabilities, and likelihoods. Earlier artifacts and
+non-policy data were preserved. The inspected nine-model figure and full report
+are linked in the completion section of the detailed chance implementation plan.
+Chance mean posterior is .3838 and largest-posterior membership is .5524; these
+remain conditional retrospective model-support summaries. No batch was run.
+
 2026-11-17 perseveration revision (v8): the user approved replacing default
 `immediate_persistence` with `perseveration`, retaining the former as an optional
 candidate. This aligns the choice-history computation with the window plots:

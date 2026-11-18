@@ -113,7 +113,8 @@ def compute_trial_policy_comparison(
     complement below one. Returns full-row TrialPolicyResult, without HMM fields
     or I/O. Unavailable comparisons have NaN likelihoods/probabilities/residuals.
     choice_parameters maps each model ID to a logistic rule/positive temperature
-    in score units or a fixed-error rule/error probability. None preserves the
+    in score units, a fixed-error rule/error probability, or constant_half for
+    parameter-free 50/50 choices. None preserves the
     original fixed-error interface for generic callers. Normal workflows pass
     candidate-specific settings. Logistic likelihoods are evaluated directly in
     log space without clipping choice probabilities. policy_scores saves (T,K)
@@ -201,6 +202,10 @@ def _choice_probability_arrays(
             probabilities[rows, column] = expit(-logits)
             log_right[rows, column] = log_expit(-logits)
             log_left[rows, column] = log_expit(logits)
+        elif settings.get("rule") == "constant_half":
+            probabilities[rows, column] = .5
+            log_right[rows, column] = -np.log(2)
+            log_left[rows, column] = -np.log(2)
         elif settings.get("rule") == "fixed_error":
             error = float(settings.get("opposite_action_error_prob", default_error))
             if not np.isfinite(error) or not 0 < error < .5 or not 0 < 1 - error < 1:

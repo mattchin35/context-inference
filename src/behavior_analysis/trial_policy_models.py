@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 DEFAULT_MODEL_IDS = (
     "forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
     "q_learning", "ideal_observer", "perseveration",
-    "win_switch_lose_stay", "home_referenced_expectancy_doubt",
+    "win_switch_lose_stay", "home_referenced_expectancy_doubt", "chance",
 )
 FLAG_COLUMN_NAMES = ("give_reward", "experimenter_reward_given")
 _BELIEF_PARAMETER_NAMES = (
@@ -78,7 +78,8 @@ class TrialPolicyCandidate:
     and indifference_rule are strings for plain saved provenance. The default
     history_update_rule requires an observed choice/outcome pair; choice-only
     policies record observed_choice instead and do not require reward.
-    choice_rule is fixed_error or logistic; choice_temperature is a positive
+    Stateless candidates record history_update_rule="none". choice_rule is
+    fixed_error, logistic, or constant_half; choice_temperature is a positive
     fixed scale in this adapter's score units for logistic choices, else None.
     """
 
@@ -269,6 +270,8 @@ def resolve_trial_policy_candidates(
                              ("home_expectancy_threshold", "home_expectancy_scale", "home_expectancy_weight",
                               "home_doubt_weight", "home_doubt_lambda"),
                              choice_rule="logistic", choice_temperature=.5),
+        TrialPolicyCandidate("chance", "Chance", _replay_chance,
+                             history_update_rule="none", choice_rule="constant_half"),
     )
     by_id = {definition.model_id: definition for definition in definitions}
     unknown = [model_id for model_id in model_ids if model_id not in by_id]
@@ -338,7 +341,8 @@ def effective_trial_policy_choice_parameters(
     use declared defaults. Known unselected graded IDs may be supplied for reuse
     of one configuration with subsets. error_prob is the discrete policies'
     dimensionless opposite-action probability. Returns a plain per-ID mapping
-    containing rule/temperature or rule/error settings for selected IDs only.
+    containing rule/temperature, rule/error, or parameter-free constant_half
+    settings for selected IDs only.
     """
     error = float(error_prob)
     if not np.isfinite(error) or not 0 < error < .5 or not 0 < 1 - error < 1:
@@ -357,6 +361,8 @@ def effective_trial_policy_choice_parameters(
             temperature = _choice_temperature(overrides.get(candidate.model_id, candidate.choice_temperature),
                                               candidate.model_id)
             effective[candidate.model_id] = {"rule": "logistic", "temperature": temperature}
+        elif candidate.choice_rule == "constant_half":
+            effective[candidate.model_id] = {"rule": "constant_half"}
         elif candidate.choice_rule == "fixed_error":
             effective[candidate.model_id] = {"rule": "fixed_error", "opposite_action_error_prob": error}
         else:
@@ -501,6 +507,17 @@ def _feature_arrays(values: Any, skip_flags: np.ndarray) -> tuple[np.ndarray, np
     if invalid_rows.size:
         raise ValueError(f"non-finite policy prediction at row {invalid_rows[0]}")
     return scores, available
+
+
+def _replay_chance(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
+    """Return zero float64[T] scores and eligible-choice bool[T] availability.
+
+    Scores are dimensionless and NaN on excluded attempts. TaskParams is unused;
+    the constant_half readout supplies 50/50 probabilities without model state,
+    including on eligible choices with missing rewards.
+    """
+    scores = np.where(history.comparison_valid, 0., np.nan)
+    return scores, history.comparison_valid.copy()
 
 
 def _replay_fql(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:

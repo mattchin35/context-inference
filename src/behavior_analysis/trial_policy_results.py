@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from .trial_policy_models import PreparedTrialHistory, TrialPolicyCandidate
     from .gather_trial_features import TaskParams
 
-ANALYSIS_VERSION = "trial_policy_hmm_v8"
+ANALYSIS_VERSION = "trial_policy_hmm_v9"
 ANALYSIS_SOURCE_FILES = (
     "trial_policy_models.py", "trial_policy_analysis.py", "trial_policy_results.py",
     "trial_features.py", "project_utils.py", "gather_trial_features.py",
@@ -81,7 +81,7 @@ def build_trial_policy_metadata(history: "PreparedTrialHistory", candidates: "Se
         "candidate_choice_parameters": choice_parameters,
         "choice_temperature_source": "approved fixed defaults" if choice_temperatures is None
                                      else "explicit overrides plus approved fixed defaults",
-        "choice_probability_definition": "logistic P(Left)=expit(score/temperature), no cap or lapse; discrete policies use fixed opposite-action error",
+        "choice_probability_definition": "logistic P(Left)=expit(score/temperature), no cap or lapse; discrete policies use fixed opposite-action error; constant_half assigns P(Left)=P(Right)=0.5",
         "parameter_source": str(parameter_source),
         "input_digest": history.metadata["input_digest"],
         "source_flag_columns": list(history.metadata["source_flag_columns"]),
