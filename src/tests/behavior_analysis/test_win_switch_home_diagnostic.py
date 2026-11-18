@@ -104,3 +104,36 @@ def test_quick_entry_uses_saved_session_resolver(monkeypatch, tmp_path):
     main.main_mouse_win_switch_home_diagnostic()
     assert calls[0]["mouse"] == "CT016" and calls[0]["date"] == "2026-05-29"
     assert calls[1] is session
+
+
+def test_ties_keep_history_across_context_blocks(trials):
+    """A zero score repeats the preceding greedy choice, including across blocks."""
+    trials["wsls_regressor"] = [-1, None, 0, 0]
+    trials["observer_value"] = [1, None, 0, 0]
+    from src.behavior_analysis.win_switch_home import prepare_win_switch_home_data
+
+    _, spans, _ = prepare_win_switch_home_data(trials)
+    assert spans.win_switch_lose_stay_mouse_agreement.tolist() == [1, 0.5]
+    assert spans.observer_mouse_agreement.tolist() == [1, 0.5]
+
+
+def test_missing_inputs_fail_before_creating_outputs(trials, tmp_path):
+    session = type("Session", (), dict(processed_data_path=tmp_path / "processed",
+        figure_path=tmp_path / "figures", sess_id_full="synthetic"))()
+    with pytest.raises(ValueError, match="home_referenced_expectancy_doubt_expectancy_choice"):
+        main.save_and_plot_win_switch_home_for_session(
+            session, trials.drop(columns="home_referenced_expectancy_doubt_expectancy_choice"))
+    assert not session.processed_data_path.exists()
+    assert not session.figure_path.exists()
+
+
+def test_new_data_and_rerun_preserve_previous_results(trials, tmp_path):
+    session = type("Session", (), dict(processed_data_path=tmp_path / "processed",
+        figure_path=tmp_path / "figures", sess_id_full="synthetic"))()
+    first = main.save_and_plot_win_switch_home_for_session(session, trials, feature_parameters={"home_weight": 1})
+    original = {key: path.read_bytes() for key, path in first.items()}
+    second = main.save_and_plot_win_switch_home_for_session(session, trials, feature_parameters={"home_weight": 2})
+    assert first["results"] != second["results"]
+    rerun = main.save_and_plot_win_switch_home_for_session(session, trials, feature_parameters={"home_weight": 1}, rerun=True)
+    assert rerun["results"] != first["results"]
+    assert original == {key: path.read_bytes() for key, path in first.items()}
