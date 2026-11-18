@@ -43,7 +43,7 @@ def test_default_single_runner_saves_aligned_outputs_and_reuses_only_arrays(tmp_
     attached, result, path = main.run_dynamax_trial_analysis(trials, source.session, feature_params=TaskParams(), plot=True)
     assert result.p_right.shape == (6, 8) and path.exists()
     assert tuple(result.model_ids) == ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
-                                       "q_learning", "ideal_observer", "immediate_persistence",
+                                       "q_learning", "ideal_observer", "perseveration",
                                        "win_switch_lose_stay", "home_referenced_expectancy_doubt")
     ql = list(result.model_ids).index("q_learning")
     assert result.p_right[1, ql] == pytest.approx(1 / (1 + np.exp(-.3 / .14)))
@@ -101,7 +101,27 @@ def test_single_temperature_override_changes_cache_and_saves_effective_rule(tmp_
     assert metadata["candidate_choice_parameters"]["q_learning"] == {"rule": "logistic", "temperature": .3}
 
 
+def test_saved_perseveration_decay_and_graded_readout_are_used(tmp_path):
+    """Path fixture resolves a saved decay into weighted scores[T,1] and cache metadata."""
+    import src.main as main
+    from src.behavior_analysis import trial_features
+    from src.behavior_analysis.trial_policy_results import load_trial_policy_results
+
+    source = source_session(tmp_path)
+    (source.session.processed_data_path / "trial_feature_params.json").write_text(
+        json.dumps({"perseveration_decay": .6}), encoding="ascii")
+    _, comparison, path = main.run_dynamax_trial_analysis(
+        source.augmented_trial_df, source.session, model_ids=("perseveration",), plot=False)
+    expected = trial_features.perseveration_regressor(source.augmented_trial_df.action.to_numpy(), decay=.6)
+    np.testing.assert_array_equal(comparison.policy_scores[:, 0], expected)
+    np.testing.assert_allclose(comparison.p_right[:, 0], 1 / (1 + np.exp(expected * np.log(9))))
+    _, metadata = load_trial_policy_results(path)
+    assert metadata["candidate_parameters"]["perseveration"] == {"decay": .6}
+    assert metadata["candidate_choice_parameters"]["perseveration"]["temperature"] == pytest.approx(1 / np.log(9))
+
+
 @pytest.mark.parametrize("ids", [("immediate_persistence",), ("ideal_observer", "q_learning"),
+                                   ("perseveration", "immediate_persistence"),
                                    ("win_switch_lose_stay",), ("reward_decay_hmm", "probe_persistence_doubt"),
                                    ("home_referenced_expectancy_doubt", "probe_persistence_doubt"),
                                    ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch")])
@@ -134,7 +154,7 @@ def test_validation_failure_records_parent_error_without_success_artifact(tmp_pa
     record = json.loads((logs[0].parent / "metadata.json").read_text())
     assert record["requested_options"]["error_prob"] == .1
     assert record["requested_options"]["model_ids"] == ["forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
-                                                         "q_learning", "ideal_observer", "immediate_persistence",
+                                                         "q_learning", "ideal_observer", "perseveration",
                                                          "win_switch_lose_stay", "home_referenced_expectancy_doubt"]
     assert not list(source.session.processed_data_path.glob("trial_policy_hmm/*/*/*/results.npz"))
 

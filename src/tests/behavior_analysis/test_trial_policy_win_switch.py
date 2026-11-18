@@ -15,7 +15,7 @@ from src.behavior_modeling.benchmark_models import ObservableHistory, build_obse
 
 
 DEFAULT_IDS = ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch", "q_learning",
-               "ideal_observer", "immediate_persistence", "win_switch_lose_stay",
+               "ideal_observer", "perseveration", "win_switch_lose_stay",
                "home_referenced_expectancy_doubt")
 
 
@@ -111,7 +111,7 @@ def test_eight_model_roundtrip_and_metadata(trials, tmp_path):
     np.testing.assert_allclose(smoothed.hmm_smoothed_probs.sum(axis=1), 1, atol=2e-6)
     meta = results.build_trial_policy_metadata(
         history, models.resolve_trial_policy_candidates(), TaskParams(), parameter_source="test")
-    assert meta["analysis_version"] == "trial_policy_hmm_v7"
+    assert meta["analysis_version"] == results.ANALYSIS_VERSION
     assert meta["candidate_parameters"]["win_switch_lose_stay"] == {}
     path = results.save_trial_policy_results(smoothed, processed_data_path=tmp_path, metadata=meta)
     restored, saved = results.load_trial_policy_results(path)

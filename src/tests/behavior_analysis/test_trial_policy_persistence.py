@@ -27,9 +27,9 @@ def replay(table, ids=("immediate_persistence",)):
     return history, scores, available
 
 
-def test_seventh_default_is_parameter_free_and_left_positive(choices):
+def test_optional_immediate_persistence_is_parameter_free_and_left_positive(choices):
     """Table[T,C] yields actual previous-choice scores in {-1,0,+1}, unitless."""
-    assert "immediate_persistence" in models.DEFAULT_MODEL_IDS
+    assert "immediate_persistence" not in models.DEFAULT_MODEL_IDS
     _, scores, available = replay(choices)
     np.testing.assert_array_equal(scores[:, 0], [0, 1, 1, -1, 1, -1])
     assert available.all()

@@ -118,7 +118,9 @@ def test_persistence_has_a_distinct_labeled_seventh_row(tmp_path, capture_figure
     """Path/Figure fixtures preserve a distinct persistence color and seven rows."""
     from src.behavior_analysis import trial_policy_plotting as plotting
 
-    result, metadata = diagnostic_result(models=7)
+    historical_ids = ("forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch", "q_learning",
+                      "reward_decay_hmm", "ideal_observer", "immediate_persistence")
+    result, metadata = diagnostic_result(models=7, model_ids=historical_ids)
     plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "seven.png")
     figure = capture_figure[-1]
     assert len({plotting._model_color(str(model_id)) for model_id in result.model_ids}) == 7
@@ -177,10 +179,24 @@ def test_default_win_switch_row_and_discrete_caption(tmp_path, capture_figure):
     plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "eight.png")
     figure = capture_figure[-1]
     labels = [label.get_text() for label in figure.axes[2].get_yticklabels()]
-    assert labels == ["FQL", "Bayes HMM", "WSLS", "QL", "Observer", "Persistence", "Win-switch", "Home expectancy"]
+    assert labels == ["FQL", "Bayes HMM", "WSLS", "QL", "Observer", "Perseveration", "Win-switch", "Home expectancy"]
     assert len({plotting._model_color(str(model_id)) for model_id in result.model_ids}) == 8
     caption = " ".join(" ".join(text.get_text() for text in figure.texts).lower().split())
-    assert "discrete policies: wsls, persistence, win-switch" in caption
+    assert "discrete policies: wsls, win-switch" in caption
+    assert "perseveration=" in caption
+
+
+def test_weighted_and_immediate_persistence_have_distinct_labels_and_colors(tmp_path, capture_figure):
+    """Path/Figure fixtures distinguish both histories when explicitly selected together."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+    from src.behavior_analysis.trial_policy_models import DEFAULT_MODEL_IDS
+
+    ids = (*DEFAULT_MODEL_IDS, "immediate_persistence")
+    result, metadata = diagnostic_result(models=9, model_ids=ids)
+    plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "both.png")
+    labels = [text.get_text() for text in capture_figure[-1].axes[2].get_yticklabels()]
+    assert "Perseveration" in labels and "Persistence" in labels
+    assert plotting._model_color("perseveration") != plotting._model_color("immediate_persistence")
 
 
 def test_model_colors_are_stable_under_candidate_reordering(tmp_path, capture_figure):
