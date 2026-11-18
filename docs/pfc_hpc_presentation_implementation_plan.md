@@ -4,11 +4,23 @@
 
 ## 0. Live implementation handoff
 
-As of 2026-11-18, this work is in planning and review. Both documents are tracked on `refactor` (reviewed at `e0680a6`). All slices below are unassigned. On implementation approval, verify the checkout and begin slice 1 RED. Confirm pilot designation before running CT026 August 28. User inspection of the pilot precedes the four-session batch.
+The user approved implementation at `bac89e5`, selected a white background and designated CT026 August 28 for the experimental pilot. User inspection of the pilot precedes the four-session batch.
 
-The proposed pilot metadata is `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/neural_session.json`. Its trial table contains 696 ordinary choices in 95 task blocks (48 left-context, 47 right-context). All 374 rewarded ordinary choices with recorded delivery times had latency under 100 ms. The [prior communication-subspace pilot](communication_subspace_implementation_plan.md) recorded 125 PFC and 245 HPC good units (matched n=62). Recheck support on this workflow's inputs.
+| Delivered work | Owner | Tests-first and implementation commits |
+| --- | --- | --- |
+| Good-unit preparation, common windows and folds | Inputs | `7ebe697`, `f8435c1` |
+| Regional decoding, PC recovery and prediction | Decoding and Prediction | `57f56a1`, `7c8105b`, `9d7b364` |
+| Session replay selection, held-out CCA and replay rendering | Decoding and Inputs | `e5658ba`, `a78ce44`, `a6a795d`, `1cc5865` |
+| Archives, session/batch execution and cohort assembly | Lead | `5b8cc21`, `5cb7c44`, `5c241fa`, `0e4bf28`, `d4e8820` |
+| Figure export, Streamlit and synthetic acceptance | All three workers and lead | `08bdde0`, `6bff650`, `a71718b`, `d4e8820`, `10c7450` |
 
-For Figure 5, retain per-draw ridge scores. Verify that each rank and its displayed references use identical draw IDs, including both references in panel D. Use the [three-of-five draw example in the spec](pfc_hpc_presentation_figure_spec.md#figure-5-predicting-one-region-from-the-other) as the acceptance case.
+Four seeded synthetic sessions passed through the full pipeline. Three contributed ten-PC curves and the fourth lacked enough source units, giving 3/4 support and an undefined roster median. A headless Firefox run with networking disabled verified that switching bin widths changed the plotted probabilities and preserved gaps and event positions. Streamlit loaded the same trace values and controls and offered a PNG download.
+
+The pilot metadata is `/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/neural_session.json`. Its 696 choices have both analysis windows, 125 PFC and 245 HPC good units, and 95 task blocks. All 374 recorded ordinary rewarded choices had latencies under 100 ms. The five matched draws used 62 source and 62 target units per region. Each of the three Figure 4 excerpts has recorded delivery markers and supported fits at both widths. Figure 6 yielded 95 neural correlations and 48 speed correlations. Speed was constant in the other 47 held-out blocks.
+
+The final pilot is in the session's `analysis_runs/presentation_figures_20261118_171102_909912` directory. It contains `manifest.json`, `run.log`, `summary.md`, the four archives and the light export in `figures/`. Runtime was 268 seconds with 1.14 GiB peak process memory and 7.40 MiB of numerical archives. Following a producer-metadata correction, all saved data fields matched the initial pilot byte for byte. A repeat invocation returned the final manifest as reused. The initial four-session batch can use the default cap of four session workers on this host, with August 28 reused and three sessions requiring fits.
+
+Validation passed 414 presentation and related numerical/integration tests, plus 182 webapp regression tests. To run the feature suite use `uv run python -m pytest --import-mode=importlib src/tests/neural_analysis/presentation_figures`. The next experimental step is user review of the August 28 figures.
 
 ## Implementation slices
 
@@ -37,6 +49,17 @@ Each slice owner writes its corresponding tests under `src/tests/neural_analysis
 6. **Cohort and delivery.** Verify all Figures 1-6 are computed or reused for each eligible session, including when another session supplies a presentation example. Distinguish unavailable results from unreached PC recovery. Three ten-PC curves in a four-session roster give 3-of-4 support and no roster median. Test saved-result round trips, interrupted-run discovery, stale inputs, style-only changes, headless PNG export, webapp routing and identical replay values in offline HTML and the app.
 
 ## Running and exporting
+
+From the repository root, use the three module entry points below. A session list contains one metadata path per line. Relative paths are resolved against the list file. The batch command runs after pilot approval.
+
+```sh
+uv run python -m src.neural_analysis.presentation_figures.run_session --session-metadata /data/session/neural_session.json
+uv run python -m src.neural_analysis.presentation_figures.export_figures --manifest /data/run/manifest.json --output-dir /data/run/figures --theme light
+uv run python -m src.neural_analysis.presentation_figures.run_batch --session-list /data/sessions.txt --output-root /data/cohort/analysis_runs
+uv run streamlit run src/neural_analysis/psth_webapp.py -- --session-metadata /data/session/neural_session.json
+```
+
+Select **PFC and HPC presentation figures** in the app. It discovers completed runs beside the session data and accepts a path to a saved cohort manifest. Both compute commands accept `--dry-run`, `--rerun` and `--seed`. Use `--workers` on the batch command to cap parallel sessions.
 
 - **Compute.** `run_session` and `run_batch` support dry runs and reuse compatible completed results. Batch invokes the full session workflow for each named session and then builds the cohort summary. Share counts for each window/width (including the Figure 5/6 count tensor), PCA projections across prefixes, and one ridge decomposition across ranks for identical training inputs. Accumulate per-target error sums. Partition work across sessions with bounded numerical-library threads.
 - **Save.** Write named NPZ arrays under the session directory with a `meta` dictionary recording producer, version, parameters, seed, axes, units, sources, folds and identities. Write a completion manifest last. Changed inputs, scientific parameters, version or an explicit rerun produce a new run. Keep timestamped run directories outside version control with script snapshots, session IDs, parameters, timings, warnings, log and scientific summary.
