@@ -160,11 +160,11 @@ def test_saved_window_plot_backfills_only_missing_standalone_files(main_module, 
     combined.write_bytes(b"existing combined diagnostic")
     monkeypatch.setattr(choice_window_results, "compute_trial_agent_agreements", fail_if_reached)
     table, path = main_module._plot_saved_choice_window_results(result_path, "session", tmp_path / "figures")
-    assert not table.empty and path == combined
-    outputs = [directory / f"session_choice_window_{size}_agreement.png" for size in sizes]
+    assert not table.empty and path == directory / "comparison_models_v1" / combined.name
+    outputs = [directory / "comparison_models_v1" / f"session_choice_window_{size}_agreement.png" for size in sizes]
     assert all(output.is_file() for output in outputs)
     # Each size now has the full standalone plus two presentation comparisons.
-    assert len(list(directory.glob("session_choice_window_*_agreement.png"))) == 3 * len(sizes)
+    assert len(list((directory / "comparison_models_v1").glob("session_choice_window_*_agreement.png"))) == 3 * len(sizes)
     original = {output: output.read_bytes() for output in outputs}
     outputs[-1].unlink()
     main_module._plot_saved_choice_window_results(result_path, "session", tmp_path / "figures")
@@ -191,7 +191,7 @@ def test_saved_window_plot_adds_and_backfills_both_presentation_groups(main_modu
         path.write_bytes(b"earlier diagnostic or standalone")
     monkeypatch.setattr(choice_window_results, "compute_trial_agent_agreements", fail_if_reached)
     main_module._plot_saved_choice_window_results(result, "session", tmp_path / "figures")
-    outputs = [directory / f"session_choice_window_{size}_{profile}_agreement.png"
+    outputs = [directory / "comparison_models_v1" / f"session_choice_window_{size}_{profile}_agreement.png"
                for size in (10, 20) for profile in ("main_comparison_v1", "strategy_comparison_v2")]
     assert all(path.is_file() for path in outputs)
     hashes = {path: path.read_bytes() for path in [*existing, *outputs[:-1]]}
@@ -219,11 +219,11 @@ def test_saved_window_plot_backfills_all_and_restricted_summaries(main_module, t
     original = {path: path.read_bytes() for path in [result, *existing]}
     monkeypatch.setattr(choice_window_results, "compute_trial_agent_agreements", fail_if_reached)
     table, combined = main_module._plot_saved_choice_window_results(result, "session", tmp_path / "figures")
-    assert not table.empty and combined == existing[0]
-    outputs = [directory / f"session_choice_window_{size}{suffix}_summary.png"
+    assert not table.empty and combined == directory / "comparison_models_v1" / existing[0].name
+    outputs = [directory / "comparison_models_v1" / f"session_choice_window_{size}{suffix}_summary.png"
                for size in sizes for suffix in ("", "_main_comparison_v1", "_strategy_comparison_v2")]
     assert all(path.is_file() for path in outputs)
-    assert len(list(directory.glob("*_summary.png"))) == 3 * len(sizes)
+    assert len(list((directory / "comparison_models_v1").glob("*_summary.png"))) == 3 * len(sizes)
     original.update({path: path.read_bytes() for path in outputs[:-1]})
     outputs[-1].unlink()
     main_module._plot_saved_choice_window_results(result, "session", tmp_path / "figures")

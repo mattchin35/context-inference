@@ -19,6 +19,9 @@ LABELS = {**plots.CHOICE_WINDOW_AGENT_LABELS,
           "perseveration_mouse_agreement": "Perseveration",
           "home_referenced_expectancy_doubt_mouse_agreement": "Home E + Doubt",
           "simple_probe_persistence_mouse_agreement": "Probe + persistence"}
+COMPARISON = ("qlearning_mouse_agreement", "fql_mouse_agreement", "hmm_logodds_mouse_agreement",
+              "perseveration_mouse_agreement", "wsls_mouse_agreement", "observer_mouse_agreement",
+              "home_referenced_expectancy_doubt_mouse_agreement", "win_switch_lose_stay_mouse_agreement")
 SELECTIONS = {None: None, "main_comparison_v1": MAIN, "strategy_comparison_v2": STRATEGY}
 
 
@@ -56,7 +59,7 @@ def test_summary_dots_quartiles_selection_colors_and_inputs(
     path = plots.plot_session_choice_window_agreement_summary(table, meta, tmp_path, "session", size, **options)
     figure = _figures(closed_figures)[0]
     axis = figure.axes[0]
-    agents = tuple(meta["parameters"]["agent_value_columns"]) if profile is None else SELECTIONS[profile]
+    agents = COMPARISON if profile is None else SELECTIONS[profile]
     suffix = "" if profile is None else f"_{profile}"
     assert path.name == f"session_choice_window_{size}{suffix}_summary.png"
     assert path.is_file() and path.stat().st_size > 0
@@ -146,7 +149,7 @@ def test_summary_layout_fits_long_labels_and_full_session_title(summary_results,
         assert bounds.x0 >= 0 and bounds.x1 <= figure.bbox.x1
         assert bounds.y0 >= 0 and bounds.y1 <= figure.bbox.y1
     if profile is None:
-        assert figure.get_figwidth() > 10
+        assert figure.get_figwidth() >= 10
 
 
 def test_summary_validation_reuses_profile_rules(summary_results, tmp_path):
