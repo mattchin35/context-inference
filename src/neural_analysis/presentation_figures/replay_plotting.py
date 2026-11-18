@@ -173,7 +173,7 @@ def _regional_behavior(
         kinds = subset.trial_id.map(lookup.trial_type).fillna("").str.replace("_", " ")
         detail = []
         for trial_id, side_name, kind in zip(subset.trial_id, subset.label, kinds):
-            detail.append(" · ".join(str(value) for value in (
+            detail.append(" | ".join(str(value) for value in (
                 f"Trial {trial_id}" if pd.notna(trial_id) else "", side_name, kind,
             ) if value))
         traces.append(_event_trace(event, event_x, side, detail))
@@ -229,7 +229,7 @@ def _bin_trace(
             continue
         x.extend((float(left), float(right), None))
         y.extend((float(value), float(value), None))
-        description = f"Trial {trial_id} · [{left:.3f}, {right:.3f}) s"
+        description = f"Trial {trial_id} | [{left:.3f}, {right:.3f}) s"
         detail.extend((description, description, None))
     return _Trace(lane, series, label, color, x, y, detail, width_ms)
 
@@ -240,7 +240,7 @@ def _interactive(view: _Replay, theme: str) -> go.Figure:
     ink, paper = ("white", "#15191f") if dark else ("#17232f", "white")
     figure = make_subplots(
         rows=max(1, len(view.lanes)), cols=1, shared_xaxes=True, vertical_spacing=.1,
-        row_heights=[.85, 1.15, 1.15] if view.lanes else None,
+        row_heights=[1., 1.15, 1.15] if view.lanes else None,
     )
     for trace in view.traces:
         shape = EVENT_STYLES[trace.series][1] if trace.marker else "circle"
@@ -257,9 +257,11 @@ def _interactive(view: _Replay, theme: str) -> go.Figure:
             hovertemplate="%{text}<extra>%{fullData.name}</extra>" if trace.marker
             else "%{text}<br>%{y:.3f}<extra>%{fullData.name}</extra>",
         ), row=trace.lane + 1, col=1)
+    for trace in view.traces:
         if trace.series in VERTICAL_EVENTS:
             for time in trace.x:
-                figure.add_vline(x=time, line={"color": trace.color, "width": 1, "dash": "dot"})
+                figure.add_vline(x=time, exclude_empty_subplots=False,
+                                 line={"color": trace.color, "width": 1, "dash": "dot"})
     for lane, label in enumerate(view.lanes, 1):
         figure.update_yaxes(title_text=label, row=lane, col=1)
     if view.lanes:
@@ -272,12 +274,12 @@ def _interactive(view: _Replay, theme: str) -> go.Figure:
     if view.extent is not None:
         figure.update_xaxes(range=list(view.extent))
     figure.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor=ink)
-    title = view.title + (" · 500 ms" if view.widths_ms else "")
+    title = view.title + (" | 500 ms" if view.widths_ms else "")
     if view.widths_ms:
         buttons = [
             dict(label=f"{width} ms", method="update", args=[
                 {"visible": [trace.width_ms in (None, width) for trace in view.traces]},
-                {"title.text": f"{view.title} · {width} ms"},
+                {"title.text": f"{view.title} | {width} ms"},
             ]) for width in view.widths_ms
         ]
         figure.update_layout(updatemenus=[dict(buttons=buttons, x=1., xanchor="right", y=1.17)])
@@ -287,11 +289,12 @@ def _interactive(view: _Replay, theme: str) -> go.Figure:
     figure.update_layout(
         title=title, template="plotly_dark" if dark else "plotly_white",
         paper_bgcolor=paper, plot_bgcolor=paper, font={"color": ink, "size": 14},
-        hovermode="x", hoversubplots="axis", height=635 if view.lanes else 240,
-        margin={"l": 150, "b": 110, "t": 115, "r": 55},
-        legend={"orientation": "h", "y": -.18},
-        annotations=[dict(x=0, y=-.29 if view.lanes else .5, xref="paper", yref="paper",
-                          xanchor="left", align="left", showarrow=False, text=fill(view.caption, 118).replace("\n", "<br>"))],
+        hovermode="x", hoversubplots="axis", height=740 if view.lanes else 240,
+        margin={"l": 150, "b": 205 if view.lanes else 30, "t": 115, "r": 55},
+        legend={"orientation": "h", "y": -.16, "yanchor": "top"},
+        annotations=[dict(x=0, y=-.33 if view.lanes else .5, xref="paper", yref="paper",
+                          xanchor="left", yanchor="top", align="left", showarrow=False,
+                          text=fill(view.caption, 107).replace("\n", "<br>"))],
     )
     return figure
 
@@ -313,7 +316,8 @@ def _static(view: _Replay, theme: str) -> Figure:
             linestyle = ":" if trace.series.endswith(":context") else "-"
             axes[trace.lane].plot(np.asarray(trace.x, dtype=float), np.asarray(trace.y, dtype=float),
                                   color=trace.color, marker=glyph, linestyle="None" if glyph else linestyle,
-                                  label=trace.label, gid=trace.series, markersize=6., linewidth=1.7)
+                                  label=trace.label, gid=trace.series, markersize=6., linewidth=1.7,
+                                  zorder=3 if linestyle == ":" else 2)
             if trace.series in VERTICAL_EVENTS:
                 for time in trace.x:
                     for axis in axes:
@@ -338,7 +342,7 @@ def _static(view: _Replay, theme: str) -> Figure:
                 axis.set_ylim(-.025, 1.025)
         if view.extent is not None:
             axes[-1].set_xlim(*view.extent)
-        suffix = " · 500 ms" if view.widths_ms else ""
+        suffix = " | 500 ms" if view.widths_ms else ""
         figure.suptitle(view.title + suffix, fontsize=17, fontweight="bold")
         figure.text(.1, .027, fill(view.caption, 123), fontsize=10, ha="left", va="bottom")
         figure.subplots_adjust(left=.1, right=.97, bottom=.17, top=.855, hspace=.24)
@@ -357,7 +361,7 @@ def _block_correlations(fields: dict, meta: dict, theme: str) -> Figure:
     """Plot one dot per finite held-out block Pearson r and each metric's median/support."""
     scores = fields["block_scores"]
     style = "dark_background" if theme == "dark" else "default"
-    categories = (("pfc_hpc", "PFC – HPC"), ("pfc_speed", "PFC – speed"), ("hpc_speed", "HPC – speed"))
+    categories = (("pfc_hpc", "PFC / HPC"), ("pfc_speed", "PFC / speed"), ("hpc_speed", "HPC / speed"))
     with plt.style.context(style):
         figure, axis = plt.subplots(figsize=(8, 5.5))
         labels = []

@@ -162,6 +162,7 @@ from src.neural_analysis.webapp.session_inputs import (
     PLOT_VIEW_SESSION_TIMELINE,
     PLOT_VIEW_SESSION_CCA,
     PLOT_VIEW_COMMUNICATION_SUBSPACE,
+    PLOT_VIEW_PRESENTATION,
     PLOT_VIEW_EVENT_SEQUENCE_CENTRAL,
     PLOT_VIEW_EVENT_SEQUENCE_TRANSITION,
     PLOT_VIEW_PHASE_SYNCHRONY,
@@ -216,6 +217,7 @@ from src.neural_analysis.webapp.task_decoding_views import render_task_decoding_
 from src.neural_analysis.webapp.timeline_view import render_session_timeline_view
 from src.neural_analysis.webapp.cca_view import render_session_cca_view
 from src.neural_analysis.webapp.communication_subspace_view import render_communication_subspace_view
+from src.neural_analysis.webapp.presentation_view import render_presentation_view
 from src.neural_analysis.webapp.phase_synchrony_view import render_phase_synchrony_view
 from src.neural_analysis.webapp.event_sequence_views import render_event_sequence_view
 from src.neural_analysis.webapp.behavior_examples_view import render_behavior_examples_view
@@ -678,6 +680,9 @@ def _start_metadata_webapp(session: ResolvedSession) -> str | None:
     """
     st.sidebar.caption(f"Session: {session.subject_id} / {session.session_id}")
     plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+    if plot_view == PLOT_VIEW_PRESENTATION:
+        render_presentation_view(st, session)
+        return None
     if plot_view == PLOT_VIEW_COMMUNICATION_SUBSPACE:
         # The view owns paired readiness and must permit archived-only viewing.
         render_communication_subspace_view(st, session)
@@ -782,6 +787,9 @@ def main(argv: Sequence[str] = ()) -> None:
         metadata_lfp_sites = metadata_lfp_site_inputs(metadata_session)
     else:
         plot_view = st.sidebar.selectbox("Plot view", options=PLOT_VIEW_OPTIONS)
+        if plot_view == PLOT_VIEW_PRESENTATION:
+            st.info("Launch with --session-metadata <session_root>/neural_session.json to browse saved presentation figures.")
+            return
         if plot_view == PLOT_VIEW_COMMUNICATION_SUBSPACE:
             st.info("Communication subspace uses session metadata. Launch with --session-metadata <session_root>/neural_session.json.")
             return
