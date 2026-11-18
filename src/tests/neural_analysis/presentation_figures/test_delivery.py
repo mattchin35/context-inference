@@ -4,10 +4,25 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import plotly.graph_objects as go
 
 from src.neural_analysis.presentation_figures import results
 from src.neural_analysis.webapp import app, session_inputs
+
+
+def test_regional_manifest_reader_preserves_training_block_support(tmp_path, monkeypatch):
+    """The exported and webapp Figures 1-2 receive the saved per-fold class counts."""
+    from src.neural_analysis.presentation_figures import export_figures, regional_plotting
+
+    folds = pd.DataFrame({"fold_id": [0], "blocks_0": [4], "blocks_1": [5]})
+    results.save_result(tmp_path / "regional.npz", {"folds": folds}, {})
+    manifest = results.complete_run(tmp_path, kind="session", identity="saved",
+                                    session_ids=["s"], archives={"regional": "regional.npz"})
+    render = Mock(return_value={})
+    monkeypatch.setattr(regional_plotting, "render_regional", render)
+    export_figures.read_panels(manifest, "regional")
+    pd.testing.assert_frame_equal(render.call_args.args[0]["folds"], folds)
 
 
 def test_export_writes_png_and_self_contained_replay(tmp_path, monkeypatch):
