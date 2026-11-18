@@ -36,11 +36,12 @@ def save_result(path: Path, fields: dict, meta: dict) -> None:
         np.savez_compressed(stream, **arrays, meta=header)
 
 
-def load_result(path: Path) -> tuple[dict, dict]:
+def load_result(path: Path, *, keys: tuple[str, ...] | None = None) -> tuple[dict, dict]:
     """Read a trusted project NPZ Path into named fields and metadata dict.
 
     Arrays preserve saved shape and units. Rebuild row tables with the stored
-    column types and RangeIndex. No session sources are opened.
+    column types and RangeIndex. Optional keys select the matching fields
+    without decompressing other arrays. No session sources are opened.
     """
     with np.load(path, allow_pickle=True) as archive:
         header = archive["meta"].item()
@@ -48,7 +49,7 @@ def load_result(path: Path) -> tuple[dict, dict]:
             raise ValueError(f"Unsupported presentation archive: {path}")
         fields = {}
         for key in archive.files:
-            if key == "meta":
+            if key == "meta" or (keys is not None and key not in keys):
                 continue
             value = archive[key]
             if key in header["tables"]:
