@@ -38,3 +38,11 @@ def test_session_dry_run_and_compatible_run_reuse(synthetic_presentation_session
     other = runner.run_session(metadata, seed=7)
     assert other["manifest"] != str(manifest)
     assert computed == [3, 7]
+    # A changed source must invalidate otherwise identical scientific settings.
+    source = metadata.parent / "events.csv"
+    with source.open("a") as stream:
+        stream.write("\n")
+    refreshed = runner.run_session(metadata, seed=3)
+    assert refreshed["manifest"] != str(manifest) and computed == [3, 7, 3]
+    with np.load(manifest.parent / "regional.npz", allow_pickle=True) as archive:
+        assert archive["meta"].item()["producer"].endswith("decoding.compute_decoding")
