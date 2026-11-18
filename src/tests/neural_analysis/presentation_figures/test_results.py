@@ -23,6 +23,9 @@ def test_result_round_trip_preserves_axes_units_and_named_tables(tmp_path):
     pd.testing.assert_frame_equal(loaded["scores"], scores)
     assert header["axes"] == meta["axes"]
     assert header["seed"] == 3
+    summary, _ = results.load_result(path, keys=("scores", "optional"))
+    assert list(summary) == ["scores"]
+    pd.testing.assert_frame_equal(summary["scores"], scores)
     with pytest.raises(FileExistsError):
         results.save_result(path, {}, meta)
 
