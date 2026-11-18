@@ -82,3 +82,24 @@ def test_figure8_draws_partial_session_curves_without_partial_roster_median():
     finally:
         for figure in figures.values():
             plt.close(figure)
+
+
+def test_figure8_keeps_roster_visible_when_no_sessions_have_saved_curves():
+    """Render the intended roster and exclusion reasons even when all sessions fail."""
+    from src.neural_analysis.presentation_figures.prediction_plotting import render_prediction_cohort
+
+    fields = {"roster": pd.DataFrame({"session_id": ["day 1", "day 2"],
+                                      "status": ["failed", "excluded"],
+                                      "reason": ["Missing alignment", "Too few good units"]})}
+    figures = render_prediction_cohort(fields, {"mouse_id": "synthetic-mouse"}, "light")
+    try:
+        for figure in figures.values():
+            figure.canvas.draw()
+            caption = " ".join(element.get_text() for element in figure.texts)
+            assert "day 1 (Missing alignment)" in caption
+            assert "day 2 (Too few good units)" in caption
+            assert any(text.get_text() == "No supported scores."
+                       for axis in figure.axes for text in axis.texts)
+    finally:
+        for figure in figures.values():
+            plt.close(figure)
