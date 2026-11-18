@@ -2101,7 +2101,7 @@ def plot_session_choice_window_agreement_summary(
             caption += "\nUnavailable models: " + ", ".join(display_labels.get(agent, agent) for agent in unavailable) + "."
         fig.text(.02, .015, caption, fontsize=10, va="bottom")
         # Leave separate space for angled model names/counts and the caption.
-        fig.subplots_adjust(left=.10, right=.97, bottom=.38, top=.80)
+        fig.subplots_adjust(left=.13, right=.97, bottom=.38, top=.80)
         fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
         plt.close(fig)
     return save_path
