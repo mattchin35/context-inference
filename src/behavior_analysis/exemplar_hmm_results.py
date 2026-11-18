@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
+import os
 from pathlib import Path
 import shutil
+import tempfile
 from time import perf_counter
 import warnings
 
@@ -53,6 +55,8 @@ def preserve_current_exports(processed_data_path: Path, session_id: str) -> None
         `exemplar_hmm/archives/<sha256>/<original_stem>.archived.csv`. Identical
         bytes are not copied again, including legacy archives with the original
         filename. Old model pickles and source sessions are untouched.
+        New archives are published only after their bytes are fully written.
+        Existing mismatched archives raise ValueError and remain unchanged.
         No array, axis or physical-unit transformations occur.
     """
     root = Path(processed_data_path)
@@ -70,8 +74,7 @@ def preserve_current_exports(processed_data_path: Path, session_id: str) -> None
                 raise ValueError(f"Archived export content does not match its digest: {existing}")
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with destination.open("xb") as archived:
-            archived.write(content)
+        _write_archive_atomically(destination, content)
 
 
 def save_or_load_exemplar_hmm_results(
@@ -191,6 +194,29 @@ def save_or_load_exemplar_hmm_results(
 
 
 # Private helpers: provenance, current-table restoration, and serialization.
+def _write_archive_atomically(destination: Path, content: bytes) -> None:
+    """Publish scalar bytes at a Path after a sibling temporary file is complete.
+
+    destination's parent must exist and the destination must have been checked
+    as absent by the caller. Returns None; no CSV parsing, axes, or units change.
+    Write/publication errors propagate after temporary-file cleanup. Abrupt
+    termination may leave a temporary file, but not a partial final archive.
+    Concurrent writers and power-loss durability are outside this contract.
+    """
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=destination.parent, prefix=f".{destination.name}.",
+            suffix=".tmp", delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+        temporary_path.write_bytes(content)
+        os.replace(temporary_path, destination)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def _remove_obsolete_block_outputs(blocks: pd.DataFrame) -> pd.DataFrame:
     """Return raw/current block columns after removing stale modeling outputs.
 
