@@ -120,3 +120,21 @@ def test_only_excluded_models_produce_a_labeled_empty_view(complete_results, clo
         assert not any(not line.get_label().startswith("_") for line in axis.lines)
         assert not axis.collections
     assert any("No requested models available" in text.get_text() for axis in figure.axes for text in axis.texts)
+
+
+@pytest.mark.parametrize("count", [85, 100])
+def test_summary_count_labels_fit_with_presentation_fonts(complete_results, closed_figures, tmp_path, count):
+    """Two/three-digit window counts remain inside the canvas with the app's large tick fonts."""
+    import matplotlib.pyplot as plt
+
+    table, metadata = complete_results
+    seed = table.loc[table.window_size.eq(10)].drop_duplicates("agent")
+    table = pd.concat([seed.assign(window_index=index, agreement=.5) for index in range(count)], ignore_index=True)
+    with plt.rc_context({"axes.labelsize": 18, "axes.titlesize": 18, "xtick.labelsize": 16, "ytick.labelsize": 16}):
+        plots.plot_session_choice_window_agreement_summary(table, metadata, tmp_path, "CT016_2026-05-29_132812", 10)
+    figure = _figures(closed_figures)[0]
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    for label in figure.axes[0].get_xticklabels():
+        bounds = label.get_window_extent(renderer)
+        assert bounds.x0 >= 0 and bounds.x1 <= figure.bbox.x1
