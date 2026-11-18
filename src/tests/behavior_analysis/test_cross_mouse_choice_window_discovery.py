@@ -49,7 +49,8 @@ def test_automatic_selection_matches_explicit_and_validates_once(automatic_cohor
     assert meta["skipped_candidates"] == {"A": [], "B": []}
 
 
-@pytest.mark.parametrize("problem", ["missing_file", "missing_session", "wrong_size", "invalid_json"])
+@pytest.mark.parametrize("problem", ["missing_file", "missing_session", "wrong_size", "invalid_json",
+                                   "non_object_json", "corrupt_source"])
 def test_incomplete_newest_candidate_is_reported_and_skipped(automatic_cohort, problem):
     """An older complete roster-matching run is usable; every rejected newer run gets a reason."""
     root, newest = automatic_cohort
@@ -66,8 +67,15 @@ def test_incomplete_newest_candidate_is_reported_and_skipped(automatic_cohort, p
     elif problem == "wrong_size":
         manifest["window_sizes"] = [10]
         manifest_path.write_text(json.dumps(manifest))
-    else:
+    elif problem == "invalid_json":
         manifest_path.write_text("{invalid")
+    elif problem == "non_object_json":
+        manifest_path.write_text("null")
+    else:
+        broken = bad / "corrupt_source.npz"
+        broken.write_bytes(b"PK\x03\x04unfinished")
+        manifest["sources"][0] = str(broken)
+        manifest_path.write_text(json.dumps(manifest))
     _, meta = loader()(root, mice=["A", "B"])
     assert meta["collection_runs"]["A"] == str(newest["A"])
     skipped = meta["skipped_candidates"]["A"]
