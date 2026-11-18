@@ -2560,11 +2560,13 @@ def run_cross_mouse_session_metric_curves(
 def run_cross_mouse_choice_window_agreement_curves(
     data_root: Path,
     output_path: Path,
-    collection_runs: Mapping[str, Path],
+    collection_runs: Mapping[str, Path] | None = None,
     window_sizes: Sequence[int] = (10, 20),
     figure_id: str = "cross_mouse",
+    *,
+    mice: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, Path]:
-    """Export Ideal-agent curves from explicit saved mouse collections only.
+    """Export Ideal-agent curves from explicitly selected or discovered saved collections.
 
     Parameters
     ----------
@@ -2573,12 +2575,16 @@ def run_cross_mouse_choice_window_agreement_curves(
         CSV as its expected session roster; no raw trial tables are read.
     output_path : pathlib.Path
         Parent for choice_window_ideal_agreement/<dated run>/ exports.
-    collection_runs : Mapping[str, pathlib.Path]
+    collection_runs : Mapping[str, pathlib.Path] or None, default=None
         Requested mouse IDs mapped to explicit saved window-collection directories.
+        Supply this mapping or mice, never both.
     window_sizes : Sequence[int], default=(10, 20)
         Distinct valid-choice sizes present in every selected collection.
     figure_id : str, default="cross_mouse"
         Filename prefix. Display titles omit this identifier and run timestamps.
+    mice : Sequence[str] or None, keyword-only
+        Requested mouse IDs for newest-complete-run discovery. Selection uses
+        directory timestamps, full roster validation and saved source checks.
 
     Returns
     -------
@@ -2599,7 +2605,12 @@ def run_cross_mouse_choice_window_agreement_curves(
     from src.behavior_analysis.performance_plots import plot_cross_mouse_session_metric_curve
 
     started = perf_counter()
-    table, provenance = load_cross_mouse_choice_window_data(data_root, collection_runs, window_sizes)
+    table, provenance = load_cross_mouse_choice_window_data(data_root, collection_runs, window_sizes, mice=mice)
+    selected_mice = list(provenance["collection_runs"])
+    for mouse, path in provenance["collection_runs"].items():
+        print(f"Choice-window collection ({provenance['selection_mode']}): {mouse}: {path}")
+        for skipped in provenance["skipped_candidates"][mouse]:
+            print(f"  Skipped {skipped['path']}: {skipped['reason']}")
     group = summarize_cross_mouse_choice_window_data(table)
     sizes = table.window_size.unique().tolist()
     timestamp = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d_%H-%M-%S_%f")
@@ -2608,9 +2619,9 @@ def run_cross_mouse_choice_window_agreement_curves(
     record = {
         "generator": "main.run_cross_mouse_choice_window_agreement_curves",
         "analysis_version": "cross_mouse_choice_windows_v1", "created_at": timestamp,
-        "source_provenance": provenance, "window_sizes": sizes, "mice": list(collection_runs),
+        "source_provenance": provenance, "window_sizes": sizes, "mice": selected_mice,
         "session_ids": {mouse: table.loc[table.mouse.eq(mouse), "session_id"].drop_duplicates().tolist()
-                        for mouse in collection_runs},
+                        for mouse in selected_mice},
         "parameters": {"agent": "observer_mouse_agreement", "session_statistic": "median across windows",
                        "group_statistic": "equal-mouse arithmetic mean of session medians"},
         "units": {"metric_value": "agreement fraction", "training_day": "chronological session number",
@@ -2651,7 +2662,7 @@ def run_cross_mouse_choice_window_agreement_curves(
             shutil.copy2(source, directory / source.name)
         (directory / "summary.md").write_text(
             "# Cross-mouse choice-window Ideal agreement\n\n"
-            f"Mice: {list(collection_runs)}. Sessions: {record['session_ids']}.\n\n"
+            f"Mice: {selected_mice}. Sessions: {record['session_ids']}.\n\n"
             "Goal: compare saved session medians across mice without rerunning session analysis.\n\n"
             "Main/batch entry point: main.run_cross_mouse_choice_window_agreement_curves; "
             "loading: cross_mouse_choice_windows.py; plotting: performance_plots.py. Source snapshots included.\n\n"

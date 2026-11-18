@@ -5,9 +5,11 @@ the overall-performance roster defines the chronological training positions.
 """
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
+from zipfile import BadZipFile
 
 import numpy as np
 import pandas as pd
@@ -30,8 +32,10 @@ VALUE_COLUMNS = (
 
 def load_cross_mouse_choice_window_data(
     data_root: Path,
-    collection_runs: Mapping[str, Path],
+    collection_runs: Mapping[str, Path] | None = None,
     window_sizes: Sequence[int] = (10, 20),
+    *,
+    mice: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Load a strictly covered cohort without running session analysis.
 
@@ -40,18 +44,24 @@ def load_cross_mouse_choice_window_data(
     data_root : pathlib.Path
         Mouse folders contain cross_session_analysis/{mouse}_overall_performance.csv.
         These rosters require unique full session_id and ISO date columns.
-    collection_runs : Mapping[str, pathlib.Path]
+    collection_runs : Mapping[str, pathlib.Path] or None, default=None
         One explicit saved choice-window collection directory per mouse, with
         metadata.json and {mouse}_choice_window_summary.csv. Trusted source NPZ
         metadata distinguishes missing results from legitimate zero-window data.
+        Supply either this mapping or mice, never both.
     window_sizes : Sequence[int], default=(10, 20)
         Distinct positive valid-choice window sizes to select, never recompute.
+    mice : Sequence[str] or None, keyword-only
+        Distinct mouse IDs for automatic selection. For each mouse, try saved
+        timestamped collections newest first, retaining the first fully valid
+        roster-matching run. File modification times do not affect ordering.
 
     Returns
     -------
     tuple[pandas.DataFrame, dict]
         Table of shape (n_expected_sessions * n_sizes, len(VALUE_COLUMNS)) and
-        provenance containing selected paths, source hashes, numerical version
+        provenance containing selection_mode, selected paths, skipped candidate
+        paths/reasons, source hashes, numerical version
         and session-specific feature parameters. Each metric_value is the saved
         Ideal agreement_median (fraction), or NaN with an explicit status.
         Counts are windows/choices; training_day is a one-based chronological
@@ -62,12 +72,22 @@ def load_cross_mouse_choice_window_data(
     sizes = [validate_window_size(size) for size in window_sizes]
     if not sizes or len(set(sizes)) != len(sizes):
         raise ValueError("window_sizes must contain distinct positive integers.")
-    if not collection_runs:
-        raise ValueError("At least one mouse collection run is required.")
+    if (collection_runs is None) == (mice is None):
+        raise ValueError("Supply exactly one of collection_runs or mice.")
+    if mice is not None:
+        if isinstance(mice, str):
+            raise ValueError("mice must be a nonempty sequence of distinct mouse IDs.")
+        owners = list(mice)
+    else:
+        owners = list(collection_runs)
+    if (not owners or any(not isinstance(mouse, str) or not mouse.strip() for mouse in owners)
+            or len(set(owners)) != len(owners)):
+        raise ValueError("Provide nonempty, distinct mouse IDs.")
     rows, records, errors = [], {}, []
-    for mouse, directory in collection_runs.items():
+    for mouse in owners:
         try:
-            mouse_rows, record = _load_mouse_collection(Path(data_root), str(mouse), Path(directory), sizes)
+            directory = None if collection_runs is None else Path(collection_runs[mouse])
+            mouse_rows, record = _select_mouse_collection(Path(data_root), mouse, directory, sizes)
             rows.extend(mouse_rows)
             records[str(mouse)] = record
         except (ValueError, OSError, KeyError) as error:
@@ -77,12 +97,17 @@ def load_cross_mouse_choice_window_data(
     versions = {record["analysis_version"] for record in records.values()}
     digests = {record["analysis_source_digest"] for record in records.values()}
     if len(versions) != 1 or len(digests) != 1:
-        raise ValueError("Selected mice have incompatible numerical analysis versions/source digests.")
+        selected = "; ".join(
+            f"{mouse}: {record['collection_run']} (version={record['analysis_version']}, "
+            f"source_digest={record['analysis_source_digest']})" for mouse, record in records.items())
+        raise ValueError("Selected mice have incompatible numerical analysis versions/source digests. " + selected)
     table = pd.DataFrame(rows, columns=VALUE_COLUMNS)
     for size in sizes:
         if not table.loc[table.window_size.eq(size), "metric_value"].notna().any():
             raise ValueError(f"No usable Ideal session medians for {size}-choice windows.")
     provenance = {
+        "selection_mode": "automatic" if mice is not None else "explicit",
+        "skipped_candidates": {mouse: record["skipped_candidates"] for mouse, record in records.items()},
         "analysis_version": next(iter(versions)), "analysis_source_digest": next(iter(digests)),
         "collection_runs": {mouse: record["collection_run"] for mouse, record in records.items()},
         "feature_parameters": {mouse: record["feature_parameters"] for mouse, record in records.items()},
@@ -109,6 +134,45 @@ def summarize_cross_mouse_choice_window_data(table: pd.DataFrame) -> pd.DataFram
 
 
 # Private loading/validation helpers; none write files or perform inference.
+def _select_mouse_collection(
+    root: Path, mouse: str, directory: Path | None, sizes: list[int],
+) -> tuple[list[dict], dict]:
+    """Select and load one mouse's saved collection once; return session rows/provenance.
+
+    root/mouse locate saved data; sizes counts valid choices. An explicit
+    directory is authoritative. None tries timestamped runs newest first,
+    returning the first fully validated result plus skipped paths/reasons.
+    Cohort compatibility is checked later, without retrying older versions.
+    No files, units or numerical arrays change.
+    """
+    if directory is not None:
+        rows, record = _load_mouse_collection(root, mouse, directory, sizes)
+        return rows, dict(record, skipped_candidates=[])
+    parent = root / mouse / "cross_session_analysis/choice_window_agreement"
+    candidates = []
+    if parent.is_dir():
+        for path in parent.iterdir():
+            if not path.is_dir():
+                continue
+            try:
+                timestamp = datetime.strptime(path.name, "%Y-%m-%d_%H-%M-%S_%f")
+            except ValueError:
+                continue
+            candidates.append((timestamp, path))
+    if not candidates:
+        raise ValueError(f"No timestamped choice-window collection directories found under {parent}")
+    skipped = []
+    for _, candidate in sorted(candidates, reverse=True):
+        try:
+            rows, record = _load_mouse_collection(root, mouse, candidate, sizes)
+        except (ValueError, OSError, KeyError) as error:
+            skipped.append({"path": str(candidate), "reason": str(error)})
+        else:
+            return rows, dict(record, skipped_candidates=skipped)
+    reasons = "\n".join(f"{item['path']}: {item['reason']}" for item in skipped)
+    raise ValueError(f"No complete valid collection for requested window sizes {sizes}:\n{reasons}")
+
+
 def _load_mouse_collection(root: Path, mouse: str, directory: Path, sizes: list[int]) -> tuple[list[dict], dict]:
     """Read one explicit run and roster; return unitless per-session rows and provenance.
 
@@ -123,6 +187,8 @@ def _load_mouse_collection(root: Path, mouse: str, directory: Path, sizes: list[
     if missing:
         raise ValueError("Missing files: " + ", ".join(missing))
     manifest = json.loads(manifest_path.read_text())
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Collection metadata must be a JSON object: {manifest_path}")
     if manifest.get("mouse") != mouse or manifest.get("errors"):
         raise ValueError(f"Invalid or failed collection metadata: {manifest_path}")
     if not set(sizes).issubset(manifest["window_sizes"]):
@@ -169,7 +235,7 @@ def _load_mouse_collection(root: Path, mouse: str, directory: Path, sizes: list[
             for size in sizes:
                 rows.append(_session_value(summary, metadata, mouse, session, size))
             hashes[str(path)] = _file_digest(path)
-        except (OSError, ValueError, KeyError) as error:
+        except (OSError, ValueError, KeyError, BadZipFile, EOFError) as error:
             errors.append(f"{session.session_id}: {path}: {error}")
     if errors:
         raise ValueError("\n".join(errors))

@@ -11,7 +11,8 @@ It is not pooled trial agreement or a median over all mice's windows.
 
 ## Inputs and strict coverage
 
-Choose one explicit collection directory per mouse. Each directory must contain:
+Select collections automatically with a mouse list, or specify one explicit
+collection directory per mouse. Each selected directory must contain:
 
 - `metadata.json` from the existing cross-session choice-window collector.
 - `<mouse>_choice_window_summary.csv`.
@@ -30,10 +31,24 @@ handling and missing-prediction rules are checked against the saved window
 definition. Session-specific feature parameters may differ and are recorded.
 Both requested sizes must exist in every source when `(10, 20)` is requested.
 
-Missing files, sources, expected sessions, Ideal results or requested sizes cause
-an error before the output directory is created. Errors identify the mouse and,
-where applicable, session, size and source path. Multiple mouse errors are
-reported together.
+Explicitly selected collections with missing files, sources, expected sessions,
+Ideal results or requested sizes cause an error before output creation.
+Automatic selection can skip such candidates, recording their paths and failure
+reasons. If no valid collection remains, it reports all tried candidates and
+stops. Errors identify the mouse and, where applicable, session, size and source
+path. Multiple mouse errors are reported together.
+
+Automatic selection scans timestamped directories beneath each mouse's
+`cross_session_analysis/choice_window_agreement/`, newest first. Directory names
+use `YYYY-MM-DD_HH-MM-SS_microseconds`; file modification times and unrelated
+directories do not determine selection. Each candidate must pass the same full
+roster/source/summary checks as explicit mode, using the requested window sizes.
+Successfully validated data are reused rather than loaded again.
+
+After selecting the newest valid collection for each mouse, cohort version and
+source-digest compatibility are checked. A conflict stops the export and names
+the selected paths/versions; discovery does not silently downgrade mice to older
+versions. Explicit mode never falls back to automatic selection.
 
 ## Training positions and unavailable values
 
@@ -54,30 +69,43 @@ cohort curve.
 
 ## Running after session results are ready
 
-From the repository root, use `uv run python` with the following code, replacing
-the selected run-directory placeholders with your intended completed collections:
+From the repository root, use `uv run python` with the following code for quick
+automatic selection:
 
 ```python
 from pathlib import Path
 from src.main import run_cross_mouse_choice_window_agreement_curves
 
 data_root = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData")
-collection_runs = {
-    "CT016": data_root / "CT016/cross_session_analysis/choice_window_agreement/SELECTED_RUN",
-    "CT017": data_root / "CT017/cross_session_analysis/choice_window_agreement/SELECTED_RUN",
-}
-
 values, run_directory = run_cross_mouse_choice_window_agreement_curves(
     data_root=data_root,
     output_path=data_root / "cross_mouse_analysis",
-    collection_runs=collection_runs,
+    mice=["CT016", "CT017", "CT026"],
     window_sizes=(10, 20),  # Use (10,) or (20,) for just one curve.
 )
 print(run_directory)
 ```
 
-No newest-run discovery is performed. Supply the full intended cohort explicitly.
-The loader can also be used read-only via
+For explicit selection, supply `collection_runs` instead of `mice`:
+
+```python
+collection_runs = {
+    "CT016": data_root / "CT016/cross_session_analysis/choice_window_agreement/SELECTED_RUN",
+    "CT017": data_root / "CT017/cross_session_analysis/choice_window_agreement/SELECTED_RUN",
+}
+values, run_directory = run_cross_mouse_choice_window_agreement_curves(
+    data_root=data_root,
+    output_path=data_root / "cross_mouse_analysis",
+    collection_runs=collection_runs,
+    window_sizes=(10, 20),
+)
+```
+
+Provide exactly one nonempty mode: `collection_runs` or `mice`. Duplicate mouse
+IDs are rejected. Existing positional explicit-directory calls remain valid.
+Both modes print the selected paths; automatic mode also prints skipped
+candidate reasons. Neither discovers an implicit mouse cohort.
+The loader supports both modes read-only via
 `cross_mouse_choice_windows.load_cross_mouse_choice_window_data`.
 
 ## Outputs and validation
@@ -88,7 +116,8 @@ Each successful call creates
 - One light-background PNG per size, with mouse curves and the black mean curve.
 - `session_values.csv`: saved medians, training positions, counts and statuses.
 - `group_summary.csv`: `agreement_mean` and `n_mice` at each size/position.
-- `metadata.json` and `run.log`: selected paths, source hashes, versions,
+- `metadata.json` and `run.log`: selection mode, selected paths, skipped
+  candidates/reasons, source hashes, versions,
   session-specific parameters, coverage warnings and runtime.
 - `summary.md` and snapshots of the main/batch entry point, loader and renderer.
 
