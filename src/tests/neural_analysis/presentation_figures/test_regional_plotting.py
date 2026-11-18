@@ -50,6 +50,21 @@ def test_regional_dot_bin_and_outcome_views_draw_held_out_values(regional_fields
             plt.close(figure)
 
 
+def test_context_caption_reports_independent_training_blocks(regional_fields):
+    """Both training regimes report context blocks rather than trial counts."""
+    from src.neural_analysis.presentation_figures.regional_plotting import render_regional
+
+    figures = render_regional(regional_fields, {"session_id": "synthetic-25"}, "light")
+    try:
+        caption = " ".join(" ".join(text.get_text().split()) for text in figures["figure_1_pfc"].texts)
+        assert "Independent context training blocks per fold" in caption
+        assert "All outcomes (4 right, 4 left)" in caption
+        assert "Correct rewarded (4 right, 4 left)" in caption
+    finally:
+        for figure in figures.values():
+            plt.close(figure)
+
+
 def test_cohort_draws_named_paired_sessions_and_reports_missing(roster_data):
     """Never connect scores from independent sessions or missing endpoints."""
     from src.neural_analysis.presentation_figures.regional_plotting import render_regional_cohort
