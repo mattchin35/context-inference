@@ -41,21 +41,26 @@ derive_block_side <- function(block_type_values) {
 #
 # Args:
 #   block_df: data.frame with shape (n_blocks, n_columns). Required columns are
-#     `trials_to_correct`, `prev_n_rewarded`, and `block_type`.
+#     `trials_to_correct`, `prev_n_rewarded`, and (for side models) `block_type`.
 #   model_formula: formula identifier. Supported values are "rewards_x_side"
-#     and "rewards_plus_side".
+#     and "rewards_plus_side", plus opt-in "rewards_only". The default formula
+#     collection remains unchanged for existing callers.
 #
 # Returns:
 #   list with fields `x`, `y`, `valid_rows`, and `model_df`. `x` has shape
 #   (n_valid_blocks, n_features), `y` has length n_valid_blocks, and
 #   `valid_rows` uses 1-based row positions from `block_df`.
 prepare_block_residual_model_dataframe <- function(block_df, model_formula = "rewards_x_side") {
-  required_columns <- c("trials_to_correct", "prev_n_rewarded", "block_type")
+  required_columns <- c("trials_to_correct", "prev_n_rewarded")
+  if (model_formula != "rewards_only") required_columns <- c(required_columns, "block_type")
   formula_spec <- NULL
   for (spec in BLOCK_RESIDUAL_FORMULA_SPECS) {
     if (identical(spec$model_formula, model_formula)) {
       formula_spec <- spec
     }
+  }
+  if (identical(model_formula, "rewards_only")) {
+    formula_spec <- list(formula = stats::as.formula("trials_to_correct ~ prev_n_rewarded"))
   }
   if (is.null(formula_spec)) {
     stop(paste("Unknown block residual model formula:", model_formula))
@@ -71,13 +76,15 @@ prepare_block_residual_model_dataframe <- function(block_df, model_formula = "re
   }
   model_df <- data.frame(
     trials_to_correct = suppressWarnings(as.numeric(block_df$trials_to_correct)),
-    prev_n_rewarded = suppressWarnings(as.numeric(block_df$prev_n_rewarded)),
-    block_side = derive_block_side(block_df$block_type)
+    prev_n_rewarded = suppressWarnings(as.numeric(block_df$prev_n_rewarded))
   )
+  if (model_formula != "rewards_only") model_df$block_side <- derive_block_side(block_df$block_type)
   valid_rows <- which(stats::complete.cases(model_df))
   if (length(valid_rows) == 0) {
     return(list(
-      x = matrix(numeric(0), nrow = 0, ncol = 3),
+      x = matrix(numeric(0), nrow = 0,
+                 ncol = if (model_formula == "rewards_only") 1L else
+                   if (model_formula == "rewards_plus_side") 2L else 3L),
       y = numeric(0),
       valid_rows = integer(0),
       model_df = model_df[valid_rows, , drop = FALSE]
@@ -203,17 +210,79 @@ extract_coefficient <- function(coefficient_matrix, term_name) {
   as.numeric(coefficient_matrix[term_name, 1])
 }
 
-fit_one_block_glmnet_model <- function(prepared, model_formula, model_type, alpha, lambda_choice, seed, nfolds) {
+# Build balanced shuffled CV folds without changing the caller's RNG state.
+# Args: n_rows, nfolds positive integer scalars (n_rows >= nfolds >= 3);
+#   seed finite nonnegative integer scalar. No physical units.
+# Returns: integer(n_rows), fold membership aligned to the input observations.
+make_block_cv_folds <- function(n_rows, seed, nfolds = min(10L, n_rows)) {
+  if (length(seed) != 1L || !is.finite(seed) || seed < 0 || seed != floor(seed) ||
+      seed > .Machine$integer.max) stop("seed must be a nonnegative integer scalar.")
+  if (length(n_rows) != 1L || length(nfolds) != 1L ||
+      !is.finite(n_rows) || !is.finite(nfolds) || n_rows != floor(n_rows) ||
+      nfolds != floor(nfolds) || nfolds < 3L || nfolds > n_rows) {
+    stop("CV requires integer n_rows >= nfolds >= 3.")
+  }
+  had_rng <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  if (had_rng) saved_rng <- get(".Random.seed", envir = .GlobalEnv)
+  on.exit({
+    if (had_rng) assign(".Random.seed", saved_rng, envir = .GlobalEnv)
+    else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+      rm(".Random.seed", envir = .GlobalEnv)
+    }
+  })
   set.seed(seed)
-  cv_fit <- glmnet::cv.glmnet(
-    x = prepared$x,
-    y = prepared$y,
-    family = "gaussian",
-    alpha = alpha,
-    standardize = TRUE,
-    nfolds = nfolds
+  sample(rep(seq_len(nfolds), length.out = n_rows))
+}
+
+# Fit one Gaussian elastic-net CV path, preserving predictor and response units.
+# Args: x numeric(n_rows,n_features), y numeric(n_rows), finite observations;
+#   alpha numeric(1) in [0,1]; fold_id integer(n_rows) with >=3 folds;
+#   lambda NULL or descending positive numeric penalty sequence.
+# Returns: list(fit=cv.glmnet object, x=matrix used for fitting/prediction,
+#   warnings=character vector). x/y units and row ordering are unchanged.
+# A one-column x gains an all-zero column because glmnet requires >=2 columns.
+# The dummy coefficient is zero, and default equal penalty factors remain 1:
+# no real predictor or penalty is duplicated. Standard Gaussian glmnet scaling
+# is retained, including internal response scaling; returned coefficients are
+# in original units. Its ridge penalty convention depends on response SD.
+fit_block_glmnet_cv <- function(x, y, alpha, fold_id, lambda = NULL) {
+  if (!is.matrix(x) || !is.numeric(x) || ncol(x) < 1L ||
+      !is.numeric(y) || nrow(x) != length(y) || any(!is.finite(x)) ||
+      any(!is.finite(y))) stop("x/y must be finite aligned numeric data.")
+  if (length(alpha) != 1L || !is.finite(alpha) || alpha < 0 || alpha > 1) {
+    stop("alpha must be between zero and one.")
+  }
+  if (length(fold_id) != length(y) || anyNA(fold_id) ||
+      any(fold_id < 1L | fold_id != floor(fold_id)) || length(unique(fold_id)) < 3L) {
+    stop("fold_id must assign every row to at least three positive integer folds.")
+  }
+  if (is.null(colnames(x))) colnames(x) <- paste0("V", seq_len(ncol(x)))
+  if (ncol(x) == 1L) x <- cbind(x, .glmnet_inert = 0)
+  warnings <- character()
+  fit <- withCallingHandlers(
+    glmnet::cv.glmnet(
+      x = x, y = y, family = "gaussian", alpha = alpha,
+      standardize = TRUE, foldid = fold_id, lambda = lambda, keep = TRUE,
+      grouped = min(table(fold_id)) >= 3L, parallel = FALSE
+    ),
+    warning = function(condition) {
+      warnings <<- c(warnings, conditionMessage(condition))
+      invokeRestart("muffleWarning")
+    }
   )
-  predictions <- as.numeric(stats::predict(cv_fit, newx = prepared$x, s = lambda_choice))
+  list(fit = fit, x = x, warnings = unique(warnings))
+}
+
+# Extract predictions, residuals and a summary from an already fitted CV path.
+# Args: cv_result list from fit_block_glmnet_cv; prepared list with x/y in
+#   original trial units; model_formula/model_type/lambda_choice character(1),
+#   alpha numeric(1). lambda_choice is lambda.min or lambda.1se.
+# Returns: list(residuals=numeric(n_valid_blocks), summary_df=data.frame(1,p)).
+# Coefficients, residuals and spread metrics retain original physical units.
+summarize_block_glmnet_fit <- function(cv_result, prepared, model_formula, model_type,
+                                     alpha, lambda_choice) {
+  cv_fit <- cv_result$fit
+  predictions <- as.numeric(stats::predict(cv_fit, newx = cv_result$x, s = lambda_choice))
   residuals <- prepared$y - predictions
   coefficient_matrix <- as.matrix(stats::coef(cv_fit, s = lambda_choice))
   metrics <- compute_residual_spread_metrics(residuals)
@@ -241,6 +310,16 @@ fit_one_block_glmnet_model <- function(prepared, model_formula, model_type, alph
     stringsAsFactors = FALSE
   )
   list(residuals = residuals, summary_df = summary_df)
+}
+
+# Legacy one-penalty interface, retaining its arguments and return fields.
+# Args: prepared list(x numeric[n,p], y numeric[n]); model_formula/model_type/
+#   lambda_choice character scalars; alpha numeric(1), seed/nfolds integers.
+# Returns: list(residuals numeric[n] in trials, summary_df one-row data.frame).
+fit_one_block_glmnet_model <- function(prepared, model_formula, model_type, alpha, lambda_choice, seed, nfolds) {
+  folds <- make_block_cv_folds(length(prepared$y), seed, nfolds)
+  fitted <- fit_block_glmnet_cv(prepared$x, prepared$y, alpha, folds)
+  summarize_block_glmnet_fit(fitted, prepared, model_formula, model_type, alpha, lambda_choice)
 }
 
 # Add lasso and elastic-net residuals plus a combined model summary.

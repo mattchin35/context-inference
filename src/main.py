@@ -2,13 +2,19 @@ import json
 import numpy as np
 import re
 import warnings
-from behavior_analysis import performance_plots
-from behavior_analysis import plot_model_values, raster_plots, session_analysis, simulate_priors
-from mouse_behavior_preprocessing import process_behavior_log
-from behavior_analysis import block_state_space_modeling as bssm
-from behavior_analysis import trial_state_space_modeling as tssm
-from behavior_analysis import gather_trial_features as gtf
-from src.behavior_analysis import switch_persistence
+from src.behavior_analysis import performance_plots
+from src.behavior_analysis import (
+    expectant_switching_selectivity,
+    plot_model_values,
+    raster_plots,
+    session_analysis,
+    simulate_priors,
+)
+from src.mouse_behavior_preprocessing import process_behavior_log
+from src.behavior_analysis import gather_trial_features as gtf
+from src.behavior_analysis import block_exemplar_models
+from src.behavior_analysis import switch_persistence, choice_window_results
+from src.behavior_analysis.trial_policy_models import DEFAULT_MODEL_IDS
 from src.behavior_analysis.project_utils import (
     EXPERIMENTER_REWARD_GIVEN_COLUMN,
     normalize_experimenter_reward_column,
@@ -17,10 +23,15 @@ from src.behavior_analysis.project_utils import (
 import pickle as pkl
 from pathlib import Path
 import pandas as pd
-from dataclasses import dataclass
-from typing import Sequence
+from dataclasses import asdict, dataclass, field, is_dataclass
+from typing import TYPE_CHECKING, Mapping, Sequence
 import seaborn as sns
 from matplotlib.colors import ListedColormap
+
+if TYPE_CHECKING:
+    from src.behavior_analysis.exemplar_hmm_modeling import FixedExemplarBlockStateResult
+    from src.behavior_analysis.trial_policy_analysis import TrialPolicyResult
+    from src.behavior_analysis.trial_policy_models import PreparedTrialHistory, TrialPolicyCandidate
 
 
 sns.set_style("white")
@@ -144,6 +155,27 @@ class SavedSessionAnalysis:
 
 
 @dataclass
+class _TrialPolicySourceWork:
+    """Prepared parent-owned work for one source, with no computational methods.
+
+    History/current_trials hold the same T_s chronological trials, with binary
+    choices/rewards; joint_positions is int64[T_s] into the joint row axis.
+    Feature parameters and metadata retain dimensionless policy settings.
+    A cached result/path skips numerical work; workers receive only history and
+    parameters. File I/O and attachments remain on the parent thread.
+    """
+
+    source: SavedSessionAnalysis
+    history: "PreparedTrialHistory"
+    joint_positions: np.ndarray
+    current_trials: pd.DataFrame
+    feature_params: "gtf.TaskParams"
+    metadata: dict
+    numerical_path: Path | None
+    cached_result: "TrialPolicyResult | None"
+
+
+@dataclass
 class ConcatenatedSessionAnalysis:
     """Continuous multisession table set built from saved per-session CSVs.
 
@@ -163,16 +195,25 @@ class ConcatenatedSessionAnalysis:
     trial_session_lengths : np.ndarray
         Number of trial rows contributed by each source session, shape
         `(n_sessions,)`, in concatenation order.
+    source_session_manifest : list[dict]
+        Ordered source IDs/dates and block/trial row counts, including empty
+        sources. This manifest identifies the entire continuous model scope.
     """
     block_performance: pd.DataFrame
     augmented_trial_df: pd.DataFrame
     block_session_lengths: np.ndarray
     trial_session_lengths: np.ndarray
+    source_session_manifest: list[dict] = field(default_factory=list)
 
 
 @dataclass
 class SingleSessionAnalysisConfig:
     """Configuration for one complete single-session analysis run.
+
+    Normal modeling uses ``block_exemplar_specs``, ``exemplar_hmm_stay_prob``,
+    and ``rerun_exemplar_hmm``. Legacy state-count, random-seed, secondary-trace,
+    skip-block-pickle, and trial-GLM fields remain constructor-compatible but
+    have no effect on fixed-exemplar inference. Trial GLM-HMM fitting is deferred.
 
     Attributes
     ----------
@@ -187,9 +228,9 @@ class SingleSessionAnalysisConfig:
     ideal_observer_seed : int or None
         Random seed for fixed replay ideal-observer summaries.
     block_modeling_states : int
-        Number of HMM states used for block modeling.
+        Legacy-only learned-HMM state count; inactive in normal inference.
     trial_modeling_states : int
-        Number of HMM states reserved for trial modeling when enabled.
+        Legacy-only trial-HMM state count; inactive while trial fitting is deferred.
     min_time : float
         Minimum trial time since session start, in seconds, retained during
         preprocessing.
@@ -200,22 +241,23 @@ class SingleSessionAnalysisConfig:
         Block-performance regressor column used in trials-to-correct scatter
         plots. Units depend on the selected column.
     block_hmm_random_seed : int
-        Random seed for block HMM modeling.
+        Legacy-only learned-HMM seed; fixed-exemplar inference is deterministic.
     skip_block_hmm_if_existing : bool
-        If True, reuse saved block HMM outputs when the model pickle, modeled
-        block table, and inherited-strategy trial table are all present.
+        Legacy-only pickle reuse option; inactive in normal inference. Normal
+        numerical cache reuse is controlled by rerun_exemplar_hmm.
     trial_hmm_random_seed : int
-        Random seed reserved for trial HMM modeling when enabled.
+        Legacy-only trial-HMM seed; inactive while trial fitting is deferred.
     block_secondary_trace : str
-        Secondary trace mode passed to block predicted-state plots.
+        Legacy-only predicted-state plot option; inactive in normal inference.
     plot_sliding_regression : bool
-        If True, add sliding block-regression panels to block HMM plots.
+        Legacy-only standalone plot toggle. Normal summary grids retain their
+        descriptive regression panel, controlled by the window/step settings.
     sliding_regression_window_size : int
         Number of valid blocks per sliding-regression window.
     sliding_regression_step_size : int
         Step size between sliding-regression windows, in valid blocks.
     trial_glm_predictor_columns : tuple[str, ...]
-        Trial-level predictor columns reserved for trial HMM modeling.
+        Legacy-only predictor names; inactive while trial GLM-HMM fitting is deferred.
     trial_feature_params : object or None
         Optional ``gather_trial_features.TaskParams`` instance. None constructs
         the documented defaults when trial features are collected. Supplying
@@ -227,6 +269,30 @@ class SingleSessionAnalysisConfig:
     min_explore_run_length_to_count : int
         Minimum exploratory-side run length required for an explore run to be
         counted in block summaries and plots.
+    choice_window_sizes : tuple[int, ...]
+        Non-overlapping valid-choice window sizes, default (10, 20). An empty
+        tuple disables window outputs while retaining context-block analysis.
+    rerun_choice_window_analysis : bool
+        Recompute window outputs in a new directory instead of reusing matching
+        saved results. Existing context-block and HMM controls are independent.
+    block_exemplar_specs : tuple[BlockExemplarModelSpec, ...]
+        Ordered fixed model definitions. Intercepts/SDs are trials; reward
+        slopes are trials per previous rewarded trial. Defaults to four models.
+    exemplar_hmm_stay_prob : float
+        Unitless transition diagonal probability; default 0.9.
+    rerun_exemplar_hmm : bool
+        Force a new immutable numerical run rather than reuse a matching cache.
+    run_trial_policy_analysis : bool
+        Compare fixed causal trial policies after block attachment, default True.
+    trial_policy_model_ids : tuple[str, ...]
+        Ordered implemented candidate IDs, independent of legacy trial options.
+    trial_policy_error_prob, trial_policy_stay_prob : float
+        Discrete-policy opposite-action error (.10) and trialwise state persistence (.90).
+    trial_policy_temperatures : Mapping[str, float] or None
+        Fixed graded-choice temperatures by model ID, in score units. None
+        uses approved defaults (.14 for QL/FQL, .40 for HMMs/observer).
+    trial_policy_smoothing, rerun_trial_policy_analysis : bool
+        Enable retrospective smoothing; optionally force a new numerical run.
     """
     preprocess_raw_session: bool = True
     run_session_analysis: bool = True
@@ -254,6 +320,20 @@ class SingleSessionAnalysisConfig:
         "relative_doubt_index",
         "perseveration_regressor",
     )
+    choice_window_sizes: tuple[int, ...] = (10, 20)
+    rerun_choice_window_analysis: bool = False
+    block_exemplar_specs: tuple[block_exemplar_models.BlockExemplarModelSpec, ...] = (
+        block_exemplar_models.DEFAULT_BLOCK_EXEMPLAR_MODELS
+    )
+    exemplar_hmm_stay_prob: float = 0.9
+    rerun_exemplar_hmm: bool = False
+    run_trial_policy_analysis: bool = True
+    trial_policy_model_ids: tuple[str, ...] = DEFAULT_MODEL_IDS
+    trial_policy_error_prob: float = .10
+    trial_policy_stay_prob: float = .90
+    trial_policy_smoothing: bool = True
+    rerun_trial_policy_analysis: bool = False
+    trial_policy_temperatures: Mapping[str, float] | None = None
 
 
 def build_simulation_session(simulated_run_dir: Path, sess_id: str, session_info: dict) -> Session:
@@ -528,6 +608,7 @@ def plot_expectant_switching_for_session(
     augmented_trial_df: pd.DataFrame,
     session: Session,
     params,
+    include_legacy: bool = True,
 ) -> dict[str, Path]:
     """Save complementary expectant-switching tuning plots for one session.
 
@@ -540,14 +621,40 @@ def plot_expectant_switching_for_session(
         Session metadata providing ``figure_path`` and ``sess_id_full``.
     params : object
         Exact trial-feature parameter object used to generate model columns.
+    include_legacy : bool, default=True
+        Whether to regenerate plots for the two earlier expectant exemplars.
+        False is intended for candidate-only refreshes of saved sessions.
 
     Returns
     -------
     dict[str, pathlib.Path]
-        Paths keyed by ``value_plot`` and ``diagnostic_plot``.
+        Paths for legacy/candidate plots and the additional Win-switch/Home
+        diagnostic. Existing filenames and keys remain unchanged.
     """
-    _plot_df, value_path = (
-        plot_model_values.plot_mouse_history_expectant_switching_values(
+    plot_paths = {}
+    if include_legacy:
+        _plot_df, value_path = (
+            plot_model_values.plot_mouse_history_expectant_switching_values(
+                trial_df=augmented_trial_df,
+                figure_path=session.figure_path,
+                sess_id_full=session.sess_id_full,
+                params=params,
+                theme="light",
+            )
+        )
+        diagnostic_path = performance_plots.plot_expectant_switching_diagnostics(
+            augmented_trial_df,
+            plot_path=session.figure_path,
+            sess_id_full=session.sess_id_full,
+        )
+        plot_paths.update(
+            {
+                "value_plot": value_path,
+                "diagnostic_plot": diagnostic_path,
+            }
+        )
+    _candidate_plot_df, candidate_value_path = (
+        plot_model_values.plot_mouse_history_candidate_expectant_switching_values(
             trial_df=augmented_trial_df,
             figure_path=session.figure_path,
             sess_id_full=session.sess_id_full,
@@ -555,15 +662,311 @@ def plot_expectant_switching_for_session(
             theme="light",
         )
     )
-    diagnostic_path = performance_plots.plot_expectant_switching_diagnostics(
+    candidate_diagnostic_path = (
+        performance_plots.plot_candidate_expectant_switching_diagnostics(
+            augmented_trial_df,
+            plot_path=session.figure_path,
+            sess_id_full=session.sess_id_full,
+        )
+    )
+    plot_paths.update(
+        {
+            "candidate_value_plot": candidate_value_path,
+            "candidate_diagnostic_plot": candidate_diagnostic_path,
+        }
+    )
+    additional_paths = save_and_plot_win_switch_home_for_session(
+        session, augmented_trial_df, feature_parameters=params,
+    )
+    plot_paths["win_switch_home_diagnostic_plot"] = additional_paths["plot"]
+    return plot_paths
+
+
+def save_and_plot_win_switch_home_for_session(
+    session: Session,
+    trial_df: pd.DataFrame | None = None,
+    *, feature_parameters: object | None = None,
+    rerun: bool = False,
+) -> dict[str, Path]:
+    """Export the saved-only diagnostic without replacing source session files.
+
+    session supplies processed_data_path, figure_path and sess_id_full. Optional
+    trial_df is (N, columns), chronological, with actions 0=right/1=left and
+    saved Home/Ideal scores; otherwise the augmented CSV is read. Parameters
+    are provenance only (dict/dataclass or saved JSON), never model defaults.
+    rerun requests a fresh dated output. Returns results NPZ and plot PNG Paths.
+    Original rows, units and source files are preserved. Cache identity includes
+    input values, available parameter provenance, analysis version and sources.
+    """
+    from datetime import datetime
+    import hashlib
+    import shutil
+    import time
+    from src.behavior_analysis import win_switch_home
+    from src.behavior_analysis.performance_plots import plot_win_switch_home_diagnostics
+
+    started = time.perf_counter()
+    processed = Path(session.processed_data_path)
+    source_csv = processed / f"{session.sess_id_full}_augmented_trials.csv"
+    if trial_df is None:
+        trial_df = pd.read_csv(source_csv, na_filter=False)
+        source = str(source_csv)
+    else:
+        source = "in-memory augmented trial table"
+    parameters = _choice_window_feature_parameters(processed, feature_parameters)
+    saved_parameter_files = {}
+    for name in ("trial_feature_params.json", "candidate_expectant_model_params.json"):
+        path = processed / name
+        if path.exists():
+            saved_parameter_files[name] = json.loads(path.read_text())
+    sources = [Path(__file__), Path(win_switch_home.__file__)]
+    sources += [Path(win_switch_home.__file__).with_name(name) for name in (
+        "performance_plots.py", "choice_window_analysis.py", "session_analysis.py",
+        "trial_features.py", "project_utils.py",
+    )]
+    source_digests = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
+    digest = hashlib.sha256(pd.util.hash_pandas_object(trial_df, index=True).values.tobytes())
+    digest.update(json.dumps({"session_id": session.sess_id_full,
+                             "columns": list(trial_df.columns), "parameters": parameters,
+                             "saved_parameter_files": saved_parameter_files,
+                             "source_digests": source_digests}, sort_keys=True).encode())
+    input_digest = digest.hexdigest()
+    relative = Path("win_switch_home_diagnostic") / win_switch_home.ANALYSIS_VERSION / input_digest
+    candidates = sorted((processed / relative).glob("*/results.npz"))
+    if candidates and not rerun:
+        result_path = candidates[-1]
+        prepared, spans, meta = win_switch_home.load_win_switch_home_data(result_path)
+        timestamp = result_path.parent.name
+    else:
+        # Validate and compute before creating output directories.
+        prepared, spans, provenance = win_switch_home.prepare_win_switch_home_data(trial_df)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+        result_path = processed / relative / timestamp / "results.npz"
+        meta = {"generator": "main.save_and_plot_win_switch_home_for_session",
+                "analysis_version": win_switch_home.ANALYSIS_VERSION,
+                "session_id": session.sess_id_full, "source": source,
+                "input_digest": input_digest, "source_digests": source_digests,
+                "parameters": parameters, "saved_parameter_files": saved_parameter_files,
+                "preparation": provenance, "random_seed": None,
+                "units": "unitless left-positive scores; agreement fraction; task reward units",
+                "axes": "original chronological trial rows; block spans in positional trial units"}
+        result_path.parent.mkdir(parents=True)
+        win_switch_home.save_win_switch_home_data(result_path, prepared, spans, meta)
+    figure_directory = Path(session.figure_path) / relative / timestamp
+    figure_path = figure_directory / f"{session.sess_id_full}_win_switch_home_diagnostic.png"
+    if not figure_path.exists():
+        figure_directory.mkdir(parents=True, exist_ok=True)
+        # Rendering consumes the saved plotting dataset, including cached block spans.
+        prepared, spans, meta = win_switch_home.load_win_switch_home_data(result_path)
+        plot_win_switch_home_diagnostics(prepared, figure_directory, session.sess_id_full, block_spans=spans)
+        (figure_directory / "metadata.json").write_text(json.dumps(meta, indent=2))
+        (figure_directory / "summary.md").write_text(
+            f"# Win-switch and Home E+D diagnostic\n\nSession: {session.sess_id_full}\n\n"
+            "Goal: compare saved Win-switch, Home E+D and Ideal predictions and block agreement.\n"
+            "Scripts: main.py (single-session entry; no batch run), win_switch_home.py, performance_plots.py.\n"
+            "Raw scores have different scales; no statistical tests or model fitting were performed.\n"
+        )
+        for path in sources:
+            shutil.copy2(path, figure_directory / path.name)
+        (figure_directory / "run.log").write_text(
+            f"session={session.sess_id_full}\nsource={source}\nresults={result_path}\n"
+            f"parameters={json.dumps(parameters)}\ninput_digest={input_digest}\n"
+            f"warnings=none\nelapsed_seconds={time.perf_counter() - started:.3f}\n"
+        )
+    return {"results": result_path, "plot": figure_path}
+
+
+def save_and_plot_expectant_model_selectivity_for_session(
+    augmented_trial_df: pd.DataFrame,
+    session: Session,
+    min_valid_choices: int = 5,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Path]]:
+    """Compute and save one session's expectant-model selectivity outputs.
+
+    Parameters
+    ----------
+    augmented_trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Chronological feature table containing candidate and ideal values plus
+        existing switch-event flags. Choice convention is ``0=right, 1=left``.
+    session : Session
+        Session metadata providing processed-data and figure directories.
+    min_valid_choices : int, default=5
+        Minimum valid mouse choices for inclusion in summary associations.
+        Shorter blocks remain in the saved table and plot.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame, dict[str, pathlib.Path]]
+        Block table, event table, and paths to both CSVs, metadata JSON, and
+        both per-session PNGs. Counts are trials; rates and agreements are
+        unitless fractions.
+    """
+    session.processed_data_path.mkdir(parents=True, exist_ok=True)
+    session.figure_path.mkdir(parents=True, exist_ok=True)
+    block_table = expectant_switching_selectivity.compute_block_model_selectivity(
         augmented_trial_df,
+        min_valid_choices=min_valid_choices,
+        exclude_block_entry=True,
+    )
+    event_table = expectant_switching_selectivity.compute_event_model_selectivity(
+        augmented_trial_df,
+        exclude_block_entry=True,
+    )
+    block_path = (
+        session.processed_data_path
+        / f"{session.sess_id_full}_expectant_model_block_selectivity.csv"
+    )
+    event_path = (
+        session.processed_data_path
+        / f"{session.sess_id_full}_expectant_model_event_selectivity.csv"
+    )
+    metadata_path = (
+        session.processed_data_path
+        / f"{session.sess_id_full}_expectant_model_selectivity_meta.json"
+    )
+    block_table.to_csv(block_path, index=False, na_rep="None")
+    event_table.to_csv(event_path, index=False, na_rep="None")
+    metadata = {
+        "generator": "expectant_switching_selectivity",
+        "analysis_version": getattr(
+            expectant_switching_selectivity, "ANALYSIS_VERSION", "unknown"
+        ),
+        "session_id": session.sess_id_full,
+        "parameters": {
+            "model_value_columns": (
+                getattr(
+                    expectant_switching_selectivity,
+                    "DEFAULT_SELECTIVITY_MODEL_VALUES",
+                    {},
+                )
+            ),
+            "min_valid_choices": min_valid_choices,
+            "exclude_block_entry": True,
+        },
+        "random_seed": None,
+        "units": {
+            "counts": "trials",
+            "agreements": "fraction",
+            "reward_switch_rate": "fraction",
+        },
+        "axis_conventions": {
+            "block_position": "zero-based within-session plotting position",
+            "agreement_delta": "candidate minus mouse-history ideal",
+        },
+    }
+    with open(metadata_path, "w") as metadata_file:
+        json.dump(metadata, metadata_file, indent=2)
+    block_plot_path = performance_plots.plot_session_expectant_model_selectivity(
+        block_table,
         plot_path=session.figure_path,
         sess_id_full=session.sess_id_full,
     )
-    return {
-        "value_plot": value_path,
-        "diagnostic_plot": diagnostic_path,
+    scatter_plot_path = (
+        performance_plots.plot_session_expectant_model_selectivity_scatter(
+            block_table,
+            plot_path=session.figure_path,
+            sess_id_full=session.sess_id_full,
+        )
+    )
+    paths = {
+        "block_table": block_path,
+        "event_table": event_path,
+        "metadata": metadata_path,
+        "block_plot": block_plot_path,
+        "scatter_plot": scatter_plot_path,
     }
+    return block_table, event_table, paths
+
+
+def refresh_expectant_model_outputs_for_session(
+    session: Session,
+    params: object,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Path]]:
+    """Refresh candidate model features and plots from saved session tables.
+
+    Parameters
+    ----------
+    session : Session
+        Session metadata providing ``processed_data_path``, ``figure_path``,
+        and ``sess_id_full``. Existing augmented-trial and block-performance
+        CSVs must be present.
+    params : gather_trial_features.TaskParams
+        Fixed candidate-model parameters. Counts are in rewarded trials,
+        doubt lambdas are in inverse trials, and weights are unitless.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame, dict[str, pathlib.Path]]
+        Refreshed trial table, refreshed block table, and plot paths. Trial and
+        block row counts and ordering are preserved.
+
+    Notes
+    -----
+    This function does not preprocess raw behavior or call GLM/HMM routines.
+    It updates only candidate trial columns, their block agreements, the
+    candidate parameter record, and behavior-model plots.
+    """
+    trial_path = (
+        session.processed_data_path
+        / f"{session.sess_id_full}_augmented_trials.csv"
+    )
+    block_path = (
+        session.processed_data_path
+        / f"{session.sess_id_full}_block_performance.csv"
+    )
+    if not trial_path.exists():
+        raise FileNotFoundError(f"Saved augmented trials were not found: {trial_path}")
+    if not block_path.exists():
+        raise FileNotFoundError(f"Saved block performance was not found: {block_path}")
+
+    augmented_trial_df = pd.read_csv(trial_path, sep=",", na_filter=False)
+    block_performance = pd.read_csv(block_path, sep=",", na_filter=False)
+    refreshed_trials = gtf.collect_candidate_expectant_switching_features(
+        augmented_trial_df,
+        params,
+    )
+    refreshed_trials.to_csv(trial_path, index=False, na_rep="None")
+    gtf.assert_saved_file(trial_path)
+
+    parameter_path = (
+        session.processed_data_path / "candidate_expectant_model_params.json"
+    )
+    with open(parameter_path, "w") as parameter_file:
+        json.dump(
+            asdict(gtf.make_candidate_expectant_switching_config(params)),
+            parameter_file,
+            indent=2,
+        )
+    gtf.assert_saved_file(parameter_path)
+
+    candidate_agreement_columns = {
+        "probe_persistence_doubt_mouse_agreement": (
+            "probe_persistence_doubt_value"
+        ),
+        "home_referenced_expectancy_doubt_mouse_agreement": (
+            "home_referenced_expectancy_doubt_value"
+        ),
+    }
+    refreshed_blocks = session_analysis.add_block_agent_mouse_agreement_columns(
+        block_performance,
+        refreshed_trials,
+        agent_value_columns=candidate_agreement_columns,
+    )
+    refreshed_blocks.to_csv(block_path, index=False, na_rep="None")
+    gtf.assert_saved_file(block_path)
+
+    performance_plots.plot_session_agent_mouse_agreement(
+        refreshed_blocks,
+        session.figure_path,
+        session.sess_id_full,
+    )
+    plot_paths = plot_expectant_switching_for_session(
+        augmented_trial_df=refreshed_trials,
+        session=session,
+        params=params,
+        include_legacy=False,
+    )
+    return refreshed_trials, refreshed_blocks, plot_paths
 
 
 def save_and_plot_switch_persistence_for_session(
@@ -705,8 +1108,9 @@ def find_saved_session_by_date(
     date : str
         Session date formatted as `YYYY-MM-DD`.
     session_data_root : Path
-        Mouse-level data directory searched recursively for
-        `{mouse}_{date}_*_augmented_trials.csv`.
+        Mouse-level data directory. Search only direct session folders'
+        `processed/{mouse}_{date}_*_augmented_trials.csv` files, excluding
+        nested archives and run exports.
     multi_session_save_path : Path
         Cross-session output directory assigned to the returned session
         metadata.
@@ -726,7 +1130,7 @@ def find_saved_session_by_date(
         filename does not follow `mouse_YYYY-MM-DD_HHMMSS`.
     """
     augmented_trial_paths = sorted(
-        session_data_root.rglob(f"{mouse}_{date}_*_augmented_trials.csv")
+        session_data_root.glob(f"*/processed/{mouse}_{date}_*_augmented_trials.csv")
     )
     if len(augmented_trial_paths) == 0:
         raise FileNotFoundError(
@@ -1446,6 +1850,11 @@ def concatenate_saved_sessions(
         augmented_trial_df=pd.concat(concatenated_trials, axis=0, ignore_index=True),
         block_session_lengths=np.asarray(block_session_lengths, dtype=int),
         trial_session_lengths=np.asarray(trial_session_lengths, dtype=int),
+        source_session_manifest=[
+            {"session_id": saved.session.sess_id_full, "date": str(saved.session.date),
+             "n_blocks": len(saved.block_performance), "n_trials": len(saved.augmented_trial_df)}
+            for saved in saved_sessions
+        ],
     )
 
 
@@ -2247,6 +2656,121 @@ def run_cross_mouse_session_metric_curves(
         )
 
 
+def run_cross_mouse_choice_window_agreement_curves(
+    data_root: Path,
+    output_path: Path,
+    collection_runs: Mapping[str, Path] | None = None,
+    window_sizes: Sequence[int] = (10, 20),
+    figure_id: str = "cross_mouse",
+    *,
+    mice: Sequence[str] | None = None,
+) -> tuple[pd.DataFrame, Path]:
+    """Export Ideal-agent curves from explicitly selected or discovered saved collections.
+
+    Parameters
+    ----------
+    data_root : pathlib.Path
+        Mouse-folder root. Each mouse requires an identified overall-performance
+        CSV as its expected session roster; no raw trial tables are read.
+    output_path : pathlib.Path
+        Parent for choice_window_ideal_agreement/<dated run>/ exports.
+    collection_runs : Mapping[str, pathlib.Path] or None, default=None
+        Requested mouse IDs mapped to explicit saved window-collection directories.
+        Supply this mapping or mice, never both.
+    window_sizes : Sequence[int], default=(10, 20)
+        Distinct valid-choice sizes present in every selected collection.
+    figure_id : str, default="cross_mouse"
+        Filename prefix. Display titles omit this identifier and run timestamps.
+    mice : Sequence[str] or None, keyword-only
+        Requested mouse IDs for newest-complete-run discovery. Selection uses
+        directory timestamps, full roster validation and saved source checks.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pathlib.Path]
+        Prepared session/size rows (one unitless Ideal median or NaN per row)
+        and new run directory with PNGs, session values, group means/coverage,
+        provenance/logs and source snapshots. All inputs are validated before
+        output creation. Existing sources/exports are never overwritten. No
+        fitting, trial scoring, window aggregation or experimental rerun occurs.
+    """
+    from datetime import datetime
+    import shutil
+    from time import perf_counter
+    from zoneinfo import ZoneInfo
+    from src.behavior_analysis.cross_mouse_choice_windows import (
+        load_cross_mouse_choice_window_data, summarize_cross_mouse_choice_window_data,
+    )
+    from src.behavior_analysis.performance_plots import plot_cross_mouse_session_metric_curve
+
+    started = perf_counter()
+    table, provenance = load_cross_mouse_choice_window_data(data_root, collection_runs, window_sizes, mice=mice)
+    selected_mice = list(provenance["collection_runs"])
+    for mouse, path in provenance["collection_runs"].items():
+        print(f"Choice-window collection ({provenance['selection_mode']}): {mouse}: {path}")
+        for skipped in provenance["skipped_candidates"][mouse]:
+            print(f"  Skipped {skipped['path']}: {skipped['reason']}")
+    group = summarize_cross_mouse_choice_window_data(table)
+    sizes = table.window_size.unique().tolist()
+    timestamp = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d_%H-%M-%S_%f")
+    directory = Path(output_path) / "choice_window_ideal_agreement" / timestamp
+    directory.mkdir(parents=True, exist_ok=False)
+    record = {
+        "generator": "main.run_cross_mouse_choice_window_agreement_curves",
+        "analysis_version": "cross_mouse_choice_windows_v1", "created_at": timestamp,
+        "source_provenance": provenance, "window_sizes": sizes, "mice": selected_mice,
+        "session_ids": {mouse: table.loc[table.mouse.eq(mouse), "session_id"].drop_duplicates().tolist()
+                        for mouse in selected_mice},
+        "parameters": {"agent": "observer_mouse_agreement", "session_statistic": "median across windows",
+                       "group_statistic": "equal-mouse arithmetic mean of session medians"},
+        "units": {"metric_value": "agreement fraction", "training_day": "chronological session number",
+                  "n_mice": "finite contributing mice"},
+        "random_seed": None, "figures": [], "warnings": [], "errors": [], "status": "running",
+    }
+    unavailable = table.loc[table.status.ne("ok"), ["mouse", "session_id", "window_size", "status"]]
+    record["warnings"] = unavailable.to_dict("records")
+    try:
+        table.to_csv(directory / "session_values.csv", index=False, na_rep="None")
+        group.to_csv(directory / "group_summary.csv", index=False, na_rep="None")
+        for size in sizes:
+            caption = (
+                f"Ideal agreement: median across complete {size}-choice windows within each session.\n"
+                "Black curve: mean of available mouse medians, with equal weight per mouse.\n"
+                "Training Day is chronological session number; unavailable values retain gaps.\n"
+                "Contributing mouse counts are saved in group_summary.csv; no statistical tests."
+            )
+            path = plot_cross_mouse_session_metric_curve(
+                cross_mouse_df=table.loc[table.window_size.eq(size)], plot_path=directory,
+                figure_id=figure_id, metric_column=f"ideal_{size}_choice", metric_label="Ideal-agent agreement",
+                ylim=(0, 1), title=f"Ideal agreement: {size}-choice windows", caption=caption,
+                show_points=True,
+            )
+            record["figures"].append(str(path))
+        record["status"] = "ok"
+    except Exception as error:
+        record.update(status="error", errors=[f"{type(error).__name__}: {error}"])
+        raise
+    finally:
+        record["runtime_seconds"] = perf_counter() - started
+        serialized = json.dumps(record, indent=2)
+        (directory / "metadata.json").write_text(serialized, encoding="utf-8")
+        (directory / "run.log").write_text(serialized, encoding="utf-8")
+        sources = [Path(__file__), Path(__file__).parent / "behavior_analysis/cross_mouse_choice_windows.py",
+                   Path(__file__).parent / "behavior_analysis/performance_plots.py"]
+        for source in sources:
+            shutil.copy2(source, directory / source.name)
+        (directory / "summary.md").write_text(
+            "# Cross-mouse choice-window Ideal agreement\n\n"
+            f"Mice: {selected_mice}. Sessions: {record['session_ids']}.\n\n"
+            "Goal: compare saved session medians across mice without rerunning session analysis.\n\n"
+            "Main/batch entry point: main.run_cross_mouse_choice_window_agreement_curves; "
+            "loading: cross_mouse_choice_windows.py; plotting: performance_plots.py. Source snapshots included.\n\n"
+            "Training positions precede missing-value filtering. Group means give each available mouse equal weight; "
+            "coverage is saved in group_summary.csv. No statistical tests were performed.\n", encoding="utf-8",
+        )
+    return table, directory
+
+
 def run_cross_mouse_learning_curve(
     data_root: Path,
     output_path: Path,
@@ -2948,6 +3472,234 @@ def save_and_plot_multisession_agent_mouse_agreement(
     return summary, block_points, plot_path
 
 
+def save_and_plot_choice_window_agreement_for_session(
+    augmented_trial_df: pd.DataFrame,
+    session: Session,
+    window_sizes: Sequence[int] = (10, 20),
+    feature_parameters: object | None = None,
+    rerun: bool = False,
+) -> tuple[pd.DataFrame, dict[str, Path]]:
+    """Save additive choice-window results and plot the saved artifact.
+
+    Parameters
+    ----------
+    augmented_trial_df : pandas.DataFrame, shape (n_trials, n_columns)
+        Current single-session chronological trials, with 0=right/1=left
+        actions and signed left-positive agent value columns. Never modified.
+    session : Session
+        Session ID, processed-data directory, and figure_path. Numerical
+        artifacts stay processed; PNGs use figure_path. Block outputs are unchanged.
+    window_sizes : Sequence[int], default=(10, 20)
+        Positive counts of valid mouse choices per non-overlapping window.
+    feature_parameters : dataclass instance, dict, or None
+        Existing model feature parameters. None loads saved JSON if available.
+    rerun : bool, default=False
+        Recompute into a new dated directory instead of reusing matching data.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, dict[str, pathlib.Path]]
+        Long-form window table and paths keyed by results/plot. Agreement is
+        unitless; counts are choices and bounds are half-open trial positions.
+    """
+    parameters = _choice_window_feature_parameters(session.processed_data_path, feature_parameters)
+    _, result_path = choice_window_results.save_choice_window_results(
+        trial_df=augmented_trial_df, processed_data_path=session.processed_data_path,
+        session_id=session.sess_id_full, window_sizes=window_sizes,
+        feature_parameters=parameters, rerun=rerun,
+    )
+    table, plot_path = _plot_saved_choice_window_results(
+        result_path, session.sess_id_full, session.figure_path,
+    )
+    return table, {"results": result_path, "plot": plot_path}
+
+
+def _choice_window_feature_parameters(
+    processed_data_path: Path,
+    provided: object | None = None,
+) -> dict | None:
+    """Resolve provenance without regenerating model values or parameters.
+
+    Inputs are a session processed-data Path and optional dict/dataclass.
+    Returns a JSON-compatible parameter dict, or None if saved JSON is absent.
+    Parameters retain their original units; no data or filesystem changes occur.
+    """
+    if provided is not None:
+        if is_dataclass(provided) and not isinstance(provided, type):
+            return asdict(provided)
+        if isinstance(provided, dict):
+            return dict(provided)
+        raise ValueError("feature_parameters must be a dataclass instance, dict, or None.")
+    parameter_path = Path(processed_data_path) / "trial_feature_params.json"
+    if parameter_path.exists():
+        with parameter_path.open() as parameter_file:
+            return json.load(parameter_file)
+    return None
+
+
+def _plot_saved_choice_window_results(
+    result_path: Path,
+    session_id: str,
+    figure_path: Path,
+) -> tuple[pd.DataFrame, Path]:
+    """Load saved results and generate/reuse timelines and distribution summaries.
+
+    Inputs are a trusted results NPZ Path, source session ID string, and session
+    figures-directory Path. Returns the long-form DataFrame and combined PNG Path;
+    agreement/count units are preserved. The numerical run timestamp names a
+    figures subdirectory so distinct runs retain their own plots. Plotting stays
+    in the parent process, outside session computation workers.
+    """
+    from src.behavior_analysis.performance_plots import (
+        choice_window_presentation_groups,
+        plot_session_choice_window_agreement,
+        plot_session_choice_window_agreement_panel,
+        plot_session_choice_window_agreement_summary,
+    )
+
+    table, metadata = choice_window_results.load_choice_window_results(result_path)
+    plot_directory = Path(figure_path) / "choice_window_agreement" / result_path.parent.name
+    plot_path = plot_session_choice_window_agreement(table, metadata, plot_directory, session_id)
+    # Backfill timelines and summaries even when the combined PNG is cached.
+    for size in metadata["parameters"]["window_sizes"]:
+        plot_session_choice_window_agreement_panel(table, metadata, plot_directory, session_id, size)
+        plot_session_choice_window_agreement_summary(table, metadata, plot_directory, session_id, size)
+        for profile, agents in choice_window_presentation_groups().items():
+            plot_session_choice_window_agreement_panel(
+                table, metadata, plot_directory, session_id, size,
+                agent_selection=agents, presentation_profile=profile,
+            )
+            plot_session_choice_window_agreement_summary(
+                table, metadata, plot_directory, session_id, size,
+                agent_selection=agents, presentation_profile=profile,
+            )
+    return table, plot_path
+
+
+def save_and_plot_multisession_choice_window_agreement(
+    saved_sessions: Sequence[SavedSessionAnalysis],
+    output_path: Path,
+    mouse: str,
+    window_sizes: Sequence[int] = (10, 20),
+    rerun: bool = False,
+    n_jobs: int | None = None,
+    dry_run: bool = False,
+) -> tuple[pd.DataFrame, Path | None]:
+    """Compute session-local windows and plot agreement within/across sessions.
+
+    Parameters
+    ----------
+    saved_sessions : Sequence[SavedSessionAnalysis]
+        Session metadata and chronological augmented trials, one session per
+        item. Original context-block tables are neither read nor changed.
+    output_path : pathlib.Path
+        Cross-session directory. Agreement-only PNGs go directly here; CSVs
+        and provenance go in a new dated choice_window_agreement subdirectory.
+    mouse : str
+        Mouse identifier used in collection filenames and metadata.
+    window_sizes : Sequence[int], default=(10, 20)
+        Non-overlapping valid-choice counts; windows never cross sessions.
+    rerun : bool, default=False
+        Recompute each session rather than reuse matching numerical results.
+    n_jobs : int or None, default=None
+        Concurrent session workers. None uses available CPU cores, capped at
+        the session count. Threads share input tables; plotting is sequential.
+    dry_run : bool, default=False
+        Print session/size/output plans and return without writing anything.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pathlib.Path or None]
+        Collected long-form window table and CSV path (None for dry run).
+        Coordinates remain session-local; agreement is a fraction and counts
+        are choices. Companion summaries group by session, size, and agent;
+        their metadata lists the across-session PNG paths (one per size).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from src.behavior_analysis.choice_window_analysis import summarize_choice_window_sessions
+    from src.behavior_analysis.performance_plots import plot_multisession_choice_window_agreement
+    from datetime import datetime
+    import os
+    import shutil
+    from time import perf_counter
+    from zoneinfo import ZoneInfo
+
+    started = perf_counter()
+    if n_jobs is not None and (isinstance(n_jobs, bool) or not isinstance(n_jobs, int) or n_jobs <= 0):
+        raise ValueError("n_jobs must be a positive integer or None.")
+    if dry_run:
+        for saved in saved_sessions:
+            print(f"Choice windows: {saved.session.sess_id_full}; sizes={tuple(window_sizes)}; "
+                  f"output={saved.session.processed_data_path}/choice_window_agreement; rerun={rerun}")
+        return pd.DataFrame(columns=choice_window_results.RESULT_COLUMNS), None
+    # Only numerical computation runs concurrently. Matplotlib has shared state
+    # and must remain on the parent thread after workers finish.
+    arguments = []
+    for saved in saved_sessions:
+        arguments.append({
+            "trial_df": saved.augmented_trial_df,
+            "processed_data_path": saved.session.processed_data_path,
+            "session_id": saved.session.sess_id_full,
+            "window_sizes": window_sizes, "rerun": rerun,
+            "feature_parameters": _choice_window_feature_parameters(saved.session.processed_data_path),
+        })
+    workers = min(n_jobs or os.cpu_count() or 1, max(1, len(arguments)))
+    if workers == 1:
+        computed = [choice_window_results.save_choice_window_results(**argument) for argument in arguments]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(choice_window_results.save_choice_window_results, **argument)
+                       for argument in arguments]
+            computed = [future.result() for future in futures]
+    tables, sources = [], []
+    for saved, (_table, result_path) in zip(saved_sessions, computed):
+        table, _plot_path = _plot_saved_choice_window_results(
+            result_path, saved.session.sess_id_full, saved.session.figure_path,
+        )
+        table["date"] = saved.session.date
+        tables.append(table)
+        sources.append(str(result_path))
+    combined = pd.concat(tables, ignore_index=True) if tables else pd.DataFrame(
+        columns=[*choice_window_results.RESULT_COLUMNS, "date"]
+    )
+    timestamp = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d_%H-%M-%S_%f")
+    run_path = Path(output_path) / "choice_window_agreement" / timestamp
+    run_path.mkdir(parents=True, exist_ok=False)
+    csv_path = run_path / f"{mouse}_choice_window_agreement.csv"
+    combined.to_csv(csv_path, index=False, na_rep="None")
+    summary = summarize_choice_window_sessions(combined)
+    summary.to_csv(run_path / f"{mouse}_choice_window_summary.csv", index=False, na_rep="None")
+    figure_paths = [
+        str(plot_multisession_choice_window_agreement(
+            summary_df=summary, plot_path=output_path,
+            figure_id=f"{mouse}_{timestamp}", window_size=size,
+            subject_label=mouse,
+        ))
+        for size in window_sizes
+    ]
+    collection_meta = {
+        "generator": "main.save_and_plot_multisession_choice_window_agreement",
+        "analysis_version": choice_window_results.ANALYSIS_VERSION,
+        "mouse": mouse, "window_sizes": list(window_sizes), "sources": sources,
+        "figures": figure_paths,
+        "n_workers": workers, "session_ids": [s.session.sess_id_full for s in saved_sessions],
+        "runtime_seconds": perf_counter() - started, "random_seed": None,
+        "warnings": [], "errors": [],
+    }
+    (run_path / "metadata.json").write_text(json.dumps(collection_meta, indent=2), encoding="utf-8")
+    (run_path / "run.log").write_text(json.dumps(collection_meta, indent=2), encoding="utf-8")
+    (run_path / "summary.md").write_text(
+        "# Multisession choice-window agreement\n\n"
+        f"Mouse: {mouse}. Sessions: {collection_meta['session_ids']}.\n\n"
+        "Main and batch script: main.py. Numerical results remain in each session directory.\n"
+        "Goal: collect descriptive agreement at fixed valid-choice resolutions.\n"
+        f"Agreement-only cross-session PNGs: {figure_paths}.\n"
+        "Windows never cross sessions. No statistical tests were performed.\n", encoding="utf-8",
+    )
+    shutil.copy2(Path(__file__), run_path / "main.py")
+    return combined, csv_path
+
+
 def prepare_block_switch_block_points(
     saved_sessions: Sequence[SavedSessionAnalysis],
 ) -> pd.DataFrame:
@@ -3628,7 +4380,7 @@ def load_saved_multisession_augmented_trials(
     return trial_df
 
 
-def run_multisession_analysis(
+def run_legacy_multisession_analysis(
     concatenated: ConcatenatedSessionAnalysis,
     session: Session,
     block_num_states: int = 2,
@@ -3720,6 +4472,9 @@ def run_multisession_analysis(
         is skipped. The trial table includes block-state inheritance generated
         by the block model or loaded from the saved augmented trial CSV.
     """
+    from src.behavior_analysis import block_state_space_modeling as bssm
+    from src.behavior_analysis import trial_state_space_modeling as tssm
+
     if trial_predictor_columns is None:
         trial_predictor_columns = tssm.DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS
 
@@ -3802,6 +4557,444 @@ def run_multisession_analysis(
     return block_model_selection, trial_model_selection, modeled_block_df, modeled_trial_df
 
 
+def run_dynamax_block_analysis(
+    block_performance: pd.DataFrame,
+    augmented_trial_df: pd.DataFrame,
+    session: Session,
+    specs: Sequence[block_exemplar_models.BlockExemplarModelSpec] = block_exemplar_models.DEFAULT_BLOCK_EXEMPLAR_MODELS,
+    stay_prob: float = 0.9,
+    rerun: bool = False,
+    plot: bool = True,
+    source_manifest: Sequence[dict] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, "FixedExemplarBlockStateResult", Path]:
+    """Compute/reuse fixed states, inheriting them onto the current trial rows.
+
+    Parameters
+    ----------
+    block_performance : pandas.DataFrame, shape (N, block columns)
+        Complete ordered blocks, with explicit block_ix, trials_to_correct
+        (trials), and prev_n_rewarded (rewarded trials). Histories are preserved.
+    augmented_trial_df : pandas.DataFrame, shape (T, trial columns)
+        Current trials with cur_block matching block_ix. Source session IDs
+        distinguish sessions when supplied; all fresh features are retained.
+    session : Session
+        Output paths and stable sess_id_full. Joint output belongs exclusively
+        to the synthetic multisession session, never its source directories.
+    specs : sequence of BlockExemplarModelSpec
+        Ordered fixed linear exemplar definitions; intercept/SD are in trials.
+    stay_prob : float
+        Unitless diagonal transition probability, default 0.9.
+    rerun : bool
+        Force a new immutable run instead of reusing matching numerical arrays.
+    plot : bool
+        Save a light-mode diagnostic in session.figure_path when True.
+    source_manifest : Sequence[dict] or None
+        Ordered source session IDs and row counts, including empty sources.
+        None derives the manifest from block rows for standalone use.
+
+    Returns
+    -------
+    tuple[pandas.DataFrame, pandas.DataFrame, FixedExemplarBlockStateResult, Path]
+        Full modeled blocks (N rows), inherited current trials (T rows),
+        numerical result (V valid rows, K exemplars), and immutable NPZ path.
+        States are zero-based ordered exemplar indices; probabilities unitless.
+    """
+    from src.behavior_analysis import exemplar_hmm_results
+
+    result, inherited_trials, artifact_path = exemplar_hmm_results.save_or_load_exemplar_hmm_results(
+        block_performance=block_performance,
+        trial_df=augmented_trial_df,
+        processed_data_path=Path(session.processed_data_path),
+        session_id=session.sess_id_full,
+        specs=specs, stay_prob=stay_prob, rerun=rerun,
+        source_manifest=source_manifest,
+    )
+    if plot:
+        from src.behavior_analysis.exemplar_hmm_plotting import plot_exemplar_block_diagnostic
+
+        plot_exemplar_block_diagnostic(
+            result.block_performance, result.model_names, Path(session.figure_path),
+            session.sess_id_full,
+        )
+    return result.block_performance, inherited_trials, result, artifact_path
+
+
+def _trial_policy_timestamp() -> str:
+    """Return a UTC date/time string for new trial workflow paths; no inputs or units."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S_%f_UTC")
+
+
+def _compute_trial_policy_result(
+    history: "PreparedTrialHistory", candidates: Sequence["TrialPolicyCandidate"],
+    feature_params: "gtf.TaskParams", error_prob: float, stay_prob: float, smoothing: bool,
+    choice_temperatures: Mapping[str, float] | None = None,
+) -> "TrialPolicyResult":
+    """Compute one source's T-by-K dimensionless outputs without files or logging.
+
+    history supplies chronological raw 0=Right/1=Left choices and binary reward
+    indicators; candidates supplies K ordered adapters; other arguments are
+    explicit policy parameters and fixed probability settings. Returns a data-
+    only result, retaining one HMM row per retained trial when smoothing=True.
+    choice_temperatures optionally overrides positive graded-policy scales by
+    ID; each temperature has the corresponding adapter's score units.
+    """
+    from src.behavior_analysis import trial_policy_models as models
+    from src.behavior_analysis import trial_policy_analysis as analysis
+
+    scores, available = models.replay_trial_policy_candidates(history, candidates, feature_params)
+    choice_parameters = models.effective_trial_policy_choice_parameters(
+        candidates, temperatures=choice_temperatures, error_prob=error_prob)
+    result = analysis.compute_trial_policy_comparison(
+        history, scores, available, tuple(candidate.model_id for candidate in candidates),
+        opposite_action_error_prob=error_prob,
+        choice_parameters=choice_parameters,
+    )
+    return analysis.smooth_trial_policy_comparison(result, stay_prob=stay_prob) if smoothing else result
+
+
+def run_dynamax_trial_analysis(
+    trial_df: pd.DataFrame, session: Session, *, feature_params: "gtf.TaskParams",
+    model_ids: Sequence[str] = DEFAULT_MODEL_IDS, error_prob: float = .10,
+    stay_prob: float = .90, smoothing: bool = True, rerun: bool = False, plot: bool = True,
+    choice_temperatures: Mapping[str, float] | None = None,
+) -> tuple[pd.DataFrame, "TrialPolicyResult", Path]:
+    """Save/reuse one source's trial policies, attach to current rows, and plot saved arrays.
+
+    trial_df is chronological (T,C), with raw 0=Right/1=Left choices, binary
+    reward indicators and original cur_trial/cur_block IDs. session supplies its
+    full ID and processed/figure paths; feature_params is the effective TaskParams.
+    Model IDs and scalar probabilities configure fixed comparison/smoothing.
+    choice_temperatures optionally maps graded model IDs to fixed positive
+    scales in score units; None uses approved defaults. Discrete policies use
+    error_prob, while graded choice probabilities have no clipping or lapse.
+    Returns current attached table, numerical result (T,K), and immutable NPZ
+    Path. Run controls act only at this orchestration boundary. Prior results
+    are preserved; early validation errors reach a signature-independent log.
+    """
+    from time import perf_counter
+    from src.behavior_analysis import trial_policy_models as models
+    from src.behavior_analysis import trial_policy_results as results
+
+    started = perf_counter()
+    stamp = _trial_policy_timestamp()
+    directory = Path(session.processed_data_path) / "trial_policy_hmm" / "runs" / stamp
+    record = {"session_id": session.sess_id_full, "session_ids": [session.sess_id_full],
+              "status": "running", "warnings": [], "errors": [], "runtime_seconds": 0.,
+              "requested_options": {"model_ids": list(model_ids), "error_prob": error_prob,
+                                    "stay_prob": stay_prob, "smoothing": smoothing, "rerun": rerun,
+                                    "choice_temperatures": None if choice_temperatures is None else dict(choice_temperatures)}}
+    results.write_trial_policy_run_record(directory, record)
+    try:
+        history = models.prepare_trial_policy_history(trial_df, session_id=session.sess_id_full)
+        candidates = models.resolve_trial_policy_candidates(model_ids)
+        metadata = results.build_trial_policy_metadata(history, candidates, feature_params,
+                                                       parameter_source="explicit TaskParams", error_prob=error_prob,
+                                                       stay_prob=stay_prob, smoothing=smoothing,
+                                                       choice_temperatures=choice_temperatures)
+        record["warnings"] = results.trial_policy_warnings(history)
+        for message in record["warnings"]:
+            print(message)
+        numerical_path = None if rerun else results.find_trial_policy_cache(session.processed_data_path, metadata["signature"])
+        cache_hit = numerical_path is not None
+        if cache_hit:
+            result, _saved_metadata = results.load_trial_policy_results(numerical_path)
+        else:
+            result = _compute_trial_policy_result(history, candidates, feature_params, error_prob, stay_prob, smoothing,
+                                                   choice_temperatures)
+        metadata.update(status=result.status, warnings=record["warnings"], errors=[],
+                        runtime_seconds=perf_counter() - started, cache_hit=cache_hit)
+        if numerical_path is None:
+            numerical_path = results.save_trial_policy_results(result, processed_data_path=session.processed_data_path,
+                                                                metadata=metadata)
+        current = results.attach_trial_policy_outputs(trial_df, result, metadata=metadata)
+        export_directory = numerical_path.parent.parent / f"{stamp}_export"
+        results.write_trial_policy_export(
+            current, export_directory=export_directory, numerical_path=numerical_path, metadata=metadata,
+            current_csv_path=Path(session.processed_data_path) / f"{session.sess_id_full}_augmented_trials.csv",
+        )
+        record.update(metadata, numerical_artifact=str(numerical_path), export_directory=str(export_directory))
+        if plot:
+            from src.behavior_analysis.trial_policy_plotting import plot_trial_policy_diagnostic
+
+            saved_result, saved_metadata = results.load_trial_policy_results(numerical_path)
+            figure_path = Path(session.figure_path) / "trial_policy_hmm" / stamp / "trial_policy_diagnostic.png"
+            plot_trial_policy_diagnostic(saved_result, saved_metadata, output_path=figure_path)
+            record["figures"] = [str(figure_path)]
+        record["runtime_seconds"] = perf_counter() - started
+        results.write_trial_policy_run_record(directory, record)
+        return current, result, numerical_path
+    except Exception as error:
+        record.update(status="error", errors=[f"Session {session.sess_id_full}: {type(error).__name__}: {error}"],
+                      runtime_seconds=perf_counter() - started)
+        results.write_trial_policy_run_record(directory, record)
+        print(record["errors"][0])
+        raise
+
+
+def _resolve_trial_policy_feature_params(
+    session: Session, candidates: Sequence["TrialPolicyCandidate"], override: "gtf.TaskParams | None",
+) -> tuple["gtf.TaskParams", str, list[str]]:
+    """Resolve explicit override, source JSON, then defaults for one session.
+
+    session supplies the original processed-data path/full ID; candidates are
+    K selected definitions and override is a complete TaskParams or None.
+    Returns TaskParams, provenance string, and concise warnings for defaulted
+    candidate-relevant fields. Parameters retain dimensionless policy units.
+    """
+    if override is not None:
+        if not isinstance(override, gtf.TaskParams):
+            raise ValueError(f"Session {session.sess_id_full}: parameter override must be a complete TaskParams")
+        return override, "explicit TaskParams override", []
+    path = Path(session.processed_data_path) / "trial_feature_params.json"
+    if not path.exists():
+        return gtf.TaskParams(), "TaskParams defaults (no trial_feature_params.json)", []
+    try:
+        values = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(values, dict):
+            raise ValueError("expected a JSON object")
+        params = gtf.TaskParams(**values)
+    except (ValueError, TypeError) as error:
+        raise ValueError(f"Session {session.sess_id_full}: invalid feature parameters in {path}: {error}") from error
+    required = {name for candidate in candidates for name in candidate.parameter_names}
+    defaulted = sorted(required - values.keys())
+    warnings_out = []
+    if defaulted:
+        warnings_out.append(f"Session {session.sess_id_full}: saved feature parameters defaulted fields: {', '.join(defaulted)}.")
+    return params, str(path), warnings_out
+
+
+def _trial_policy_source_view(
+    current_trials: pd.DataFrame, saved_source: SavedSessionAnalysis,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Recover one source's current T_s rows and original schema from joint rows.
+
+    current_trials is the current joint table (T,C); saved_source is the original
+    local table/metadata. Returns joint integer positions (T_s,) and a source-
+    local copy with original block IDs and flag schema. Introduced alias columns
+    must be missing. Source row order/positions are checked, never guessed from
+    repeated local trial IDs. No choice/history units are changed.
+    """
+    from src.behavior_analysis.project_utils import is_present_value
+    from src.behavior_analysis.trial_policy_models import FLAG_COLUMN_NAMES
+
+    identity = saved_source.session.sess_id_full
+    if "source_session_id" not in current_trials or "source_trial_row" not in current_trials:
+        raise ValueError("Joint trials require source_session_id and source_trial_row")
+    positions = np.flatnonzero(current_trials["source_session_id"].eq(identity).to_numpy())
+    view = current_trials.iloc[positions].copy()
+    if len(view) != len(saved_source.augmented_trial_df) or not np.array_equal(
+            view["source_trial_row"].to_numpy(), np.arange(len(view))):
+        raise ValueError(f"Session {identity}: source row identity/order mismatch")
+    original = saved_source.augmented_trial_df
+    for column in (*FLAG_COLUMN_NAMES, "session_ID"):
+        if column in view and column not in original:
+            if is_present_value(view[column]).any():
+                raise ValueError(f"Session {identity}: unexpected nonmissing introduced column {column}")
+            view = view.drop(columns=column)
+    if "source_cur_block" in view:
+        view["cur_block"] = view["source_cur_block"]
+    return positions, view
+
+
+def _run_multisession_trial_policy(
+    current_trials: pd.DataFrame, concatenated: ConcatenatedSessionAnalysis, session: Session,
+    source_sessions: Sequence[SavedSessionAnalysis] | None,
+    overrides: Mapping[str, "gtf.TaskParams"] | None, *, model_ids: Sequence[str], error_prob: float,
+    stay_prob: float, smoothing: bool, rerun: bool, n_jobs: int | None,
+    choice_temperatures: Mapping[str, float] | None = None,
+) -> pd.DataFrame:
+    """Compute independent source histories and attach them to current joint rows.
+
+    Inputs are joint (T,C) trials, ordered source metadata/manifest, per-source
+    optional complete TaskParams and dimensionless fixed comparison settings.
+    Returns current (T,C+outputs) table preserving block fields/order/index.
+    Parent prepares/cache-checks/saves/logs/plots; only numerical cache misses run
+    in source-level threads. Partial failures never publish a joint trial table.
+    choice_temperatures optionally maps graded IDs to positive fixed score-unit
+    scales shared across sources; no session-wide normalization or fitting occurs.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import nullcontext
+    import os
+    from time import perf_counter
+    from src.behavior_analysis import trial_policy_models as models
+    from src.behavior_analysis import trial_policy_results as results
+
+    started = perf_counter()
+    stamp = _trial_policy_timestamp()
+    directory = Path(session.figure_path) / "trial_policy_hmm" / stamp
+    record = {"session_id": session.sess_id_full, "session_ids": [], "status": "running",
+              "warnings": [], "errors": [], "runtime_seconds": 0., "sources": [],
+              "requested_options": {"model_ids": list(model_ids), "error_prob": error_prob,
+                                    "stay_prob": stay_prob, "smoothing": smoothing, "rerun": rerun,
+                                    "n_jobs": n_jobs,
+                                    "choice_temperatures": None if choice_temperatures is None else dict(choice_temperatures)}}
+    results.write_trial_policy_run_record(directory, record)
+    try:
+        if source_sessions is None:
+            raise ValueError("source_sessions must identify each original trial source")
+        sources = list(source_sessions)
+        ids = [source.session.sess_id_full for source in sources]
+        record["session_ids"] = ids
+        manifest = concatenated.source_session_manifest
+        if ids != [entry["session_id"] for entry in manifest] or len(set(ids)) != len(ids):
+            raise ValueError("source_sessions must match the ordered source_session_manifest with unique full IDs")
+        if any(entry["n_trials"] != len(source.augmented_trial_df) or entry["n_blocks"] != len(source.block_performance)
+               for source, entry in zip(sources, manifest)):
+            raise ValueError("source_sessions row counts do not match the ordered manifest")
+        if n_jobs is not None and (isinstance(n_jobs, bool) or not isinstance(n_jobs, int) or n_jobs < 1):
+            raise ValueError("trial_policy_n_jobs must be a positive integer or None")
+        if overrides is not None and set(overrides) - set(ids):
+            raise ValueError("Trial parameter overrides contain unknown source session IDs")
+        candidates = models.resolve_trial_policy_candidates(model_ids)
+        prepared = []
+        for source in sources:
+            identity = source.session.sess_id_full
+            history = models.prepare_trial_policy_history(source.augmented_trial_df, session_id=identity)
+            positions, view = _trial_policy_source_view(current_trials, source)
+            projected = models.prepare_trial_policy_history(view, session_id=identity)
+            if projected.metadata["input_digest"] != history.metadata["input_digest"]:
+                raise ValueError(f"Session {identity}: current joint input identity differs from source history")
+            parameters, provenance, parameter_warnings = _resolve_trial_policy_feature_params(
+                source.session, candidates, None if overrides is None else overrides.get(identity))
+            metadata = results.build_trial_policy_metadata(history, candidates, parameters, parameter_source=provenance,
+                                                           error_prob=error_prob, stay_prob=stay_prob, smoothing=smoothing,
+                                                           choice_temperatures=choice_temperatures)
+            messages = parameter_warnings + results.trial_policy_warnings(history)
+            metadata["warnings"] = messages
+            record["warnings"].extend(messages)
+            for message in messages:
+                print(message)
+            path = None if rerun else results.find_trial_policy_cache(source.session.processed_data_path, metadata["signature"])
+            cached = None if path is None else results.load_trial_policy_results(path)[0]
+            prepared.append(_TrialPolicySourceWork(source, history, positions, view, parameters, metadata, path, cached))
+        workers = min(n_jobs or os.cpu_count() or 1, max(1, len(prepared)))
+        record["n_workers"] = workers
+        owned_parts, joint_positions, saved_results, saved_metadata = [], [], [], []
+        with (ThreadPoolExecutor(max_workers=workers) if workers > 1 else nullcontext()) as executor:
+            futures = {} if executor is None else {
+                index: executor.submit(_compute_trial_policy_result, work.history, candidates, work.feature_params,
+                                       error_prob, stay_prob, smoothing, choice_temperatures)
+                for index, work in enumerate(prepared) if work.numerical_path is None}
+            for index, work in enumerate(prepared):
+                source, history = work.source, work.history
+                metadata, path = work.metadata, work.numerical_path
+                try:
+                    result = work.cached_result
+                    if result is None:
+                        result = futures[index].result() if executor is not None else _compute_trial_policy_result(
+                            history, candidates, work.feature_params, error_prob, stay_prob, smoothing, choice_temperatures)
+                    metadata.update(status=result.status, errors=[], cache_hit=path is not None,
+                                    runtime_seconds=perf_counter() - started)
+                    if path is None:
+                        path = results.save_trial_policy_results(result, processed_data_path=source.session.processed_data_path,
+                                                                metadata=metadata)
+                    attached = results.attach_trial_policy_outputs(work.current_trials, result, metadata=metadata)
+                    owned_columns = [column for column in attached if column.startswith("trial_policy_")]
+                    owned_parts.append(attached[owned_columns])
+                    joint_positions.append(work.joint_positions)
+                    input_columns = [column for column in ("cur_trial", "cur_block", "action", "reward", "session_ID",
+                                     "source_session_id", "source_trial_row", "source_cur_block", *models.FLAG_COLUMN_NAMES) if column in work.current_trials]
+                    results.write_trial_policy_export(
+                        attached[input_columns + owned_columns], export_directory=path.parent.parent / f"{stamp}_export",
+                        numerical_path=path, metadata=metadata, current_csv_path=None)
+                    loaded, loaded_meta = results.load_trial_policy_results(path)
+                    saved_results.append(loaded)
+                    saved_metadata.append(loaded_meta)
+                    record["sources"].append({"session_id": history.session_id, "n_trials": len(history.actions),
+                                               "status": result.status, "numerical_artifact": str(path)})
+                except Exception as error:
+                    raise ValueError(f"Session {source.session.sess_id_full}: trial policy analysis failed: {error}") from error
+        output = current_trials.copy()
+        if owned_parts:
+            owned = pd.concat(owned_parts, ignore_index=True).iloc[np.argsort(np.concatenate(joint_positions))]
+            for column in owned:
+                output[column] = owned[column].array
+        from src.behavior_analysis.trial_policy_plotting import plot_multisession_trial_policy_diagnostic
+
+        figure = Path(session.figure_path) / f"{session.sess_id_full}_{stamp}_trial-policy-diagnostic.png"
+        plot_multisession_trial_policy_diagnostic(saved_results, saved_metadata, output_path=figure)
+        # Publish the joint current CSV only after every source has succeeded.
+        current_csv = Path(session.processed_data_path) / f"{session.sess_id_full}_augmented_trials.csv"
+        record.update(status="ok" if any(item.comparison_valid.any() for item in saved_results) else "no_valid_comparisons",
+                      figures=[str(figure)], runtime_seconds=perf_counter() - started)
+        results.write_trial_policy_export(output, export_directory=directory / "export", numerical_path=None,
+                                          metadata=record, current_csv_path=current_csv)
+        results.write_trial_policy_run_record(directory, record)
+        return output
+    except Exception as error:
+        record.update(status="error", errors=[f"{type(error).__name__}: {error}"], runtime_seconds=perf_counter() - started)
+        results.write_trial_policy_run_record(directory, record)
+        print(f"Session {session.sess_id_full}: {error}")
+        raise
+
+
+def run_multisession_analysis(
+    concatenated: ConcatenatedSessionAnalysis,
+    session: Session,
+    *,
+    block_exemplar_specs: Sequence[block_exemplar_models.BlockExemplarModelSpec] = block_exemplar_models.DEFAULT_BLOCK_EXEMPLAR_MODELS,
+    exemplar_hmm_stay_prob: float = 0.9,
+    rerun_exemplar_hmm: bool = False,
+    source_sessions: Sequence[SavedSessionAnalysis] | None = None,
+    trial_feature_params_by_session: Mapping[str, "gtf.TaskParams"] | None = None,
+    run_trial_policy_analysis: bool = True,
+    trial_policy_model_ids: Sequence[str] = DEFAULT_MODEL_IDS,
+    trial_policy_error_prob: float = .10,
+    trial_policy_stay_prob: float = .90,
+    trial_policy_smoothing: bool = True,
+    rerun_trial_policy_analysis: bool = False,
+    trial_policy_n_jobs: int | None = None,
+    trial_policy_temperatures: Mapping[str, float] | None = None,
+    **legacy_options,
+) -> tuple[None, None, pd.DataFrame, pd.DataFrame]:
+    """Smooth one continuous ordered multisession sequence with fixed exemplars.
+
+    Inputs are concatenated N-block/T-trial tables with preserved source IDs and
+    within-session histories, session output metadata, ordered exemplar specs
+    (trials/rewarded-trial units), and unitless stay probability. Returns two
+    None selection placeholders, full N-block output, and current T-trial output.
+    Legacy LM/GLM fitting options are accepted for caller compatibility only;
+    they do not define this deterministic fixed HMM. Use the explicit
+    run_legacy_multisession_analysis entry point for learned ssm models.
+
+    source_sessions supplies ordered original tables/paths, including empty
+    sources, when run_trial_policy_analysis=True (default). Optional complete
+    TaskParams overrides are keyed by full source ID; otherwise source JSON or
+    documented defaults apply. trial_policy_model_ids selects K policies; error
+    and stay probabilities are dimensionless; smoothing/rerun control only this
+    stage. trial_policy_n_jobs is a positive source-worker count or None for
+    available CPUs capped at session count. Trial HMMs reset independently by
+    source. Returned current trial rows retain block assignments and original
+    order; failures retain the fresh block-only current export.
+    trial_policy_temperatures optionally maps graded policy IDs to positive
+    fixed score-unit scales; None uses approved per-model defaults.
+    """
+    if legacy_options:
+        warnings.warn(
+            "Legacy LM/GLM HMM options do not control fixed-exemplar inference; "
+            "use block_exemplar_specs, exemplar_hmm_stay_prob, and rerun_exemplar_hmm.",
+            DeprecationWarning, stacklevel=2,
+        )
+    from src.behavior_analysis.trial_policy_results import clear_trial_policy_outputs
+
+    blocks, trials, _result, _artifact = run_dynamax_block_analysis(
+        concatenated.block_performance, clear_trial_policy_outputs(concatenated.augmented_trial_df), session,
+        specs=block_exemplar_specs, stay_prob=exemplar_hmm_stay_prob,
+        rerun=rerun_exemplar_hmm,
+        source_manifest=concatenated.source_session_manifest or None,
+    )
+    if run_trial_policy_analysis:
+        trials = _run_multisession_trial_policy(
+            trials, concatenated, session, source_sessions, trial_feature_params_by_session,
+            model_ids=trial_policy_model_ids, error_prob=trial_policy_error_prob, stay_prob=trial_policy_stay_prob,
+            smoothing=trial_policy_smoothing, rerun=rerun_trial_policy_analysis, n_jobs=trial_policy_n_jobs,
+            choice_temperatures=trial_policy_temperatures)
+    return None, None, blocks, trials
+
+
 def run_or_collect_multisession_analysis(
     concatenated: ConcatenatedSessionAnalysis,
     session: Session,
@@ -3838,10 +5031,9 @@ def run_or_collect_multisession_analysis(
     if collection_only:
         save_concatenated_multisession_inputs(concatenated, session)
         print(
-            "WARNING: collection-only mode overwrote multisession block/trial CSVs "
-            f"for {session.sess_id_full} without rerunning HMM. Existing HMM "
-            "pickle files and plots may no longer match these CSVs. Disable "
-            "skip_block_hmm_if_existing or rerun HMM before interpreting HMM outputs."
+            "collection-only mode overwrote multisession block/trial CSVs "
+            f"for {session.sess_id_full} without model inference. Run full "
+            "analysis to attach fixed-exemplar states to these current tables."
         )
         return None
 
@@ -3865,7 +5057,21 @@ def plot_session(event_df: pd.DataFrame, session_info: dict, figure_path: Path, 
                                    plot_path=figure_path, plot_choices=True)
 
 
-def main_simulation():
+def main_simulation(legacy_block_modeling: bool = False):
+    """Analyze the configured synthetic session and save its normal outputs.
+
+    Parameters
+    ----------
+    legacy_block_modeling : bool
+        False runs fixed-exemplar Dynamax inference; True explicitly opts into
+        learned ssm information criteria and requires that optional dependency.
+
+    Returns
+    -------
+    None
+        Writes synthetic-session tables/figures to the configured run paths.
+        Counts remain trials/rewards and event times remain seconds.
+    """
     PROJECT_ROOT = Path(__file__).resolve().parents[1]
     switching_run_data_dir = PROJECT_ROOT / "data/processed/switching_agents"
 
@@ -3895,9 +5101,15 @@ def main_simulation():
 
     block_hmm_random_seed = 1001
 
-    block_model_selection = bssm.run_information_criteria(block_performance, session=sess, algorithm='MLE',
-                                                    prior_alpha=1, prior_sigma=1,
-                                                    random_seed=block_hmm_random_seed)
+    if legacy_block_modeling:
+        from src.behavior_analysis import block_state_space_modeling as bssm
+
+        block_model_selection = bssm.run_information_criteria(
+            block_performance, session=sess, algorithm='MLE',
+            prior_alpha=1, prior_sigma=1, random_seed=block_hmm_random_seed,
+        )
+    else:
+        run_dynamax_block_analysis(block_performance, augmented_trial_df, sess)
     # cv_model_selection = bssm.run_cross_validation(block_performance, session=sess, algorithm='MLE',
     #                                                prior_alpha=1, prior_sigma=1, n_runs=5, n_folds=2)
 
@@ -3916,6 +5128,21 @@ def main_simulation():
 def main_multisession(
     multisession_collection_only: bool = True,
     agent_agreement_only: bool = False,
+    choice_window_sizes: tuple[int, ...] = (10, 20),
+    rerun_choice_window_analysis: bool = False,
+    choice_window_n_jobs: int | None = None,
+    block_exemplar_specs: Sequence[block_exemplar_models.BlockExemplarModelSpec] = block_exemplar_models.DEFAULT_BLOCK_EXEMPLAR_MODELS,
+    exemplar_hmm_stay_prob: float = 0.9,
+    rerun_exemplar_hmm: bool = False,
+    run_trial_policy_analysis: bool = True,
+    trial_policy_model_ids: Sequence[str] = DEFAULT_MODEL_IDS,
+    trial_policy_error_prob: float = .10,
+    trial_policy_stay_prob: float = .90,
+    trial_policy_smoothing: bool = True,
+    rerun_trial_policy_analysis: bool = False,
+    trial_policy_n_jobs: int | None = None,
+    trial_feature_params_by_session: Mapping[str, "gtf.TaskParams"] | None = None,
+    trial_policy_temperatures: Mapping[str, float] | None = None,
 ):
     """Analyze selected saved sessions as one continuous multisession table.
 
@@ -3929,8 +5156,36 @@ def main_multisession(
         If True, save and plot the existing date-aligned mouse-agent agreement
         outputs, then return before concatenation, residual summaries, or HMM
         work. This takes precedence over ``multisession_collection_only``.
+    choice_window_sizes : tuple[int, ...], default=(10, 20)
+        Add session-local valid-choice windows to agreement-only/full analysis.
+        An empty tuple disables these outputs. Collection-only mode skips them.
+    rerun_choice_window_analysis : bool, default=False
+        Preserve previous artifacts and recompute window outputs in new paths.
+    choice_window_n_jobs : int or None, default=None
+        Window-only session workers; None uses available cores capped at the
+        session count. Existing block/HMM execution controls are unchanged.
+    block_exemplar_specs : Sequence[BlockExemplarModelSpec]
+        Ordered fixed definitions in trials and previous rewarded-trial units.
+    exemplar_hmm_stay_prob : float
+        Unitless diagonal transition probability for one continuous sequence.
+    rerun_exemplar_hmm : bool
+        Force a new immutable joint run; source-session models are untouched.
+    run_trial_policy_analysis : bool
+        Enable source-local fixed trial-policy comparison in full mode, default
+        True. Agreement-only and collection-only retain their early returns.
+    trial_policy_model_ids : Sequence[str]
+        Ordered implemented policies; legacy trial GLM settings remain inactive.
+    trial_policy_error_prob, trial_policy_stay_prob : float
+        Dimensionless opposite-action error and trialwise persistence settings.
+    trial_policy_smoothing, rerun_trial_policy_analysis : bool
+        Enable retrospective smoothing and optionally force numerical reruns.
+    trial_policy_n_jobs : int or None
+        Positive session worker count; None uses CPUs capped at source count.
+    trial_feature_params_by_session : Mapping[str, TaskParams] or None
+        Complete per-source overrides keyed by full session ID, ahead of saved
+        source parameters and documented defaults.
     """
-    mouse = 'CT016'
+    mouse = 'CT026'
     session_data_root = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}')
     multi_session_save_path = Path(f'/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}/cross_session_analysis')
     task_tag = "latent_inference"
@@ -3969,29 +5224,11 @@ def main_multisession(
         require_saved_outputs=True,
         multi_session_save_path=multi_session_save_path,
     )
-    block_hmm_random_seed = 1001
-    trial_hmm_random_seed = 2001
-    skip_block_hmm_if_existing = True
-    block_predicted_state_line_width = 0.8
-    block_state_plot_figsize = (18, 6)
-    block_secondary_trace = "none"
-    plot_sliding_regression = True
     sliding_regression_window_size = 10
     sliding_regression_step_size = 5
-    block_hmm_state_marker_mode = "alpha"  # default, markersize, or alpha
     plot_agent_agreement_raw_blocks = False
     learning_regressor = "prev_n_rewarded"
     trials_to_correct_display_cap = 25
-    trial_state_plot_line_width = 0.5
-    trial_state_plot_figsize = (18, 6)
-    trial_input_source = "from_block_modeling"  # either from_block_modeling or saved_augmented_trials
-    trial_glm_predictor_columns = (
-        "FQlearning_rel_value",
-        "HMM_rel_value_logodds_decay",
-        "relative_doubt_index",
-        "perseveration_regressor",
-        "time_to_choice"
-    )
 
     sessions = [
         find_saved_session_by_date(
@@ -4010,6 +5247,12 @@ def main_multisession(
             mouse=mouse,
             show_raw_blocks=plot_agent_agreement_raw_blocks,
         )
+        if choice_window_sizes:
+            save_and_plot_multisession_choice_window_agreement(
+                saved_sessions=saved_sessions, output_path=multi_session_save_path,
+                mouse=mouse, window_sizes=choice_window_sizes,
+                rerun=rerun_choice_window_analysis, n_jobs=choice_window_n_jobs,
+            )
         return
     if all(hasattr(saved_session.session, "processed_data_path") for saved_session in saved_sessions):
         for model_formula in BLOCK_RESIDUAL_MODEL_FORMULAS:
@@ -4032,6 +5275,13 @@ def main_multisession(
             collection_only=True,
         )
         return
+
+    if choice_window_sizes:
+        save_and_plot_multisession_choice_window_agreement(
+            saved_sessions=saved_sessions, output_path=multi_session_save_path,
+            mouse=mouse, window_sizes=choice_window_sizes,
+            rerun=rerun_choice_window_analysis, n_jobs=choice_window_n_jobs,
+        )
 
     learning_coefficients, learning_block_counts, learning_dates = prepare_learning_curve_data(
         mouse=mouse,
@@ -4060,21 +5310,6 @@ def main_multisession(
         figure_id=mouse,
     )
 
-    block_hmm_state_features = bssm.collect_block_hmm_state_features_for_sessions(
-        sessions=sessions,
-        output_path=multi_session_save_path,
-        mouse=mouse,
-    )
-    performance_plots.plot_block_hmm_state_feature_scatter(
-        state_features_df=block_hmm_state_features,
-        plot_path=multi_session_save_path,
-        figure_id=mouse,
-        fit_type="map",
-        x_column="bias",
-        y_column="prev_n_rewarded_weight",
-        size_column="state_block_count",
-        marker_mode=block_hmm_state_marker_mode,
-    )
     agent_mouse_agreement_summary, agent_mouse_agreement_block_points, _ = (
         save_and_plot_multisession_agent_mouse_agreement(
             saved_sessions=saved_sessions,
@@ -4205,29 +5440,26 @@ def main_multisession(
         concatenated=concatenated,
         session=multisession,
         collection_only=multisession_collection_only,
-        block_num_states=3,
-        trial_num_states=3,
-        prior_alpha=1,
-        prior_sigma=1,
-        block_random_seed=block_hmm_random_seed,
-        trial_random_seed=trial_hmm_random_seed,
-        trial_predictor_columns=trial_glm_predictor_columns,
-        skip_block_hmm_if_existing=skip_block_hmm_if_existing,
-        block_predicted_state_line_width=block_predicted_state_line_width,
-        block_state_plot_figsize=block_state_plot_figsize,
-        block_secondary_trace=block_secondary_trace,
-        plot_sliding_regression=plot_sliding_regression,
-        sliding_regression_window_size=sliding_regression_window_size,
-        sliding_regression_step_size=sliding_regression_step_size,
-        trial_input_source=trial_input_source,
-        trial_state_plot_line_width=trial_state_plot_line_width,
-        trial_state_plot_figsize=trial_state_plot_figsize,
+        block_exemplar_specs=block_exemplar_specs,
+        exemplar_hmm_stay_prob=exemplar_hmm_stay_prob,
+        rerun_exemplar_hmm=rerun_exemplar_hmm,
+        source_sessions=saved_sessions,
+        trial_feature_params_by_session=trial_feature_params_by_session,
+        run_trial_policy_analysis=run_trial_policy_analysis,
+        trial_policy_model_ids=trial_policy_model_ids,
+        trial_policy_error_prob=trial_policy_error_prob,
+        trial_policy_stay_prob=trial_policy_stay_prob,
+        trial_policy_smoothing=trial_policy_smoothing,
+        rerun_trial_policy_analysis=rerun_trial_policy_analysis,
+        trial_policy_n_jobs=trial_policy_n_jobs,
+        trial_policy_temperatures=trial_policy_temperatures,
     )
     if multisession_result is None:
         return
     _block_selection, _trial_selection, modeled_block_df, _modeled_trial_df = multisession_result
     performance_plots.plot_multisession_summary_grid(
         block_performance=modeled_block_df,
+        exemplar_model_names=[spec.name for spec in block_exemplar_specs],
         side_trials_to_correct_summary=side_trials_to_correct_summary,
         side_trials_to_correct_block_points=side_trials_to_correct_block_points,
         correct_after_first_summary=correct_after_first_summary,
@@ -4269,6 +5501,10 @@ def run_single_session_workflow(
         Saves plots, CSVs, and model outputs into the session's configured
         processed/figure directories.
     """
+    from src.behavior_analysis.exemplar_hmm_results import preserve_current_exports
+
+    # Preserve prior model assignments before any upstream CSV regeneration.
+    preserve_current_exports(Path(sess.processed_data_path), sess.sess_id_full)
     if sess.session_info is None:
         with open(sess.session_info_fname, "rb") as file:
             sess.session_info = pkl.load(file)
@@ -4399,46 +5635,49 @@ def run_single_session_workflow(
     performance_plots.plot_session_explore_trials(block_performance, sess.figure_path, sess.sess_id_full)
     performance_plots.plot_session_explore_runs(block_performance, sess.figure_path, sess.sess_id_full)
     performance_plots.plot_session_agent_mouse_agreement(block_performance, sess.figure_path, sess.sess_id_full)
+    if config.choice_window_sizes:
+        save_and_plot_choice_window_agreement_for_session(
+            augmented_trial_df=augmented_trial_df, session=sess,
+            window_sizes=config.choice_window_sizes,
+            feature_parameters=task_params, rerun=config.rerun_choice_window_analysis,
+        )
     plot_expectant_switching_for_session(
         augmented_trial_df=augmented_trial_df,
         session=sess,
         params=task_params,
+    )
+    save_and_plot_expectant_model_selectivity_for_session(
+        augmented_trial_df=augmented_trial_df,
+        session=sess,
+        min_valid_choices=5,
     )
     plot_mouse_history_ideal_observer_for_session(
         augmented_trial_df=augmented_trial_df,
         session=sess,
     )
 
-    missing_hmm_outputs = missing_block_hmm_output_paths(sess)
-    if config.skip_block_hmm_if_existing and not missing_hmm_outputs:
-        print(
-            f"Skipping block HMM for {sess.sess_id_full}; "
-            "saved block HMM outputs already exist."
-        )
-        block_performance, augmented_trial_df = load_saved_block_hmm_outputs(sess)
-    else:
-        if config.skip_block_hmm_if_existing:
-            missing_summary = "\n".join(str(path) for path in missing_hmm_outputs)
-            print(
-                f"Block HMM skip requested for {sess.sess_id_full}, but required "
-                f"outputs are missing. Running block HMM.\n{missing_summary}"
-            )
-        block_performance, augmented_trial_df = bssm.run_block_modeling(
-            block_performance,
-            augmented_trial_df,
-            session=sess,
-            num_states=config.block_modeling_states,
-            prior_alpha=1,
-            prior_sigma=1,
-            random_seed=config.block_hmm_random_seed,
-            block_secondary_trace=config.block_secondary_trace,
-            plot_sliding_regression=config.plot_sliding_regression,
-            sliding_regression_window_size=config.sliding_regression_window_size,
-            sliding_regression_step_size=config.sliding_regression_step_size,
+    from src.behavior_analysis.trial_policy_results import clear_trial_policy_outputs
+
+    augmented_trial_df = clear_trial_policy_outputs(augmented_trial_df)
+    block_performance, augmented_trial_df, exemplar_result, _artifact_path = run_dynamax_block_analysis(
+        block_performance, augmented_trial_df, sess,
+        specs=config.block_exemplar_specs,
+        stay_prob=config.exemplar_hmm_stay_prob,
+        rerun=config.rerun_exemplar_hmm,
+    )
+
+    if config.run_trial_policy_analysis:
+        augmented_trial_df, _trial_result, _trial_artifact = run_dynamax_trial_analysis(
+            augmented_trial_df, sess, feature_params=task_params,
+            model_ids=config.trial_policy_model_ids, error_prob=config.trial_policy_error_prob,
+            stay_prob=config.trial_policy_stay_prob, smoothing=config.trial_policy_smoothing,
+            rerun=config.rerun_trial_policy_analysis,
+            choice_temperatures=config.trial_policy_temperatures,
         )
 
     performance_plots.plot_single_session_summary_grid(
         block_performance=block_performance,
+        exemplar_model_names=exemplar_result.model_names,
         augmented_trial_df=augmented_trial_df,
         event_df=event_df,
         session_info=sess.session_info,
@@ -4503,11 +5742,89 @@ def run_single_session_batch(
     return resolved_sessions
 
 
+# def run_expectant_model_refresh_batch(
+#     mouse: str,
+#     dates: Sequence[str],
+#     session_data_root: Path,
+#     multi_session_save_path: Path,
+#     params: object,
+#     refresher=refresh_expectant_model_outputs_for_session,
+# ) -> list[Session]:
+#     """Refresh candidate expectant outputs for saved sessions of one mouse.
+#
+#     Parameters
+#     ----------
+#     mouse : str
+#         Mouse identifier used in saved session directories.
+#     dates : Sequence[str]
+#         Session dates in ``YYYY-MM-DD`` format, processed in order.
+#     session_data_root : pathlib.Path
+#         Mouse-level data directory containing saved session analyses.
+#     multi_session_save_path : pathlib.Path
+#         Cross-session output directory assigned to resolved sessions.
+#     params : gather_trial_features.TaskParams
+#         Fixed candidate parameters applied independently to every session.
+#     refresher : callable
+#         Dependency-injected function accepting ``(session, params)``. The
+#         default updates candidate features, agreement columns, and plots only.
+#
+#     Returns
+#     -------
+#     list[Session]
+#         Resolved saved sessions in processing order. No raw preprocessing,
+#         GLM, or HMM execution occurs in this batch wrapper.
+#     """
+#     resolved_sessions = []
+#     for date in dates:
+#         session = find_saved_session_by_date(
+#             mouse=mouse,
+#             date=date,
+#             session_data_root=session_data_root,
+#             multi_session_save_path=multi_session_save_path,
+#         )
+#         resolved_sessions.append(session)
+#         refresher(session, params)
+#     return resolved_sessions
+
+
+# def main_mouse_expectant_model_refresh() -> None:
+#     """Refresh candidate expectant outputs for every saved CT016 session."""
+#     mouse = "CT016"
+#     task_tag = "latent_inference"
+#     session_data_root = Path(
+#         f"/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}"
+#     )
+#     multi_session_save_path = session_data_root / "cross_session_analysis"
+#     dates = find_raw_session_dates_for_task_tag(
+#         mouse=mouse,
+#         session_data_root=session_data_root,
+#         task_tag=task_tag,
+#     )
+#     params = gtf.TaskParams(
+#         probe_doubt_persistence_weight=1.0,
+#         probe_doubt_probe_weight=2.0,
+#         probe_doubt_doubt_weight=1.4,
+#         probe_doubt_lambda=0.5,
+#         home_expectancy_threshold=2.5,
+#         home_expectancy_scale=0.5,
+#         home_expectancy_weight=1.0,
+#         home_doubt_weight=1.0,
+#         home_doubt_lambda=0.5,
+#     )
+#     run_expectant_model_refresh_batch(
+#         mouse=mouse,
+#         dates=dates,
+#         session_data_root=session_data_root,
+#         multi_session_save_path=multi_session_save_path,
+#         params=params,
+#     )
+
+
 def main_mouse():
     """Analyze a single behavior session from start to finish."""
-    mouse = "CT026"
-    date = "2026-08-03"
-    behavior_timestamp = 111938  # Set to "HHMMSS" to choose one session on ambiguous dates.
+    mouse = "CT024"
+    date = "2026-06-09"
+    behavior_timestamp = 143852  # Set to "HHMMSS" to choose one session on ambiguous dates.
     task_tag = "latent_inference"
     session_data_root = Path(f"/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}")
     multi_session_save_path = session_data_root / "cross_session_analysis"
@@ -4516,11 +5833,10 @@ def main_mouse():
         run_session_analysis=True,
         ideal_observer_n_replays=100,
         ideal_observer_seed=12345,
-        block_modeling_states=2,
-        trial_modeling_states=3,
+        block_exemplar_specs=block_exemplar_models.DEFAULT_BLOCK_EXEMPLAR_MODELS,
+        exemplar_hmm_stay_prob=0.9,
+        rerun_exemplar_hmm=False,
         scatter_regressor="prev_n_rewarded",
-        block_secondary_trace="prev_n_rewarded",
-        skip_block_hmm_if_existing=True,
         max_explore_run_length=5,
         min_explore_run_length_to_count=2,
         trial_feature_params=gtf.TaskParams(
@@ -4531,7 +5847,16 @@ def main_mouse():
             simple_probe_weight=1.0,
             full_persistence_weight=1.0,
             full_expectancy_weight=1.0,
-            full_doubt_weight=1.0,
+            full_doubt_weight=1.1,
+            probe_doubt_persistence_weight=1.0,
+            probe_doubt_probe_weight=2.0,
+            probe_doubt_doubt_weight=1.4,
+            probe_doubt_lambda=0.5,
+            home_expectancy_threshold=2.5,
+            home_expectancy_scale=0.5,
+            home_expectancy_weight=1.0,
+            home_doubt_weight=1.5,
+            home_doubt_lambda=0.5,
         ),
     )
 
@@ -4548,7 +5873,7 @@ def main_mouse():
 
 def main_mouse_batch():
     """Run ordinary single-session analysis for several dates of one mouse."""
-    mouse = "CT016"
+    mouse = "CT026"
     use_all_dates_for_task_tag = True
     dates = [#'2026-04-17', '2026-04-20',
         #'2026-04-21', '2026-04-22', '2026-04-23', '2026-04-24', '2026-04-27', '2026-04-28',
@@ -4580,11 +5905,10 @@ def main_mouse_batch():
         run_session_analysis=True,
         ideal_observer_n_replays=100,
         ideal_observer_seed=12345,
-        block_modeling_states=2,
-        trial_modeling_states=3,
+        block_exemplar_specs=block_exemplar_models.DEFAULT_BLOCK_EXEMPLAR_MODELS,
+        exemplar_hmm_stay_prob=0.9,
+        rerun_exemplar_hmm=False,
         scatter_regressor="prev_n_rewarded",
-        block_secondary_trace="prev_n_rewarded",
-        skip_block_hmm_if_existing=True,
         max_explore_run_length=5,
         min_explore_run_length_to_count=2,
         trial_feature_params=gtf.TaskParams(
@@ -4596,6 +5920,15 @@ def main_mouse_batch():
             full_persistence_weight=1.0,
             full_expectancy_weight=1.0,
             full_doubt_weight=1.0,
+            probe_doubt_persistence_weight=1.0,
+            probe_doubt_probe_weight=2.0,
+            probe_doubt_doubt_weight=1.4,
+            probe_doubt_lambda=0.5,
+            home_expectancy_threshold=2.5,
+            home_expectancy_scale=0.5,
+            home_expectancy_weight=1.0,
+            home_doubt_weight=1.0,
+            home_doubt_lambda=0.5,
         ),
     )
 
@@ -4607,6 +5940,52 @@ def main_mouse_batch():
         multi_session_save_path=multi_session_save_path,
         config=config,
     )
+
+
+def main_mouse_win_switch_home_diagnostic() -> None:
+    """Export one saved-session diagnostic using the quick-edit settings below.
+
+    No inputs; returns None after printing the PNG path. Resolves exactly one
+    saved session for the mouse/date, without raw preprocessing or model fitting.
+    Trial axes and scores retain their recorded units and signed conventions.
+    """
+    # Quick-edit settings for saved behavior-only or neural sessions.
+    data_root = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData")
+    mouse = "CT016"
+    date = "2026-05-29"
+
+    session = find_saved_session_by_date(
+        mouse=mouse, date=date, session_data_root=data_root / mouse,
+        multi_session_save_path=data_root / mouse / "cross_session_analysis",
+    )
+    paths = save_and_plot_win_switch_home_for_session(session)
+    print(f"Saved Win-switch/Home diagnostic: {paths['plot']}")
+
+
+def main_cross_mouse_choice_window_agreement() -> None:
+    """Run saved-only cross-mouse Ideal curves using the quick-edit settings below.
+
+    No arguments. Mouse IDs and paths select saved collections; window_sizes
+    counts valid choices. Returns None after printing the dated export directory.
+    Agreement remains a unitless fraction; this does not run session analysis.
+    """
+    # Quick-edit settings. An explicit run mapping overrides the mouse list.
+    data_root = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData")
+    mice = ["CT016", "CT017", "CT019", "CT020", "CT021", "CT022", "CT023", "CT024", "CT025"]
+    window_sizes = (10, 20)
+    collection_runs = None  # Or {"CT016": Path(".../choice_window_agreement/SELECTED_RUN")}.
+    figure_id = "cross_mouse"
+    output_path = data_root / "cross_mouse_analysis"
+
+    _, run_directory = run_cross_mouse_choice_window_agreement_curves(
+        data_root=data_root,
+        output_path=output_path,
+        collection_runs=collection_runs,
+        window_sizes=window_sizes,
+        figure_id=figure_id,
+        mice=mice if collection_runs is None else None,
+    )
+    print(f"Saved cross-mouse choice-window agreement: {run_directory}")
 
 
 def main_cross_mouse_metrics(
@@ -4640,6 +6019,7 @@ def main_cross_mouse_metrics(
     if mice is None:
         mice = [
             "CT016", "CT017", "CT019", "CT020", "CT021", "CT022", "CT023", "CT024", "CT025",
+            "CT025",
         ]
 
     selected_mice = discover_mice_with_overall_performance(data_root) if use_discovered_mice else list(mice)
@@ -4706,8 +6086,11 @@ def main_cross_mouse_multisession_block_performance(
 
 
 if __name__ == '__main__':
+    # main_cross_mouse_choice_window_agreement()
     # main_mouse()
     main_mouse_batch()
-    main_multisession(agent_agreement_only=True)
+    main_multisession(multisession_collection_only=False, agent_agreement_only=False)
     # main_simulation()
     # main_cross_mouse_metrics()
+    # main_mouse_expectant_model_refresh()
+    # main_mouse_win_switch_home_diagnostic()

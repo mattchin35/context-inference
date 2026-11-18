@@ -1,0 +1,228 @@
+"""Native-bin activity, zero semantics and exact non-occluding overlap geometry."""
+
+from dataclasses import replace
+from unittest.mock import patch
+
+import numpy as np
+import pandas as pd
+import pytest
+from PIL import Image
+
+from src.neural_analysis.decoder_unit_activity.plotting import (
+    build_unit_activity_data, plot_unit_activity, export_unit_activity_png, viewport_unit_activity_data,
+)
+from src.neural_analysis.population.session_timeline import SessionTimelineResult
+
+
+@pytest.fixture
+def activity_example():
+    """Return rates(3,2,2) Hz, chronological choices and unit assignments with two overlap lanes."""
+    rates = np.array([[[0, 5], [2, 5]], [[4, 5], [6, 5]], [[8, 5], [10, 5]]], float)
+    choices = pd.DataFrame({"trial_id": [10, 20, 90], "row_position": [0, 2, 7],
+        "choice_time": [102., 103., 108.], "elapsed_s": [2., 3., 8.],
+        "action": [1, 0, 1], "reward": [1, 0, 1]})
+    behavior = SessionTimelineResult("example", 100., choices,
+        pd.DataFrame(columns=["Time", "Event", "elapsed_s"]), {}, {}, {})
+    display = pd.DataFrame({"unit_id": ["u0", "u1"], "group_index": [0, 2],
+        "mean_weight": [2., 1.], "percentile": [.9, .8], "positive_folds": [5, 4], "display_order": [0, 1]})
+    return rates, choices, behavior, display
+
+
+def make_data(example, scale="hz", time_range_s=None):
+    """Input fixture/scale/range; return plot data from unchanged (3,2,2) Hz values."""
+    rates, choices, _, _ = example
+    return build_unit_activity_data(rates, ("u0", "u1"), ("u0", "u1"), choices,
+        np.arange(3), np.array([-1., 0, 1]), scale=scale, time_range_s=time_range_s)
+
+
+def test_zero_and_constant_activity_have_scale_specific_meaning(activity_example):
+    """Input Hz rates; zero/constant values remain measured and normalize correctly only in SD mode."""
+    raw = make_data(activity_example)
+    z = make_data(activity_example, "zscore")
+    np.testing.assert_equal(raw["values"], activity_example[0])
+    assert raw["values"][0, 0, 0] == 0 and (raw["values"][..., 1] == 5).all()
+    assert z["values"][0, 0, 0] == pytest.approx(-5 / np.std([0, 2, 4, 6, 8, 10]))
+    assert (z["values"][..., 1] == 0).all() and np.isfinite(z["values"]).all()
+    assert z["constant_mask"].tolist() == [False, True]
+    np.testing.assert_equal(activity_example[0][..., 1], np.full((3, 2), 5.))
+
+
+def test_two_units_two_lanes_have_explicit_disjoint_rows(activity_example):
+    """Input overlapping windows; lane padding, y edges, native time edges and trial IDs are exact."""
+    data = make_data(activity_example)
+    assert data["lane_ids"].tolist() == [0, 1, 0] and data["lane_count"] == 2
+    first, second = data["lanes"]
+    np.testing.assert_equal(first["y_edges"], np.arange(5))
+    assert first["z"].shape == (4, 5) and second["z"].shape == (4, 2)
+    np.testing.assert_equal(first["x"], [1, 2, 3, 7, 8, 9])
+    np.testing.assert_equal(second["x"], [2, 3, 4])
+    assert np.isnan(first["z"][[1, 3]]).all() and np.isnan(second["z"][[0, 2]]).all()
+    assert np.isnan(first["z"][:, 2]).all()
+    np.testing.assert_equal(first["z"][0, [0, 1, 3, 4]], [0, 2, 8, 10])
+    np.testing.assert_equal(second["z"][1], [4, 6])
+    assert first["customdata"][0, 0, 0] == 10 and second["customdata"][1, 0, 0] == 20
+    assert first["customdata"][1, 0, 0] is None
+
+
+def test_panning_keeps_global_lanes_statistics_and_color_limits(activity_example):
+    """Input two viewports; no lane reassignment, local z-scoring or automatic recoloring."""
+    full = make_data(activity_example, "zscore")
+    tail = make_data(activity_example, "zscore", (7, 9))
+    assert tail["lane_count"] == 2 and len(tail["lanes"]) == 1
+    np.testing.assert_equal(tail["lane_ids"], full["lane_ids"])
+    np.testing.assert_equal(tail["values"], full["values"])
+    assert tail["color_limits"] == full["color_limits"]
+    assert tail["bin_width_s"] == 1
+
+
+def test_viewport_slicing_reuses_full_pool_activity(activity_example):
+    """Input cached full-pool data; panning only slices native edges and reuses normalization arrays."""
+    full = make_data(activity_example, "zscore")
+    tail = viewport_unit_activity_data(full, (7, 9))
+    assert tail["values"] is full["values"] and tail["mean_hz"] is full["mean_hz"]
+    assert tail["lane_ids"] is full["lane_ids"] and tail["color_limits"] == full["color_limits"]
+    assert len(tail["lanes"]) == 1
+    np.testing.assert_equal(tail["lanes"][0]["x"], [7, 8, 9])
+
+
+def test_custom_sd_limits_only_change_colors_and_survive_panning(activity_example, tmp_path):
+    """Input cached SD activity; a positive limit sets both renderers without clipping measured values."""
+    from matplotlib.figure import Figure
+    from src.neural_analysis.decoder_unit_activity.plotting import with_unit_sd_limit
+    full = make_data(activity_example, "zscore")
+    automatic_limits = full["color_limits"]
+    custom = with_unit_sd_limit(full, .5)
+    assert custom["color_limits"] == (-.5, .5) and full["color_limits"] == automatic_limits
+    assert custom["values"] is full["values"] and custom["lanes"] is full["lanes"]
+    assert custom["mean_hz"] is full["mean_hz"] and custom["scale_hz"] is full["scale_hz"]
+    assert np.max(np.abs(custom["values"])) > .5
+    tail = viewport_unit_activity_data(custom, (7, 9))
+    assert tail["color_limits"] == (-.5, .5)
+    _, _, behavior, display = activity_example
+    figure = plot_unit_activity(tail, behavior, display)
+    assert (figure.layout.coloraxis.cmin, figure.layout.coloraxis.cmax) == (-.5, .5)
+    assert "colors (-0.5, 0.5)" in figure.layout.meta["caption"]
+    with patch.object(Figure, "savefig", autospec=True) as save:
+        export_unit_activity_png(tmp_path / "custom.png", tail, behavior, display)
+    mesh = save.call_args.args[0].axes[1].collections[0]
+    assert (mesh.norm.vmin, mesh.norm.vmax) == (-.5, .5)
+    assert with_unit_sd_limit(full, None)["color_limits"] == automatic_limits
+
+
+@pytest.mark.parametrize("scale,limit", [("zscore", 0), ("zscore", -1), ("zscore", np.nan),
+    ("zscore", np.inf), ("zscore", True), ("hz", 3)])
+def test_invalid_sd_limits_are_rejected(activity_example, scale, limit):
+    """Input nonpositive/nonfinite SD limit or Hz activity; reject an invalid symmetric SD range."""
+    from src.neural_analysis.decoder_unit_activity.plotting import with_unit_sd_limit
+    with pytest.raises(ValueError, match="SD|zscore"):
+        with_unit_sd_limit(make_data(activity_example, scale), limit)
+
+
+def test_touching_windows_need_one_lane_and_ids_are_not_indices(activity_example):
+    """Input adjacent half-open intervals with irregular IDs; they do not overlap or reorder."""
+    rates, choices, _, _ = activity_example
+    choices = choices.assign(choice_time=[102., 104., 106.], elapsed_s=[2., 4., 6.])
+    data = build_unit_activity_data(rates, ("u0", "u1"), ("u1",), choices,
+        np.arange(3), np.array([-1., 0., 1.]), scale="hz")
+    assert data["lane_count"] == 1 and data["lanes"][0]["z"].shape == (1, 6)
+    assert data["unit_ids"] == ("u1",) and data["lanes"][0]["customdata"][0, -1, 0] == 90
+
+
+def test_plot_and_png_share_exact_edges_and_rows(activity_example, tmp_path):
+    """Input prepared plot data; both renderers preserve one label per unit and non-overwrite export."""
+    data = make_data(activity_example)
+    data["source_label"] = "example PFC"
+    _, _, behavior, display = activity_example
+    figure = plot_unit_activity(data, behavior, display)
+    heatmaps = [trace for trace in figure.data if trace.type == "heatmap"]
+    assert len(heatmaps) == 2 and all(trace.hoverongaps is False for trace in heatmaps)
+    np.testing.assert_equal(heatmaps[0].z, data["lanes"][0]["z"])
+    np.testing.assert_equal(heatmaps[0].y, np.arange(5))
+    assert tuple(figure.layout.yaxis2.range) == (4, 0)
+    assert list(figure.layout.yaxis2.ticktext) == ["u0", "u1"]
+    assert "1000 ms" in figure.layout.meta["caption"]
+    assert figure.layout.meta["caption"].startswith("example PFC")
+    assert "<br>" in figure.layout.annotations[-1].text
+    assert figure.layout.annotations[-1].y == 0 and figure.layout.annotations[-1].yshift < 0
+    assert figure.layout.annotations[-1].xshift <= -200
+    assert all(len(line) <= 80 for line in figure.layout.annotations[-1].text.split("<br>"))
+    group_labels = [item for item in figure.layout.annotations if item.text in ("Left context", "Left choice")]
+    assert all(item.x == 0 and item.xshift <= -100 for item in group_labels)
+    domain = figure.layout.yaxis2.domain
+    assert figure.layout.coloraxis.colorbar.y == pytest.approx(sum(domain)/2)
+    assert figure.layout.coloraxis.colorbar.len == pytest.approx(domain[1]-domain[0])
+    path = tmp_path / "units.png"
+    export_unit_activity_png(path, data, behavior, display)
+    with Image.open(path) as exported:
+        assert exported.getpixel((0, 0))[:3] == (255, 255, 255)
+    with pytest.raises(FileExistsError):
+        export_unit_activity_png(path, data, behavior, display)
+
+
+def test_empty_viewport_and_invalid_unit_selection(activity_example):
+    """Input viewport without windows or unknown selected ID; no fabricated activity or ID fallback."""
+    assert not make_data(activity_example, time_range_s=(20, 30))["lanes"]
+    rates, choices, _, _ = activity_example
+    with pytest.raises(ValueError):
+        build_unit_activity_data(rates, ("u0", "u1"), ("missing",), choices,
+            np.arange(3), np.array([-1., 0., 1.]))
+
+
+def test_logged_context_and_led_tracks_export(activity_example, tmp_path):
+    """Input recorded context/LED events; both renderers accept the public interval schemas."""
+    _, _, behavior, display = activity_example
+    events = pd.DataFrame({"Event": ["enter_left_patch", "LED_on", "left_entry", "LED_off", "enter_right_patch"],
+        "elapsed_s": [0., 1., 2., 3., 5.], "Time": [100., 101., 102., 103., 105.]})
+    behavior = replace(behavior, events=events)
+    data = make_data(activity_example)
+    figure = plot_unit_activity(data, behavior, display, ("LED", "left_entry"))
+    assert len([trace for trace in figure.data if trace.type == "heatmap"]) == 2
+    export_unit_activity_png(tmp_path / "events.png", data, behavior, display, ("LED", "left_entry"))
+
+
+def test_png_colorbar_does_not_cover_time_axis(activity_example, tmp_path):
+    """Input shared lane data; the exported figure keeps colorbar entirely beyond both plot axes."""
+    from matplotlib.figure import Figure
+    _, _, behavior, display = activity_example
+    with patch.object(Figure, "savefig", autospec=True) as save:
+        export_unit_activity_png(tmp_path / "layout.png", make_data(activity_example), behavior, display)
+    figure = save.call_args.args[0]
+    assert max(axis.get_position().x1 for axis in figure.axes[:-1]) + .01 < figure.axes[-1].get_position().x0
+
+
+def test_hundred_unit_png_labels_and_caption_do_not_overlap(activity_example, tmp_path):
+    """Input 100 labeled synthetic units; rendered text bounds retain vertical and horizontal separation."""
+    from matplotlib.figure import Figure
+    rates, choices, behavior, _ = activity_example
+    choices = choices.assign(choice_time=[102., 104., 106.], elapsed_s=[2., 4., 6.])
+    behavior = replace(behavior, choices=choices)
+    ids = tuple(f"ProbeA:{index}" for index in range(100))
+    expanded = np.broadcast_to(rates[:, :, :1], (3, 2, 100)).copy()
+    data = build_unit_activity_data(expanded, ids, ids, choices, np.arange(3), np.array([-1., 0., 1.]), scale="hz")
+    display = pd.DataFrame({"unit_id": ids, "group_index": np.repeat(np.arange(10), 10)})
+    with patch.object(Figure, "savefig", autospec=True) as save:
+        export_unit_activity_png(tmp_path / "hundred.png", data, behavior, display)
+    figure = save.call_args.args[0]
+    figure.canvas.draw()
+    renderer = figure.canvas.get_renderer()
+    heatmap = figure.axes[1]
+    labels = [label.get_window_extent(renderer) for label in heatmap.get_yticklabels()]
+    assert all(upper.y0 - lower.y1 > 2 for upper, lower in zip(labels, labels[1:]))
+    groups = [label.get_window_extent(renderer) for label in heatmap.texts]
+    assert max(label.x1 for label in groups) + 5 < min(label.x0 for label in labels)
+    assert figure.texts[0].get_window_extent(renderer).y1 + 2 < heatmap.xaxis.label.get_window_extent(renderer).y0
+
+
+def test_unknown_reward_is_gray_in_png_not_no_reward(activity_example, tmp_path):
+    """Input one unknown reward; PNG choice styling preserves its unknown status like the shared timeline."""
+    from matplotlib.figure import Figure
+    from matplotlib.colors import to_rgba
+    _, choices, behavior, display = activity_example
+    behavior = replace(behavior, choices=choices.assign(reward=[1., np.nan, 0.]))
+    with patch.object(Figure, "savefig", autospec=True) as save:
+        export_unit_activity_png(tmp_path / "unknown.png", make_data(activity_example), behavior, display)
+    figure = save.call_args.args[0]
+    unknown = [artist for artist in figure.axes[0].collections
+               if len(artist.get_offsets()) and np.any(np.isclose(artist.get_offsets()[:, 0], 3.))]
+    assert len(unknown) == 1
+    np.testing.assert_allclose(unknown[0].get_edgecolors()[0], to_rgba("#6b7280"))

@@ -31,11 +31,16 @@ def load_main_module():
         "Ideal": "observer_mouse_agreement",
         "Probe+P": "simple_probe_persistence_mouse_agreement",
         "Expect+D+P": "expectancy_persistence_doubt_mouse_agreement",
+        "Probe+P+D": "probe_persistence_doubt_mouse_agreement",
+        "Home E+D": "home_referenced_expectancy_doubt_mouse_agreement",
     }
     behavior_analysis_pkg.raster_plots = ModuleType("behavior_analysis.raster_plots")
     behavior_analysis_pkg.session_analysis = ModuleType("behavior_analysis.session_analysis")
     behavior_analysis_pkg.simulate_priors = ModuleType("behavior_analysis.simulate_priors")
     behavior_analysis_pkg.plot_model_values = ModuleType("behavior_analysis.plot_model_values")
+    behavior_analysis_pkg.expectant_switching_selectivity = ModuleType(
+        "behavior_analysis.expectant_switching_selectivity"
+    )
     behavior_analysis_pkg.block_state_space_modeling = ModuleType(
         "behavior_analysis.block_state_space_modeling"
     )
@@ -51,6 +56,9 @@ def load_main_module():
     sys.modules["behavior_analysis.session_analysis"] = behavior_analysis_pkg.session_analysis
     sys.modules["behavior_analysis.simulate_priors"] = behavior_analysis_pkg.simulate_priors
     sys.modules["behavior_analysis.plot_model_values"] = behavior_analysis_pkg.plot_model_values
+    sys.modules["behavior_analysis.expectant_switching_selectivity"] = (
+        behavior_analysis_pkg.expectant_switching_selectivity
+    )
     sys.modules[
         "behavior_analysis.block_state_space_modeling"
     ] = behavior_analysis_pkg.block_state_space_modeling
@@ -83,7 +91,22 @@ def load_main_module():
     assert module_spec is not None
     assert module_spec.loader is not None
     module = importlib.util.module_from_spec(module_spec)
+    # Match normal imports: dataclasses resolve forward annotations in this namespace.
+    sys.modules[module_spec.name] = module
     module_spec.loader.exec_module(module)
+    # Production imports now use the src package. Keep this legacy fixture's
+    # deliberate lightweight dependencies local to the loaded test module.
+    for name in ["performance_plots", "raster_plots", "session_analysis", "simulate_priors",
+                 "plot_model_values", "expectant_switching_selectivity"]:
+        setattr(module, name, getattr(behavior_analysis_pkg, name))
+    module.gtf = behavior_analysis_pkg.gather_trial_features
+    module.bssm = behavior_analysis_pkg.block_state_space_modeling
+    module.tssm = behavior_analysis_pkg.trial_state_space_modeling
+    sys.modules["src.behavior_analysis.block_state_space_modeling"] = module.bssm
+    sys.modules["src.behavior_analysis.trial_state_space_modeling"] = module.tssm
+    import src.behavior_analysis as canonical_package
+    canonical_package.block_state_space_modeling = module.bssm
+    canonical_package.trial_state_space_modeling = module.tssm
     return module
 
 
@@ -96,6 +119,72 @@ def test_main_uses_canonical_agent_agreement_plot_registry():
     )
     assert "Probe+P" in main_module.AGENT_MOUSE_AGREEMENT_COLUMNS
     assert "Expect+D+P" in main_module.AGENT_MOUSE_AGREEMENT_COLUMNS
+    assert "Probe+P+D" in main_module.AGENT_MOUSE_AGREEMENT_COLUMNS
+    assert "Home E+D" in main_module.AGENT_MOUSE_AGREEMENT_COLUMNS
+
+
+def test_save_and_plot_session_expectant_selectivity_writes_separate_outputs(
+    tmp_path,
+    monkeypatch,
+):
+    """Single-session selectivity outputs should not alter core behavior tables."""
+    main_module = load_main_module()
+    session = SimpleNamespace(
+        sess_id_full="CT016_2026-05-29_132812",
+        date="2026-05-29",
+        processed_data_path=tmp_path / "processed",
+        figure_path=tmp_path / "figures",
+    )
+    session.processed_data_path.mkdir()
+    session.figure_path.mkdir()
+    block_table = pd.DataFrame(
+        {"block_id": [0], "model": ["Probe+P+D"], "agreement_delta": [0.5]}
+    )
+    event_table = pd.DataFrame(
+        {"model": ["Probe+P+D"], "event_type": ["reward_to_switch"]}
+    )
+    trial_df = pd.DataFrame({"action": [1]})
+
+    monkeypatch.setattr(
+        main_module.expectant_switching_selectivity,
+        "compute_block_model_selectivity",
+        lambda *_args, **_kwargs: block_table.copy(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.expectant_switching_selectivity,
+        "compute_event_model_selectivity",
+        lambda *_args, **_kwargs: event_table.copy(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_session_expectant_model_selectivity",
+        lambda *_args, **_kwargs: session.figure_path / "selectivity.png",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_session_expectant_model_selectivity_scatter",
+        lambda *_args, **_kwargs: session.figure_path / "scatter.png",
+        raising=False,
+    )
+
+    saved_blocks, saved_events, paths = (
+        main_module.save_and_plot_expectant_model_selectivity_for_session(
+            trial_df,
+            session,
+            min_valid_choices=5,
+        )
+    )
+
+    assert saved_blocks.equals(block_table)
+    assert saved_events.equals(event_table)
+    assert paths["block_table"].exists()
+    assert paths["event_table"].exists()
+    assert paths["metadata"].exists()
+    assert paths["block_plot"] == session.figure_path / "selectivity.png"
+    assert paths["scatter_plot"] == session.figure_path / "scatter.png"
 
 
 def test_collect_configured_trial_features_forwards_supplied_params(tmp_path, monkeypatch):
@@ -179,7 +268,7 @@ def test_save_and_plot_multisession_agent_agreement_uses_existing_plot(
 
 
 def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monkeypatch):
-    """Each processed session should receive both complementary tuning plots."""
+    """Each processed session should receive legacy and candidate tuning plots."""
     main_module = load_main_module()
     session = SimpleNamespace(
         figure_path=tmp_path,
@@ -202,7 +291,28 @@ def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monk
         lambda *_args, **_kwargs: calls.append("diagnostic") or tmp_path / "diagnostic.png",
         raising=False,
     )
+    monkeypatch.setattr(
+        main_module.plot_model_values,
+        "plot_mouse_history_candidate_expectant_switching_values",
+        lambda **_kwargs: (trial_df.copy(), tmp_path / "candidate_values.png"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main_module.performance_plots,
+        "plot_candidate_expectant_switching_diagnostics",
+        lambda *_args, **_kwargs: (
+            calls.append("candidate_diagnostic")
+            or tmp_path / "candidate_diagnostic.png"
+        ),
+        raising=False,
+    )
 
+    monkeypatch.setattr(
+        main_module,
+        "save_and_plot_win_switch_home_for_session",
+        lambda *_args, **_kwargs: {"plot": tmp_path / "win_switch_home.png"},
+        raising=False,
+    )
     outputs = main_module.plot_expectant_switching_for_session(
         augmented_trial_df=trial_df,
         session=session,
@@ -211,11 +321,16 @@ def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monk
 
     assert outputs["value_plot"] == tmp_path / "values.png"
     assert outputs["diagnostic_plot"] == tmp_path / "diagnostic.png"
-    assert calls == ["diagnostic"]
+    assert outputs["candidate_value_plot"] == tmp_path / "candidate_values.png"
+    assert outputs["candidate_diagnostic_plot"] == (
+        tmp_path / "candidate_diagnostic.png"
+    )
+    assert outputs["win_switch_home_diagnostic_plot"] == tmp_path / "win_switch_home.png"
+    assert calls == ["diagnostic", "candidate_diagnostic"]
 
 
 def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
-    """Agreement alignment should not require concatenation or HMM execution."""
+    """Agreement-only plotting should not require concatenation or HMM work."""
     main_module = load_main_module()
     session = SimpleNamespace(sess_id_full="CT016_test", date="2026-06-10")
     saved_session = object()
@@ -246,7 +361,7 @@ def test_multisession_agent_agreement_only_returns_before_hmm_work(monkeypatch):
         lambda _sessions: (_ for _ in ()).throw(AssertionError("HMM path reached")),
     )
 
-    result = main_module.main_multisession(agent_agreement_only=True)
+    result = main_module.main_multisession(agent_agreement_only=True, choice_window_sizes=())
 
     assert result is None
     assert calls == ["agreement"]
@@ -572,6 +687,61 @@ def test_find_saved_session_by_date_errors_when_date_is_missing(tmp_path):
             date="2025-12-05",
             session_data_root=data_root,
             multi_session_save_path=cross_session_path,
+        )
+
+
+def test_find_saved_session_by_date_ignores_archived_and_exported_csvs(tmp_path):
+    """Path fixture yields one live session despite identical nested CSV names."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    home = write_saved_session(
+        data_root, "CT014", "2025-12-05", "165240",
+        pd.DataFrame({"block_ix": [0]}), pd.DataFrame({"cur_block": [0]}),
+    )
+    current = home / "processed" / "CT014_2025-12-05_165240_augmented_trials.csv"
+    for relative_directory in (
+        "processed/trial_policy_hmm/archives/old_digest",
+        "processed/exemplar_hmm/archives/old_digest",
+        "processed/trial_policy_hmm/run/export",
+        "figures/old_export",
+    ):
+        copied = home / relative_directory / current.name
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        copied.write_bytes(current.read_bytes())
+
+    session = main_module.find_saved_session_by_date(
+        "CT014", "2025-12-05", data_root, data_root / "cross_session_analysis",
+    )
+    assert session.processed_data_path == current.parent
+    assert session.sess_id_full == "CT014_2025-12-05_165240"
+
+
+def test_find_saved_session_by_date_rejects_two_live_timestamps(tmp_path):
+    """Path fixture yields an ambiguity error for two actual current sessions."""
+    main_module = load_main_module()
+    data_root = tmp_path / "CT014"
+    home = write_saved_session(
+        data_root, "CT014", "2025-12-05", "165240",
+        pd.DataFrame({"block_ix": [0]}), pd.DataFrame({"cur_block": [0]}),
+    )
+    pd.DataFrame({"cur_block": [0]}).to_csv(
+        home / "processed" / "CT014_2025-12-05_175240_augmented_trials.csv", index=False,
+    )
+    with pytest.raises(ValueError, match="found 2"):
+        main_module.find_saved_session_by_date(
+            "CT014", "2025-12-05", data_root, data_root / "cross_session_analysis",
+        )
+
+
+def test_find_saved_session_by_date_does_not_use_archive_as_missing_live_session(tmp_path):
+    """Path fixture with an archive only must raise rather than load stale data."""
+    main_module = load_main_module()
+    archived = tmp_path / "CT014" / "session" / "processed" / "trial_policy_hmm" / "archives" / "old_digest"
+    archived.mkdir(parents=True)
+    (archived / "CT014_2025-12-05_165240_augmented_trials.csv").write_text("cur_block\n0\n")
+    with pytest.raises(FileNotFoundError, match="2025-12-05"):
+        main_module.find_saved_session_by_date(
+            "CT014", "2025-12-05", tmp_path / "CT014", tmp_path / "cross_session_analysis",
         )
 
 
@@ -1890,6 +2060,8 @@ def test_ensure_block_agent_mouse_agreement_columns_regenerates_missing_columns(
             observer_mouse_agreement=[0.5, 0.5],
             simple_probe_persistence_mouse_agreement=[0.5, 0.75],
             expectancy_persistence_doubt_mouse_agreement=[0.75, 1.0],
+            probe_persistence_doubt_mouse_agreement=[0.5, 1.0],
+            home_referenced_expectancy_doubt_mouse_agreement=[0.75, 0.5],
         )
 
     monkeypatch.setattr(
@@ -1927,6 +2099,8 @@ def test_prepare_agent_mouse_agreement_block_points_long_format():
                     "observer_mouse_agreement": [0.5, 0.5],
                     "simple_probe_persistence_mouse_agreement": [0.5, 0.75],
                     "expectancy_persistence_doubt_mouse_agreement": [0.75, 1.0],
+                    "probe_persistence_doubt_mouse_agreement": [0.25, 0.5],
+                    "home_referenced_expectancy_doubt_mouse_agreement": [1.0, 0.75],
                 }
             ),
             augmented_trial_df=pd.DataFrame({"cur_block": [0, 1]}),
@@ -1972,6 +2146,8 @@ def test_prepare_agent_mouse_agreement_summary_calculates_session_agent_quartile
                     "observer_mouse_agreement": [0.5, 0.5, 1.0],
                     "simple_probe_persistence_mouse_agreement": [0.25, 0.5, 0.75],
                     "expectancy_persistence_doubt_mouse_agreement": [0.0, 0.5, 1.0],
+                    "probe_persistence_doubt_mouse_agreement": [0.25, 0.5, 0.75],
+                    "home_referenced_expectancy_doubt_mouse_agreement": [1.0, 0.5, 0.0],
                 }
             ),
             augmented_trial_df=pd.DataFrame({"cur_block": [0, 1, 2]}),
@@ -2232,7 +2408,7 @@ def test_load_saved_multisession_augmented_trials_errors_when_inherited_columns_
         )
 
 
-def test_run_multisession_analysis_uses_saved_augmented_trials_when_requested(tmp_path, monkeypatch):
+def test_run_legacy_multisession_analysis_uses_saved_augmented_trials_when_requested(tmp_path, monkeypatch):
     """Saved-trial mode should skip block modeling and return the saved trial CSV.
 
     Parameters
@@ -2281,7 +2457,7 @@ def test_run_multisession_analysis_uses_saved_augmented_trials_when_requested(tm
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("block modeling should be skipped")),
         raising=False,
     )
-    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_legacy_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         trial_num_states=3,
@@ -2343,7 +2519,7 @@ def test_load_saved_block_hmm_outputs_loads_block_and_trial_csvs(tmp_path):
     assert trial_df["inherited_block_strategy"].tolist() == [1, 0]
 
 
-def test_run_multisession_analysis_skips_block_modeling_when_outputs_exist(tmp_path, monkeypatch):
+def test_run_legacy_multisession_analysis_skips_block_modeling_when_outputs_exist(tmp_path, monkeypatch):
     """Existing block HMM outputs should be reused when the skip flag is enabled."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
@@ -2380,7 +2556,7 @@ def test_run_multisession_analysis_skips_block_modeling_when_outputs_exist(tmp_p
         raising=False,
     )
 
-    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_legacy_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         trial_predictor_columns=("FQlearning_rel_value",),
@@ -2393,7 +2569,7 @@ def test_run_multisession_analysis_skips_block_modeling_when_outputs_exist(tmp_p
     assert modeled_trial_df["inherited_block_strategy"].tolist() == [1, 0]
 
 
-def test_run_multisession_analysis_runs_block_modeling_when_skip_outputs_missing(tmp_path, monkeypatch):
+def test_run_legacy_multisession_analysis_runs_block_modeling_when_skip_outputs_missing(tmp_path, monkeypatch):
     """The skip flag should not suppress modeling when required outputs are absent."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
@@ -2439,7 +2615,7 @@ def test_run_multisession_analysis_runs_block_modeling_when_skip_outputs_missing
         raising=False,
     )
 
-    _block_selection, _trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+    _block_selection, _trial_selection, modeled_block_df, modeled_trial_df = main_module.run_legacy_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         trial_predictor_columns=("FQlearning_rel_value",),
@@ -2452,7 +2628,7 @@ def test_run_multisession_analysis_runs_block_modeling_when_skip_outputs_missing
     assert modeled_trial_df["inherited_block_strategy"].tolist() == [0, 1]
 
 
-def test_run_multisession_analysis_rejects_unknown_trial_input_source(tmp_path):
+def test_run_legacy_multisession_analysis_rejects_unknown_trial_input_source(tmp_path):
     """Multisession trial input source should fail fast on unsupported values."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
@@ -2466,7 +2642,7 @@ def test_run_multisession_analysis_rejects_unknown_trial_input_source(tmp_path):
     )
 
     with pytest.raises(ValueError, match="trial_input_source"):
-        main_module.run_multisession_analysis(
+        main_module.run_legacy_multisession_analysis(
             concatenated=concatenated,
             session=synthetic_session,
             trial_predictor_columns=("FQlearning_rel_value",),
@@ -2474,7 +2650,7 @@ def test_run_multisession_analysis_rejects_unknown_trial_input_source(tmp_path):
         )
 
 
-def test_run_multisession_analysis_forwards_block_plot_settings(tmp_path, monkeypatch):
+def test_run_legacy_multisession_analysis_forwards_block_plot_settings(tmp_path, monkeypatch):
     """Multisession analysis should forward block-state plotting settings."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
@@ -2520,7 +2696,7 @@ def test_run_multisession_analysis_forwards_block_plot_settings(tmp_path, monkey
     monkeypatch.setattr(main_module.tssm, "run_trial_modeling", lambda trial_df, **_kwargs: trial_df, raising=False)
     monkeypatch.setattr(main_module, "save_concatenated_multisession_inputs", lambda *_args, **_kwargs: None)
 
-    main_module.run_multisession_analysis(
+    main_module.run_legacy_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         trial_predictor_columns=("FQlearning_rel_value",),
@@ -2542,7 +2718,7 @@ def test_run_multisession_analysis_forwards_block_plot_settings(tmp_path, monkey
     }
 
 
-def test_run_multisession_analysis_runs_block_modeling_on_concatenated_inputs(tmp_path, monkeypatch):
+def test_run_legacy_multisession_analysis_runs_block_modeling_on_concatenated_inputs(tmp_path, monkeypatch):
     """Multisession orchestration should run block modeling on concatenated data."""
     main_module = load_main_module()
     synthetic_session = SimpleNamespace(
@@ -2610,7 +2786,7 @@ def test_run_multisession_analysis_runs_block_modeling_on_concatenated_inputs(tm
         raising=False,
     )
 
-    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_multisession_analysis(
+    block_selection, trial_selection, modeled_block_df, modeled_trial_df = main_module.run_legacy_multisession_analysis(
         concatenated=concatenated,
         session=synthetic_session,
         block_num_states=2,

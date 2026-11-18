@@ -1,12 +1,30 @@
 # Neural analysis quickstart
 
+For a single-session workflow covering task-variable
+decoding, pooled condition generalization, interregional regression, and
+spike-phase/PPC, see [`SINGLE_SESSION_SETUP.md`](SINGLE_SESSION_SETUP.md). The
+setup command scaffolds control files, reports blockers, and prepares existing
+Power/Synchrony/phase prerequisites when explicitly asked. It never submits a
+job or changes the underlying computations.
+The non-destructive whole-session return command is documented under
+[`Copy cluster outputs back to the workstation`](SINGLE_SESSION_SETUP.md#8-copy-cluster-outputs-back-to-the-workstation).
+
+For the separate context/choice/reward/value transfer analysis, including the
+Context outcome-transfer view, see the
+[cross-condition generalization guide](task_decoding/cross_condition/README.md)
+and [approved outcome-generalization plan](../../docs/context_outcome_generalization_implementation_plan.md).
+The guide documents single-session and session-list commands, metadata
+prerequisites, saved-run versions, and interpretation.
+
 Neural-session metadata is a small JSON file that tells the existing analysis
 code where one session's behavior, LFP, synchronization, and spike sources are.
-It contains paths and labels only; scientific settings remain in the analysis
-code and explicit run commands.
+Version 2 contains source paths and labels. Version 3 adds stable analysis
+roles, PPC cache locations, and preview/final shuffle intent so routine commands
+need only the metadata path. All other scientific settings remain in code.
 
 Start from the closest editable example:
 
+- `docs/examples/neural_analysis/workflow_session.json` (version 3, full workflow)
 - `docs/examples/neural_analysis/open_ephys_session.json`
 - `docs/examples/neural_analysis/spikeglx_session.json`
 - `docs/examples/neural_analysis/differently_named_session.json`
@@ -35,10 +53,12 @@ The file has these user-edited sections:
 | --- | --- |
 | `session` | The single session name used in displays and saved outputs |
 | `acquisition` | One session-wide value: `open_ephys` or `spikeglx` |
-| `behavior` | Required trial table and optional event table |
+| `behavior` | Required trial table, optional event table, and optional `treadmill` serial text path |
 | `probes` | One complete record per probe: paths, sites, and optional unit channels |
 | `site_pairs` | Site-name pairs available to synchrony views |
-| optional `cache` | The session-wide reusable LFP-summary cache |
+| optional version-2 `cache` | The session-wide reusable LFP-summary cache |
+| version-3 `analysis.probe_roles` | Stable PFC, HPC, and PPC probe keys |
+| version-3 `analysis.ppc` | Three relative PPC caches and preview/final shuffle counts |
 
 For each probe, `lfp`, `alignment`, `sorter`, `quality`, and `sites` are
 required. `alignment` is the one aligned file used for synchronization and
@@ -63,7 +83,9 @@ To require one action to be ready, add `--action webapp`, `--action power`,
 returns a nonzero exit code and lists the missing inputs. General validation
 lists all four categories and permits an intentionally incomplete skeleton.
 
-Schema version 2 accepts the existing Open Ephys and SpikeGLX source layouts.
+Schema versions 2 and 3 accept the existing Open Ephys and SpikeGLX source layouts.
+Version 2 remains supported for existing webapp and explicit launcher usage;
+the simplified single-session workflow requires version 3.
 It never loads LFP, synchronization, or spike arrays during metadata validation.
 Python callers use `load_session_metadata`, `resolve_session_metadata`,
 `resolve_probe_sources`, and `validate_session_for_action` from
@@ -80,13 +102,238 @@ uv run streamlit run src/neural_analysis/psth_webapp.py -- \
 
 The app gets the session name, probe sources, LFP sites and pairs, implicit
 per-probe populations, behavior tables, and optional summary cache from that
-one file. Startup reads metadata and checks paths but does not
-load LFP or spike arrays. Selecting a spike-dependent view loads only its
-selected population; selecting a cached summary keeps the existing saved
-provenance. A missing optional source disables the affected view and explains
-which source is unavailable.
+one file. Metadata validation and resolution do not load numerical arrays.
+The default Unit raster/PSTH view is spike-dependent, so its initial render
+loads the selected population's sorter and aligned-spike arrays. Other views
+retain their existing view-specific loading behavior; selecting a cached
+summary keeps the existing saved provenance. A missing optional source
+disables the affected view and explains which source is unavailable.
+
+### Recorded behavior examples
+
+Choose **Behavior examples** in the metadata-driven app to browse choices
+without loading neural sources. Select a pattern, initial side and repeat
+count; use Previous/Next or select an example directly. Context defaults to
+five original rows on either side and is adjustable. Light figures show choice,
+reward, correctness, task context and the matched episode, with original trial
+IDs. **Export PNG** saves a figure plus exact selection/provenance metadata.
+
+Both probe families accept correct rewarded or omission returns in this view;
+unknown return rewards are excluded. Existing neural views keep their original
+rewarded-return requirement. The five families share the existing behavioral
+selectors, preserving invalid intervening rows and overlapping episodes.
+
+Preparation is cached separately from plotting, with session-local versioned
+NPZ results and dated run logs/script snapshots. See the
+[recorded behavior examples guide](event_sequences/README.md#recorded-behavior-examples)
+for definitions, output paths and callable single-session/batch preparation.
+
+### Event-sequence heatmaps
+
+Choose **Event sequences: central trials** or **Event sequences: multi-trial
+sequences** in the metadata-driven app. The sequence-family selector defaults
+to **Ideal transition** and also offers **Probe**, **Omission probe**,
+**Lucky omission-switch**, and **Indecisive transition**. Probe orientations are
+shown as initial-side choice paths; context-changing families use the existing
+left-to-right or right-to-left direction control. Incorrect-repeat x is 1-4
+for ideal/probe/omission-probe families, 1-3 for indecisive transitions, and
+not shown for lucky omission-switch. Switching families reuses the selected
+saved source and keeps source, bin width, PC rank, and z-scoring controls.
+Families requiring context fields report when `cur_block` or `state_int` is
+missing; empty matches and coverage exclusions remain visible in the view.
+Additional families are derived from the selected saved event-sequence archive
+when it is loaded, so existing archives need no additional preparation.
+Counts may overlap: an indecisive transition also contributes its shorter
+ideal-transition prefix and a qualifying x=1 probe tail.
+
+Choose **Single unit** under
+**Neural source** to use the dedicated **Probe**, **Unit**, and **Bin width**
+selectors. The searchable unit list contains every eligible manual-good unit
+on that probe, including units not yet prepared. Selecting a unit loads its
+saved result or calculates and saves it automatically, reusing loaded probe
+spikes. Changing bins calculates only the selected unit. Changing motifs or
+z-scoring does not repeat that work. Saved unit views do not need current behavior,
+spike, sorter, or quality files. Saved PC views also require their exact
+referenced session-timeline PCA archive; a missing or changed archive is
+reported. Each view remains available when an unrelated probe is unavailable.
+
+Choose **Regional PCs** for PC results. Its saved-results dropdown contains PC
+products only, listed by region, probe, population, bin width, and run. To
+prepare a new PFC/HPC PC population, check **Configure a new source**, choose
+500-ms, 100-ms, 50-ms or 20-ms bins, then click **Prepare**. Unit results do not
+need a Prepare click. If current quality metadata is missing, the unit controls
+offer already saved units for offline viewing.
+Unit choices use explicit Phy `group=good` labels. PC populations offer strict
+`good_mua` (explicit `group=good` or `group=mua`) and strict `good`; blank or
+missing labels are excluded. Metadata probe roles are used for PC regions by
+default, with an optional probe override. Recompute creates a fresh run without
+replacing prior results. These settings stay in the app and saved provenance;
+they add no fields to `neural_session.json`.
+
+Outcome, side, sequence family, orientation, repeat count, PC rank, and
+z-scoring are display controls. They reuse the selected saved source and fixed
+PCA basis.
+Z-scoring is disabled for constant activity; raw silence remains a valid heatmap.
+Click **Export PNG** to save an additive light-mode image in the selected run's
+`figures/` directory. The callable Python batch entry point is
+`src.neural_analysis.event_sequences.run_batch.run_batch`; there is no public
+CLI or JSON batch-request format in this workflow.
+
+A seeded synthetic benchmark with 715 choices and 174/316 good+MUA units on
+the i9-12900 workstation took about 2-8 seconds for new regional PCA products
+at 500/100 ms and 15-29 seconds at 20 ms. A unit took less than 0.3 seconds.
+Once loaded, live browser z-score/rank changes took about 0.3 seconds; a dense
+713-row, 20-ms unit display took about 0.9 seconds to switch z-scoring. These
+are measured synthetic workloads, not latency guarantees for every session.
+
+For version-3 metadata, **Cached LFP Summary** defaults to the read-only
+`session cache` source. It inspects only the declared preview and final cache
+directories. A final cache is selected first only after Power, Synchrony, and
+Spike phase/PPC are all committed; otherwise a complete preview is selected.
+Partial caches remain selectable and list their missing components. Saved
+cluster paths are displayed as provenance and are never opened as workstation
+inputs. The separate `snapshot` source retains its identity-receipt validation,
+and `live` remains the only compute-capable source.
+
+## Session timeline and PCA
+
+The same view also supports explicitly prepared condition prediction tracks.
+Choose **Analysis**: correct-rewarded generalization has seven targets;
+mixed-outcome decoding has state, action, and current-trial actual reward,
+trained on correct-rewarded, correct-omission, and incorrect trials. Choose one
+**Training/scoring window**: Full `[-1,+1)`, Before `[-1,0)`, or After `[0,+1)`
+seconds. Each window predicts the full `[-2,+2)` choice window using the same
+saved PCA and block folds. Click **Prepare predictions** for one mode/window
+pair, then select a target and optional raw or weighted PC heatmaps. PCA includes
+held-out neural data. Saved display requires only metadata, the prediction run
+and its exact referenced PCA archive. Legacy v1/v2 Full-window products remain
+readable; old mixed products have no reward target and require explicit Prepare
+for expanded reward decoding. The **Prediction performance** panel reports
+training/held-out, per-fold, outcome, and left/right choice and state/context
+scores with counts. Single-class groups retain accuracy but have no balanced
+accuracy. Reward is the current trial's recorded outcome; Before predicts
+eventual reward, not subjective expectation, and After is not necessarily
+post-delivery. Reward class counts use actual outcome labels; performance
+thresholds apply only to predictions. Mixed comparisons also change sample size and relative
+regularization at fixed C.
+See [prediction usage](SESSION_TIMELINE.md#condition-prediction-tracks).
+
+Select **Session timeline and PCA** in the metadata-driven webapp to inspect
+completed choices, optional behavioral events, and fixed regional PC heatmaps
+on elapsed session time. Logged active context is overlaid behind the choices
+with an optional visibility toggle. Preparation uses all complete choice windows
+once; navigation and display changes reuse saved results. The default is 500-ms
+bins over `[-2, +2)` seconds around each choice.
+
+The optional **Z-score each PC** display uses each PC's own session mean and
+SD, updates heatmap units, and works live without changing prepared results.
+PC-rank and display changes preserve the current panned/navigator time window;
+the time controls and Jump move it explicitly.
+Rewarded choices use larger filled markers; unrewarded choices use smaller
+open markers. Older results pick up outcomes from the behavior table without
+PCA recomputation.
+
+Optional signed treadmill speed uses `behavior.treadmill`, a session-relative
+Teensy text path. Click **Prepare speed** once, then **Show speed** adds its
+signed-mm/s step trace below events. The speed cache is independent of neural
+probes and bin widths. See the usage guide for preparation and the required
+one-time registration of legacy PCA results before changing their metadata.
+
+The same viewer also offers **SparsePCA** in **Decomposition**, with an
+adjustable alpha (default 1) and up to 30 components per region. Click
+**Prepare** to save its separate scores, then inspect SC rows with optional
+per-component z-scoring. Sparse mode hides ordinary-PCA variance summaries and
+prediction overlays. See [SparsePCA usage](SESSION_TIMELINE.md#optional-sparsepca-components)
+for CLI preparation, fixed estimator settings, and interpretation.
+
+Prepare in advance, using version-3 metadata probe roles:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json
+```
+
+You can also click **Prepare** in the viewer. See the
+[session timeline usage guide](SESSION_TIMELINE.md) for explicit probe
+assignments, navigation, saved outputs, benchmarking, and session-level batch
+preparation. Stage 1 does not compute per-choice participation counts.
+
+## Session timeline and CCA
+
+Select **Session timeline and CCA** for fixed session-wide PFC/HPC canonical
+coordinates from paired unit counts. Both regions use the same complete
+`[-2,+2)` choice windows and canonical ranks. Prepare/Recompute save a paired
+model; display controls reuse its scores. Correlations are in-sample, with task
+responses retained. See the [CCA usage guide](SESSION_CCA.md) for preparation,
+interpretation, saved-result viewing, and measured validation.
+
+## Choice-window LFP power and phase synchrony
+
+The independent `src.neural_analysis.phase_synchrony.run_session` command
+prepares per-choice integrated band power, pairwise coherence and LFP PLV/PPC,
+or explicitly selected-unit spike PPC. Use `--components`, metadata `--sites`
+or ordered `--pair` selections, and `--intervals primary secondary`; spike PPC
+requires `--unit ProbeB:8 --lfp-site HPC1`. Primary is `[-1,+1)` s and secondary
+is `[-2,+2)` s. `--dry-run` reads metadata only, while `--rerun` creates additive
+outputs and reuses compatible prerequisites. The separate `run_batch` module
+parallelizes approved session lists. See the [offline usage and scientific
+contracts](SESSION_TIMELINE.md#choice-window-lfp-power-and-phase-synchrony-offline-preparation).
+In the metadata-driven Streamlit app choose **Session timeline: LFP power and
+synchrony**, then **Refresh results** to load completed products. The view
+supports behavior-only/partial results, original-time navigation, PLV/PPC
+switching, frequency summaries and saved selected-choice inspection. It never
+launches analysis. [Viewer usage](SESSION_TIMELINE.md#open-the-saved-lfpsynchrony-timeline)
+describes selection, provenance, support counts and PNG export.
 
 ## Run Spike-phase/PPC computation
+
+### Prepare Power, Synchrony, and phase
+
+Schema-version-3 metadata makes workstation preparation one command:
+
+```bash
+SESSION="$HOME/contextProjectData/CT026/CT026_20260803_latent_inference"
+
+uv run --frozen python -m src.neural_analysis.single_session_setup prepare \
+  --session-metadata "$SESSION/neural_session.json"
+```
+
+This computes only missing Power, reusable phase, and Synchrony products
+through the existing implementations. Synchrony receives the exact phase
+object prepared once by the command.
+
+Do not run computational preparation on a cluster login node. From the
+tracked-clean repository root, submit the reusable preparation wrapper:
+
+```bash
+sbatch src/shell_scripts/hpc_lfp_prepare.sh \
+  --session-metadata "$SESSION/neural_session.json"
+```
+
+The wrapper owns its `normal` partition, eight-CPU, 32-GiB, 24-hour request and
+writes `$HOME/logs/lfp_prepare_<job-id>.log`. With an `rsync -a` copied
+prerequisite cache, it adopts compatible Power/Synchrony bytes first and
+creates or reuses cluster-local phase. It never computes PPC. The PPC wrapper
+remains independently configured on `unlimited`.
+
+The metadata names two independent run caches:
+
+- `processed/ppc_prerequisites_preview` for the 100-shuffle preview;
+- `processed/ppc_prerequisites_final` for the 1,000-shuffle final run.
+
+Preparation refuses partial or incompatible state and never overwrites it.
+Preview and final cannot share one cache because the preview adds
+`spike_phase.npz` to its cache. The lower-level metadata-only
+`lfp_summary_cache_adoption` command remains available when only cache adoption
+is wanted.
+
+Normal cluster aliases above the session directory, including a symlinked
+`$HOME`, are accepted by both cache adoption and new launcher runs. Each
+command resolves the alias once and uses canonical session, metadata, and
+cache paths thereafter. The session directory itself, `neural_session.json`,
+`processed`, cache directories, and cache members must be real nonsymlink
+objects. Older checkouts that reject the home alias can use
+`SESSION="$(readlink -f "$SESSION")"` as a workaround.
 
 ### Local preview
 
@@ -94,51 +341,45 @@ Check a new request locally without loading numerical arrays or starting the
 computation:
 
 ```bash
-uv run python -m src.neural_analysis.lfp_spike_phase_launcher new \
+uv run python -m src.neural_analysis.lfp_spike_phase_launcher preview \
   --session-metadata /path/to/session/neural_session.json \
-  --probe rear-probe \
-  --cache-directory /path/to/session/processed/lfp-summary-cache \
-  --shuffles 100 \
-  --workers 8 \
   --dry-run
 ```
 
-Remove `--dry-run` for the existing 100-shuffle preview. The command keeps the
-probe, shuffle count, worker count, cache directory, and optional analysis root
-explicit. Metadata supplies only session identity and input paths. The legacy
-`--session-path` route remains available for the reviewed CT026 workflow.
+Remove `--dry-run` for the preview. Probe, shuffle count, and cache directory
+come from version-3 metadata; execution retains the existing eight-worker
+policy. The legacy explicit `new` and `--session-path` routes remain available.
 
 Run the local preview only after its dry run succeeds:
 
 ```bash
-uv run python -m src.neural_analysis.lfp_spike_phase_launcher new \
-  --session-metadata /path/to/session/neural_session.json \
-  --probe rear-probe \
-  --cache-directory /path/to/session/processed/lfp-summary-cache \
-  --shuffles 100 \
-  --workers 8
+uv run python -m src.neural_analysis.lfp_spike_phase_launcher preview \
+  --session-metadata /path/to/session/neural_session.json
 ```
 
-The existing final intent remains explicit: use `--shuffles 1000 --final-run`.
-This is the same computation with the reviewed final shuffle count, not a new
-analysis mode.
+Use the `final` profile for the metadata-declared final cache and shuffle count.
+This remains the same PPC computation, not a different scientific method.
+
+The same path rule applies to both `--session-metadata` and the legacy
+`--session-path`: an alias above the session is allowed, but a symlink at the
+session, metadata file, `processed`, or selected cache is rejected before any
+session loader or numerical computation starts.
 
 ### Slurm
 
 For Slurm, submit the same arguments through the existing wrapper:
 
 ```bash
-sbatch src/shell_scripts/hpc_ppc.sh new \
-  --session-metadata /path/to/session/neural_session.json \
-  --probe rear-probe \
-  --cache-directory /path/to/session/processed/lfp-summary-cache \
-  --shuffles 100 \
-  --workers 8
+sbatch src/shell_scripts/hpc_ppc.sh preview \
+  --session-metadata /path/to/session/neural_session.json
+
+sbatch src/shell_scripts/hpc_ppc.sh final \
+  --session-metadata /path/to/session/neural_session.json
 ```
 
-Submit from a tracked-clean repository root. The wrapper fixes the Slurm task
-to eight CPUs and requires `--workers 8`; it forwards the scientific arguments
-to the same Python launcher.
+Submit from a tracked-clean repository root. The wrapper forwards the profile
+and metadata path to the same Python launcher. Its existing Slurm partition,
+CPU, memory, time, signal, log, and mail directives are unchanged.
 
 ### Resume and recover
 
@@ -178,20 +419,519 @@ Never point a new run at the protected historical `processed/lfp_summary_cache`
 unless it is already the intended compatible input. Use an explicit new cache
 directory for a new source/configuration identity.
 
+## Inter-regional PFC/HPC regression
+
+The inter-regional workflow performs bidirectional held-out OLS using direct
+units and optional fold-local regional PCs, target-wise held-out Poisson GLMs
+for direct-unit counts, and separate descriptive in-sample linear and Poisson
+Granger-style comparisons. The four stages are independently configured except
+that Poisson CV retains its matched OLS CV comparison. Its scientific
+configuration is separate from session metadata; copy
+`docs/examples/neural_analysis/interregional_regression_config.json.example`,
+place it beside `neural_session.json`, and replace the explicit probe roles.
+Relative metadata and output paths resolve against the configuration file's
+directory, so the same configuration works after the session tree is copied to
+the cluster. Existing absolute paths remain supported. Then run:
+
+```bash
+uv run python -m src.neural_analysis.interregional.run_session dry-run \
+  --config /path/to/session/interregional_regression_config.json
+
+uv run python -m src.neural_analysis.interregional.run_session new \
+  --config /path/to/session/interregional_regression_config.json
+```
+
+Use `--rerun` only when a new immutable directory is wanted despite an existing
+matching fingerprint. Batch execution uses
+`src.neural_analysis.interregional.run_batch` with `dry-run` or `new`, a
+`--config-list`, and optional `--workers`.
+
+Completed outputs live under `<session_root>/analysis_runs` by default and
+include the exact configuration, content-hashed input manifest, typed result,
+copied runners, stage log, scientific summary, and PNG figures. Select
+**Inter-regional regression results** in the metadata-driven webapp to inspect
+these saved outputs. The view is read-only and never runs or resumes analysis.
+Copied runs remain discoverable when the current `neural_session.json` bytes
+match the saved manifest's `session_metadata` size and SHA-256, even though the
+saved configuration retains an absolute cluster path. Do not edit copied
+configuration or result files to replace that path.
+See `src/neural_analysis/interregional/README.md` for axes, units, module
+ownership, persistence details, and interpretation limits.
+
+The implementation is code-complete and verified on seeded synthetic data but
+is not yet production-verified for the full Poisson or Granger workload.
+Held-out CV metrics are predictive summaries. Granger values are descriptive
+in-sample nested-model improvements, not significance tests or causal evidence.
+Loaded spike coverage is currently assumed complete across every requested
+trial window.
+
 ## Python API
 
 The small public surface for new-session use is:
 
-- `load_session_metadata(path)` parses the version-2 JSON file;
+- `load_session_metadata(path)` parses version-2 or version-3 JSON;
 - `resolve_session_metadata(metadata, path)` resolves relative paths beneath
   the metadata file's session directory;
 - `validate_session_for_action(session, action)` reports missing ordinary
   inputs without loading arrays;
 - `build_lfp_summary_config(session, request)` builds the existing Power and
   Synchrony configuration from metadata; and
-- `build_metadata_spike_phase_config(...)` adds one selected probe population and
-  explicit cache/shuffle/worker choices for the existing Spike-phase pipeline.
+- `build_metadata_spike_phase_config(...)` adapts resolved choices to the
+  existing Spike-phase pipeline; and
+- `prepare_session_lfp(...)` orchestrates the existing Power, shared phase,
+  Synchrony, and cache-adoption boundaries without changing their calculations.
 
 The dataclass and function docstrings specify path types, zero-based channel
 axes, seconds, Hz, and uV. Scientific calculations, plot definitions, cache
 formats, and scheduler behavior are unchanged by the metadata layer.
+
+## Task-variable decoding
+
+Task-variable decoding is an offline, single-session analysis. It constructs
+categorical and numerical behavioral targets, aligns them to PFC and HPC firing
+rates, and compares PFC, HPC, and PFC+HPC decoders using both regional PCA and
+direct-unit features. Start with `regularization_mode: "fixed"`; tuned mode is
+substantially more expensive and should be used only after a representative
+fixed-mode benchmark.
+
+### Prepare the session inputs
+
+Each session needs four small control files before neural arrays are loaded:
+
+1. `neural_session.json`, using the metadata format described above. It must
+   contain two distinct probe IDs selected as PFC and HPC in the decoding
+   configuration.
+2. The augmented chronological trial CSV produced by the normal behavior
+   processing workflow. It must include `cur_trial`, `cur_block`, `action`,
+   `experimenter_reward_given`, the selected alignment column (`choice_time` or
+   `start_time` in UTC Unix seconds), and the source column for every selected
+   target.
+3. The behavior workflow's trial-feature parameter JSON. The pipeline copies
+   its exact bytes into the run directory for provenance.
+4. A task-decoding JSON configuration copied from the portable example.
+
+Copy the example into the session root, then edit its relative paths, probe
+IDs, unit-selection rules, targets, conditions, and scientific settings:
+
+```bash
+cp docs/examples/neural_analysis/task_decoding_config.json \
+  /path/to/session/task_decoding_config.json
+```
+
+All input paths are resolved relative to the configuration. They must remain
+inside the metadata session root. `output_root` is also session-relative and
+must name a separate child directory outside the Git checkout. An empty
+`channel_ids` list means that the configured channel labels, inside-brain rule,
+and cluster groups select units; a nonempty list adds an explicit zero-based
+channel restriction. An empty `trusted_utc_bounds` object uses ordinary
+alignment coverage. Add a probe's `[start, end]` UTC-second bounds only when
+those bounds have been independently established.
+
+`condition_names` selects which trial subsets are decoded. The portable
+example uses the canonical full set: `all`, `correct_rewarded`, `omission`,
+`incorrect`, `switch`, and `stay`. Every selected target is evaluated under
+every selected condition. Correct rewarded, omission, and incorrect use the
+existing project outcome definitions. Switch and stay use the existing rule
+that labels a valid unrewarded current trial according to whether the
+immediately following valid choice changes or repeats its action. These masks
+can overlap, and they do not shift neural activity to the following trial.
+Empty or constant condition-target cells remain visible as unavailable rather
+than being omitted. Nonpooled conditions require the augmented table's
+`correct`, `reward`, `action`, and `experimenter_reward_given` columns.
+
+The normal behavior-processing path should create the complete augmented
+table. There is one narrow migration exception: if `rewards_in_block` is the
+sole missing column, first make a timestamped backup beside the CSV, then run
+the tested behavior-side backfill:
+
+```bash
+cp --preserve=all /path/to/augmented_trials.csv \
+  /path/to/augmented_trials.csv.backup-YYYYMMDDTHHMMSSZ
+
+uv run python -c 'from pathlib import Path; from src.behavior_analysis.gather_trial_features import backfill_rewards_in_block_csv; backfill_rewards_in_block_csv(Path("/path/to/augmented_trials.csv"))'
+```
+
+Confirm the backup exists before invoking the Python command. The helper
+refuses an existing destination column and atomically replaces the CSV only
+after round-trip validation. If any other required column is absent, use
+normal behavior regeneration. Do not hand-edit the CSV, and do not rerun
+unrelated models merely to add this derived column.
+
+### Inspect and start one session
+
+Run the bounded dry run first. It validates small metadata and table inputs,
+reports target/work/tensor dimensions and source sizes, and does not load
+sorter spike arrays or fit models:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session dry-run \
+  --config /path/to/session/task_decoding_config.json
+```
+
+A persistent `new` or `resume` requires the scoped scientific source files to
+be tracked and clean. Keep a deliberately small run in the foreground with:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session new \
+  --config /path/to/session/task_decoding_config.json
+```
+
+For an unattended local run, use the detached form:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session new \
+  --config /path/to/session/task_decoding_config.json --detach
+```
+
+The parent performs bounded preparation, prints the immutable run directory,
+and returns only after publishing the child ownership receipt. It also prints
+the exact status and resume commands. After that message, it is safe to close
+the terminal and close the Codex task; neither must remain resident. The child
+writes its console stream to `console.log` and durable stage messages to
+`run.log`. Do not poll it. Inspect it once later with the printed one-shot
+command:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session status \
+  --run-directory /path/to/session/analysis_runs/task_variable_decoding_<timestamp>
+```
+
+`status` is read-only and never polls a process or scheduler. Add
+`--verify-results` to validate a completed publication. You can also inspect
+`run_state.json`, `run.log`, and `console.log` directly after the one-shot
+status check. An interrupted or failed prepared run resumes from valid
+target-local checkpoints with:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session resume \
+  --run-directory /path/to/session/analysis_runs/task_variable_decoding_<timestamp> \
+  --detach
+```
+
+Only one matching owner may execute a run directory. A live receipt or guard
+causes another resume to refuse rather than create a second writer. Sending a
+normal termination or interrupt to a foreground worker records durable
+interrupted state and releases its guard; use `resume` afterward.
+
+A `new` request whose complete fingerprint already has a valid completed run
+prints that directory and skips computation. Use `--rerun` only when you
+intentionally want another immutable timestamped directory with the same
+scientific identity:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_session new \
+  --config /path/to/session/task_decoding_config.json --rerun --detach
+```
+
+### Run a local batch
+
+Create a UTF-8 text file with one configuration path per line. Blank lines and
+lines beginning with `#` are ignored; relative entries resolve from the list
+file. Preview the ordered sessions and resource calculation with:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_batch dry-run \
+  --config-list /path/to/task_decoding_configs.txt
+```
+
+Launch the batch in the foreground with:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_batch new \
+  --config-list /path/to/task_decoding_configs.txt
+```
+
+Without measured evidence, the safe effective default is one worker even if
+more CPUs are available or `--workers` is supplied. A compatible completed
+resource run may later be supplied explicitly:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.run_batch dry-run \
+  --config-list /path/to/task_decoding_configs.txt \
+  --workers 2 \
+  --resource-run-directory /path/to/completed/measured-run
+```
+
+The evidence is not discovered automatically. It must contain the atomic
+`resource_usage.json` produced automatically by task-decoding execution and must
+match the scientific source, runtime, platform, thread limits, analysis mode,
+and a resource envelope that is not exceeded by any planned session. The
+runner then caps cross-session workers by the request, CPU count, session
+count, measured peak RSS, and 50% of current `MemAvailable`. Parallelism is
+across sessions only; each session fixes OMP, MKL, and OpenBLAS to one thread.
+
+### Outputs and saved-result view
+
+The default run parent is the session's `analysis_runs` directory. Each run is
+a direct child named `task_variable_decoding_<timestamp>` (with a collision
+suffix when necessary). Important members are:
+
+| Path | Content |
+| --- | --- |
+| `run_state.json` | Durable lifecycle, current stage, warnings, and completed targets |
+| `execution.json`, `local_launch.json` | Requested/actual owner and detached receipt |
+| `run.log`, `console.log` | Stage log and detached stdout/stderr |
+| `resume_command.txt`, `status_command.txt` | Exact shell-safe follow-up commands |
+| `checkpoints/` | Fingerprint-bound primitive NPZ checkpoints; condition-aware runs use `condition--target.npz` names |
+| `resource_usage.json` | Atomic wall/CPU/peak-RSS, per-target operation timing, fit-count, envelope, and output-size evidence |
+| `results.npz` | Final validated non-pickle arrays and JSON metadata |
+| `summary.md` | Session, settings, availability, timing, and output summary |
+| `figures/` | Pooled metric PNGs for legacy runs; condition-aware runs use names such as `omission--categorical_auc.png` for every configured condition |
+
+Open the existing metadata-driven webapp and select **Task-variable decoding
+results**:
+
+```bash
+uv run streamlit run src/neural_analysis/psth_webapp.py -- \
+  --session-metadata /path/to/session/neural_session.json
+```
+
+The view defaults to the session-relative locator `analysis_runs`. If the
+configuration used a nondefault `output_root`, enter that relative locator in
+the view's **Results root (relative to session)** field. The selector considers
+only validated, completed direct-child runs. All controls load and re-render
+saved arrays; they never refit a decoder or load raw spikes. Schema-2 runs add
+a **Condition** selector whose choice controls heatmaps, fold details, and
+coefficient summaries. Older pooled results remain available as condition
+`all`.
+
+Completed pooled-window runs have a separate **Condition generalization results**
+view in the same metadata-driven webapp. It automatically discovers
+completed `pooled_task_variable_decoding_*` directories directly beneath the
+selected session's `analysis_runs` directory. Select the run, training window,
+target, and one of the saved native, reference-transfer, or native-minus-
+transfer-gap displays. For categorical targets, choose balanced accuracy or
+AUC from the metric selector; numerical targets use R2. The view strictly
+reloads `results.npz`; it does not recompute a decoder, load raw spikes, or
+write analysis files. Absolute cluster paths in `execution.json` are shown only
+as provenance, so a complete run copied back under the workstation session
+remains viewable.
+
+### Fixed, tuned, and benchmark planning
+
+Fixed mode performs one outer fit for each target x fold x time x region x
+representation cell. Tuned mode evaluates 15 candidates in each of three inner
+folds and then refits the selected candidate: 46 fits per outer cell instead of
+one with the default grid. That is a large tuned-mode work-count warning, not a
+minor option change. Memory is driven mainly by the common PFC and HPC rate
+tensors and coefficient capacity, while runtime scales with eligible targets,
+time bins, folds, regions, representations, and tuning fits.
+
+Before a full session or any cluster proposal, make a separate fixed-mode
+configuration containing exactly one representative categorical target and
+one representative numerical target, for example `current_action` and
+`relative_doubt`. Keep the intended bin width and unit selections. Run its
+dry-run, review the reported tensor allocation and categorical/numerical fit
+counts, then run that bounded configuration in the foreground only after the
+benchmark is explicitly authorized. Record:
+
+- run fingerprint, commit/source fingerprint, Python/library versions,
+  platform, CPU count, and one-thread environment;
+- full and common-neural trial counts, PFC/HPC units, time bins, fold counts,
+  coefficient capacity, and fit counts from the resource envelope;
+- `stage_timing_seconds` and `total_timing_seconds` from `results.npz` and
+  `summary.md`;
+- wall-clock time, peak RSS in bytes measured with `resource.getrusage`, and
+  the measurement method; and
+- success, warnings, unavailable targets, and checkpoint reuse.
+
+Project runtime by scaling the measured modeling time by the planned full fit
+count divided by the measured fit count; treat that as a planning estimate,
+not a guarantee. Use measured peak RSS plus the full dry-run tensor allocation
+to choose whether the full job fits safely under the local memory budget. Do
+not hand-author `resource_usage.json`; the gated WP10 measurement path owns its
+atomic schema. Until that evidence exists, batch execution remains at one
+worker.
+
+### Run one session on Slurm
+
+WP11 supports one session per job through the reviewed wrapper. The standard
+profile requests one CPU, `3G` memory, `2-00:00:00` (48 hours), and a TERM
+warning five minutes before the limit. Submission is one-shot: neither the
+shell nor Python polls or retries `sbatch`. Slurm array batching remains
+separately deferred until WP13.
+
+The first full six-condition validation is intentionally larger. Submit that
+run with the reviewed `condition_validation` profile, which keeps one CPU but
+requests `8G` and `3-00:00:00` (72 hours). Do not reduce it until the completed
+pipeline evidence and Slurm accounting establish the actual margin.
+
+First transfer a session without deleting any cluster data. Keep analysis runs
+out of the input synchronization so a workstation cannot erase or replace a
+cluster result:
+
+```bash
+rsync -a --info=progress2 --exclude='/analysis_runs/' \
+  /local/session/ user@cluster:/cluster/session/
+```
+
+On the cluster, use the exact approved Git commit in a tracked-clean checkout.
+Populate the locked environment once on a login node while dependency access
+is available; scheduled jobs then run the existing environment offline:
+
+```bash
+uv sync --frozen
+```
+
+From the repository root, preview the cluster-visible config with the local
+`dry-run`, then submit it through the wrapper:
+
+```bash
+bash src/shell_scripts/task_variable_decoding_slurm.sh submit-new --config \
+  /cluster/session/task_decoding_config.json
+```
+
+For the first full condition-resolved validation, use:
+
+```bash
+bash src/shell_scripts/task_variable_decoding_slurm.sh submit-new --config \
+  /cluster/session/task_decoding_config.json \
+  --resource-profile condition_validation
+```
+
+The wrapper checks the exact checkout, freezes all numerical thread counts to
+one, and executes `uv run --frozen --no-sync --offline`. It prints a JSON
+receipt containing the immutable run directory, Slurm job ID, exact commit,
+requested resources, scheduler log, and follow-up commands. Inspect durable
+pipeline state plus one `sacct` query with:
+
+```bash
+bash src/shell_scripts/task_variable_decoding_slurm.sh status --run-directory \
+  /cluster/session/analysis_runs/<run_id>
+```
+
+If the job is interrupted or fails after producing valid target checkpoints,
+resume only that exact directory:
+
+```bash
+bash src/shell_scripts/task_variable_decoding_slurm.sh submit-resume --run-directory \
+  /cluster/session/analysis_runs/<run_id>
+```
+
+The generated resume command preserves a nonstandard resource profile. If it
+must be reconstructed manually for the validation run, append
+`--resource-profile condition_validation`; the code refuses changing a
+profile already fixed by the submission receipt.
+
+Do not resubmit a pending or running directory. The wrapper makes no scientific
+overrides, and the active job rechecks effective cgroup/allocation memory
+before loading spike tensors.
+
+After the cluster status reports a durable complete lifecycle, copy that one
+run into a new local staging directory; never synchronize over an existing
+result:
+
+```bash
+mkdir -p /local/session/analysis_runs/.incoming-<run_id>
+rsync -a --info=progress2 \
+  user@cluster:/cluster/session/analysis_runs/<run_id>/ \
+  /local/session/analysis_runs/.incoming-<run_id>/
+
+uv run python -m src.neural_analysis.task_decoding.run_session status \
+  --run-directory /local/session/analysis_runs/.incoming-<run_id> \
+  --verify-results
+
+mv /local/session/analysis_runs/.incoming-<run_id> \
+  /local/session/analysis_runs/<run_id>
+```
+
+Promote the staged directory only after `status --verify-results` succeeds.
+If validation fails, leave the existing local results untouched and repeat a
+non-destructive copy into a fresh staging directory.
+
+### Run pooled-window decoding on Slurm
+
+The pooled wrapper supports one session per Slurm task, either as a single job
+or as a capped job array. Each task requests exactly one CPU, `3G` memory on
+the `normal` partition, and a 24-hour limit (`--partition=normal`, `--mem=3G`,
+`--time=24:00:00`). Slurm sends TERM five minutes before the limit so the
+existing checkpoint/interruption path can finish. Submission is one-shot and
+never retries automatically.
+
+Input synchronization is deliberately manual and non-destructive. Run this
+for each session, replacing `<session-relative-path>` with the path below the
+data root. The exclusion applies because each invocation copies one session:
+
+```bash
+rsync -a --info=progress2 --exclude='/analysis_runs/' \
+  '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/' \
+  user@cluster:'/gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/'
+```
+
+Do not add a delete option. Config paths must resolve inside the copied
+session, and the cluster checkout must be at the intended commit with no
+tracked changes. Populate its locked environment once with `uv sync --frozen`.
+The scheduled task itself runs offline with one numerical thread.
+
+From the cluster repository root, preview the cluster-visible overlay and
+submit the first session:
+
+```bash
+uv run --frozen python -m \
+  src.neural_analysis.task_decoding.pooled.run_session dry-run \
+  --config /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/pooled.json
+
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh submit-new \
+  --config /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/pooled.json
+```
+
+Inspect or explicitly resume that exact immutable run:
+
+```bash
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh status \
+  --run-directory /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/analysis_runs/<run_id>
+
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh submit-resume \
+  --run-directory /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/analysis_runs/<run_id>
+```
+
+Because the pooled pipeline participates in the scientific-source fingerprint,
+the first completed run made by this cluster-capable version is the resource
+evidence for its arrays. Do not admit an older run with a different source
+fingerprint. Put one config path per line in a UTF-8 config list; relative
+entries resolve against that list. Dry-run every entry against the completed
+evidence, then submit one capped array (the example permits two simultaneous
+sessions):
+
+```bash
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh batch-dry-run \
+  --config-list /gs/gsfs0/users/mchin1/contextProjectData/pooled_sessions.txt \
+  --resource-run-directory /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/analysis_runs/<evidence_run_id> \
+  --array-concurrency 2
+
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh submit-array \
+  --config-list /gs/gsfs0/users/mchin1/contextProjectData/pooled_sessions.txt \
+  --resource-run-directory /gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/analysis_runs/<evidence_run_id> \
+  --array-concurrency 2
+```
+
+The submit command creates a timestamped `pooled_batch_runs/` directory beside
+the config list and prints its manifest path. Each zero-based array index maps
+to one exact session-contained run directory; each run can later use the
+single-session status or resume command. Inspect all durable array states with:
+
+```bash
+bash src/shell_scripts/pooled_task_variable_decoding_slurm.sh batch-status \
+  --manifest /gs/gsfs0/users/mchin1/contextProjectData/pooled_batch_runs/<timestamp>/manifest.json
+```
+
+Return only a run whose cluster status is `complete` and `result_valid` is
+`true`. Copy it into a new hidden sibling, validate it locally, and then use a
+same-filesystem rename to publish it without touching an existing result:
+
+```bash
+mkdir -p '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/analysis_runs/.incoming-<run_id>'
+rsync -a --info=progress2 \
+  user@cluster:'/gs/gsfs0/users/mchin1/contextProjectData/<session-relative-path>/analysis_runs/<run_id>/' \
+  '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/analysis_runs/.incoming-<run_id>/'
+
+uv run python -m src.neural_analysis.task_decoding.pooled.run_session status \
+  --run-directory '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/analysis_runs/.incoming-<run_id>'
+
+mv '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/analysis_runs/.incoming-<run_id>' \
+  '/home/matt/Documents/EXPERIMENTS/contextProjectData/<session-relative-path>/analysis_runs/<run_id>'
+```
+
+Perform the rename only after the staged status again reports `complete` and
+`result_valid: true`. If validation fails, retain the staging directory as
+evidence or replace only that unpublished staging copy.

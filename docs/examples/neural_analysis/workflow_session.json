@@ -1,0 +1,49 @@
+{
+  "schema_version": "3",
+  "session": "CT026-example",
+  "acquisition": "open_ephys",
+  "behavior": {
+    "trials": "processed/augmented_trials.csv",
+    "events": null
+  },
+  "probes": {
+    "ProbeA": {
+      "lfp": "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeA/lfp.dat",
+      "alignment": "ephys/aligned/aligned_open_ephys/probeA_sync.npz",
+      "sorter": "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeA/kilosort4",
+      "quality": "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeA/channel_quality.csv",
+      "sites": {
+        "PFC1": 7
+      }
+    },
+    "ProbeB": {
+      "lfp": "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeB/lfp.dat",
+      "alignment": "ephys/aligned/aligned_open_ephys/probeB_sync.npz",
+      "sorter": "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeB/kilosort4",
+      "quality": "ephys/derived/Record_Node_101_Neuropix-PXI-110.ProbeB/channel_quality.csv",
+      "sites": {
+        "HPC1": 7
+      }
+    }
+  },
+  "site_pairs": [
+    [
+      "PFC1",
+      "HPC1"
+    ]
+  ],
+  "analysis": {
+    "probe_roles": {
+      "pfc": "ProbeA",
+      "hpc": "ProbeB",
+      "ppc": "ProbeB"
+    },
+    "ppc": {
+      "prerequisite_cache": "processed/ppc_prerequisites_open_ephys_v1",
+      "preview_cache": "processed/ppc_prerequisites_preview",
+      "final_cache": "processed/ppc_prerequisites_final",
+      "preview_shuffles": 100,
+      "final_shuffles": 1000
+    }
+  }
+}

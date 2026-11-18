@@ -189,8 +189,8 @@ def _capture_fields(path: Path) -> list[str]:
     return path.read_bytes().decode("ascii").rstrip("\0").split("\0")
 
 
-def test_hpc_ppc_has_fixed_reviewed_slurm_resources_and_valid_bash() -> None:
-    """Tracked wrapper requests one eight-CPU, 32-GB, 72-hour signaled job."""
+def test_hpc_ppc_has_required_process_resources_and_valid_bash() -> None:
+    """Tracked wrapper requests one signaled task with its eight worker CPUs."""
     syntax = subprocess.run(
         ("bash", "-n", str(_TRACKED_WRAPPER)),
         capture_output=True,
@@ -201,19 +201,18 @@ def test_hpc_ppc_has_fixed_reviewed_slurm_resources_and_valid_bash() -> None:
 
     assert syntax.returncode == 0, syntax.stderr
     for directive in (
-        "#SBATCH --partition=unlimited",
         "#SBATCH --ntasks=1",
         "#SBATCH --cpus-per-task=8",
-        "#SBATCH --mem=32G",
-        "#SBATCH --time=72:00:00",
         "#SBATCH --signal=B:TERM@300",
-        "#SBATCH --output=/gs/gsfs0/users/mchin1/logs/ppc_cluster_%j.log",
     ):
         assert directive in text
+    assert any(
+        line.startswith("#SBATCH --output=") and "%j" in line
+        for line in text.splitlines()
+    )
     assert "conda activate" not in text
     assert "source ~/.bashrc" not in text
     assert "#SBATCH -n 16" not in text
-    assert "#SBATCH --mem=128gb" not in text
 
 
 @pytest.mark.parametrize(

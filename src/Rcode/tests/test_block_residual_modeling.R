@@ -122,4 +122,49 @@ stopifnot(all(small_result$summary_df$coefficient_intercept == "None"))
 stopifnot(all(small_result$summary_df$residual_sd == "None"))
 stopifnot(identical(small_result$summary_df$n_valid_blocks, rep(4L, 8)))
 
+# Verify explicit opt-in for a side-free model without changing old defaults.
+# Input: no arguments. Return: invisible NULL; coefficients retain trial units.
+test_rewards_only_preparation <- function() {
+  rewards_only <- prepare_block_residual_model_dataframe(block_df, "rewards_only")
+  stopifnot(identical(dim(rewards_only$x), c(6L, 1L)))
+  stopifnot(identical(colnames(rewards_only$x), "prev_n_rewarded"))
+  stopifnot(identical(as.numeric(rewards_only$x), 0:5 + 0))
+  stopifnot(identical(vapply(BLOCK_RESIDUAL_FORMULA_SPECS, `[[`, "", "model_formula"),
+                      c("rewards_x_side", "rewards_plus_side")))
+  invisible(NULL)
+}
+
+# Verify an inert adapter preserves the one-predictor elastic-net objective.
+# Input: no arguments. Return: invisible NULL. Both x/y have population SD 1,
+# making the Gaussian glmnet objective directly comparable to soft thresholding.
+test_one_predictor_elastic_net_objective <- function() {
+  rewards <- seq_len(30)
+  x <- as.numeric(rewards - mean(rewards))
+  x <- x / sqrt(mean(x^2))
+  y <- 0.8 * x + sin(rewards)
+  y <- (y - mean(y)) / sqrt(mean((y - mean(y))^2))
+  penalties <- c(0.5, 0.2, 0.1)
+  alpha <- 0.5
+  folds <- rep(seq_len(5), length.out = length(y))
+  for (direction in c(-1, 1)) {
+    response <- direction * y
+    result <- fit_block_glmnet_cv(
+      matrix(x, ncol = 1, dimnames = list(NULL, "reward")), response,
+      alpha = alpha, fold_id = folds, lambda = penalties
+    )
+    coefficients <- as.matrix(stats::coef(result$fit, s = penalties))
+    correlation <- mean(x * response)
+    expected <- sign(correlation) * pmax(abs(correlation) - penalties * alpha, 0) /
+      (mean(x^2) + penalties * (1 - alpha))
+    stopifnot(isTRUE(all.equal(as.numeric(coefficients["reward", ]), expected,
+                               tolerance = 1e-6)))
+    stopifnot(all(abs(coefficients["(Intercept)", ]) < 1e-10))
+    predictions <- as.matrix(stats::predict(result$fit, newx = result$x, s = penalties))
+    stopifnot(isTRUE(all.equal(unname(predictions), outer(x, expected), tolerance = 1e-6)))
+  }
+  invisible(NULL)
+}
+
+test_rewards_only_preparation()
+test_one_predictor_elastic_net_objective()
 cat("All block residual modeling tests passed.\n")

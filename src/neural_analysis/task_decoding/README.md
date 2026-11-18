@@ -1,0 +1,427 @@
+# Task-variable decoding package
+
+This package owns the frozen configuration, target construction, neural
+activity tensors, grouped decoding, durable execution, saved results, and
+plots for the offline task-variable analysis. Dependencies point outward to
+the existing behavior utilities, neural-session metadata, spike loading, and
+population PCA modules; those modules do not depend on this package. The
+integrated webapp imports only the saved-result loader and plotting layer, not
+the fitting pipeline.
+
+The scientific requirements are the revision-5 base contract plus the active
+revision-6 convergence and revision-7 condition amendments in
+`docs/task_variable_spec_v5.md`, `docs/task_variable_spec_v6.md`, and
+`docs/task_variable_spec_v7.md`. Work-package history remains in
+`docs/task_variable_implementation_plan.md`. This file is the maintainer map,
+not a duplicate specification.
+
+## File and entry-point map
+
+| File | Responsibility and public entry points |
+| --- | --- |
+| `__init__.py` | Package marker; it deliberately re-exports no broad convenience API. |
+| `config.py` | Frozen constants and `TargetDefinition`, `RegionConfig`, `TaskDecodingConfig`; `load_task_decoding_config` validates portable JSON and `scientific_config_payload` freezes scientific identity. |
+| `targets.py` | `validate_augmented_trials` and `build_target_table` validate the full chronological table and construct encoded targets plus masks. |
+| `conditions.py` | `build_condition_masks` validates configured conditions and copies the established project-wide trial-condition masks without changing their semantics. |
+| `activity.py` | `ProbeCoverage`, `RegionActivity`, `SessionRateTensors`, and `ActivityDryRunReport`; probe inspection/loading, common tensor construction, target-mask projection, byte estimates, memory-budget selection, and dry-run inspection. |
+| `modeling.py` | Grouped split, transform, fit, fold, and target result records; public split/feature/estimator/scoring/aggregation functions and `decode_target`. |
+| `results.py` | Input/source/run fingerprints, source-cleanliness validation, condition-target checkpoints, schema-1/schema-2 compatibility, condition selection, and validated atomic `save_task_decoding_run` / `load_task_decoding_run`. |
+| `plotting.py` | Condition-aware `plot_decoding_heatmap`, `save_default_decoding_figures`, `summarize_unit_coefficients`, and `plot_unit_coefficients` operating on validated saved results. |
+| `resource_usage.py` | `ResourceUsageTracker`, RSS normalization, shared resource-envelope validation, and atomic resumable `resource_usage.json` evidence. |
+| `pipeline.py` | `plan_task_decoding_session`, `prepare_task_decoding_run`, `run_prepared_task_decoding`, and `inspect_task_decoding_status`; all launch paths share these preparation/execution seams. |
+| `run_session.py` | Standard-library CLI `main` for public `dry-run`, `new`, `resume`, and `status` modes; numerical imports occur only after one-thread environment variables are set. |
+| `run_batch.py` | Standard-library CLI `main` plus `read_config_list`; bounded multi-session `dry-run` and foreground `new`, with evidence-gated cross-session workers. |
+| `cross_condition/` | Separate choice-relative transfer analysis; `run_session.py` and `run_batch.py` prepare self-contained transfer bundles, while `config.py`, `preparation.py`, `modeling.py`, `scoring.py`, and `results.py` own controls, inputs, fits, summaries, and saved products. See the [cross-condition usage guide](cross_condition/README.md). |
+| `slurm.py` | Standard-library one-shot `submit-new`, exact-directory `submit-resume`, and read-only `status` operations; it owns reviewed `standard` and `condition_validation` resource receipts and `sacct` parsing but no scientific computation. |
+| `pooled/` | Separate fixed-regularization pooled-window analysis with overlay configuration, window-target checkpoints, compact native/transfer/gap reporting, and a single-session CLI. |
+| `../psth_webapp.py`, `../webapp/task_decoding_views.py`, and `../webapp/condition_generalization_views.py` | Existing Streamlit entrypoint and separate early-routed **Task-variable decoding results** and **Condition generalization results** views. Discovery and rendering use completed saved runs only. |
+| `../../../docs/examples/neural_analysis/task_decoding_config.json` | Portable, explicit configuration template. Its repository path is `docs/examples/neural_analysis/task_decoding_config.json`. |
+| `../../../docs/examples/neural_analysis/pooled_task_decoding_config.json` | Portable pooled overlay selecting the sibling all-condition/all-target base example. |
+| `../../shell_scripts/task_variable_decoding_slurm.sh` | Thin single-session Slurm wrapper with one-CPU defaults, tracked-clean checkout checks, offline locked execution, and direct TERM propagation. Python submission applies either the standard 3-GiB/48-hour request or the 8-GiB/72-hour condition-validation override. Its repository path is `src/shell_scripts/task_variable_decoding_slurm.sh`. |
+
+## Data contracts
+
+### Inputs and target table
+
+The augmented input is a chronological `pandas.DataFrame` with shape
+`(n_trials, n_columns)`. Every run requires `cur_trial`, `cur_block`, `action`,
+`experimenter_reward_given`, and its configured alignment column. Alignment is
+`choice_time` or `start_time` in UTC Unix seconds. Selected targets add their
+source columns:
+
+| Target group | Required source columns |
+| --- | --- |
+| Current state/action/correctness | `state_int`, `action`, `correct` as selected |
+| Previous/next action and switch/stay | `action`; previous rewarded also uses `reward` |
+| Counts and indices | `consecutive_omissions`, `consecutive_rewards`, `cur_trial`, `cur_trial_in_block`, `rewards_in_block` as selected |
+| Model-derived numerical targets | `Qlearning_rel_value`, `FQlearning_rel_value`, `HMM_rel_value_logodds`, `HMM_rel_value_logodds_decay`, `relative_doubt_index` as selected |
+
+`build_target_table` returns a range-indexed table with shape
+`(n_trials, 5 + 2 * n_targets)`. It contains original trial/block identity,
+baseline validity and reason, and one encoded float value plus Boolean valid
+mask per target. Categorical values are encoded class 0/1. Numerical values
+retain their native source units and are not standardized as targets.
+
+Manual-reward, no-choice, and missing-alignment rows remain in this complete
+table with explicit invalidity. Chronological previous/next derivations never
+bridge an invalid adjacent choice.
+
+### Activity and result axes
+
+Each `RegionActivity` contains one region's selected unit IDs and aligned spike
+times in UTC seconds. `build_session_rate_tensors` creates PFC and HPC float64
+rates with shape `(common_neural_tensor_row, time, unit)` in Hz. Time-bin edges
+and centers are event-relative seconds over the frozen `[-2, 2]` second window.
+PFC and HPC share the same trial-row axis, but retain separate unit axes.
+
+The common tensor contains only bilateral rows whose complete alignment window
+is covered. `trial_row_indices` maps every tensor row back to `row_position` in
+the complete target table. `project_target_mask_to_tensor_rows` intersects a
+target's scientific eligibility with that mapping. Missing alignment rows are
+not represented as artificial all-zero firing rates: zero-filling would make
+missing coverage look like measured silence and could bias both PCA and the
+decoder.
+
+`condition_names` selects a nonempty canonical subset of `all`,
+`correct_rewarded`, `omission`, `incorrect`, `switch`, and `stay`. Every
+configured target is evaluated for every configured condition. The nonpooled
+conditions exactly reuse `spike_behavior.trials.make_trial_type_masks` and
+therefore additionally require `correct`, `reward`, and `action`. Switch/stay
+classify a valid unrewarded current trial using the immediately following
+valid choice. Condition membership is intersected with ordinary target and
+common-neural eligibility; filtering never changes chronological target
+derivations.
+
+The final `results.npz` contains primitive, non-object arrays and scalar JSON
+metadata. In condition-aware schema 2, condition-dependent arrays add a
+leading condition axis while shared identities remain single-copy. Central
+axes are:
+
+- condition masks: `(condition, full_table_row)`;
+- scores: `(condition, target, region, representation, metric, time, fold)`;
+- fit status/counts: `(condition, target, region, representation, time, fold)`;
+- encoded values: `(target, full_table_row)`;
+- eligibility: `(condition, target, full_table_row)`;
+- outer fold IDs: `(condition, target, common_neural_tensor_row)`;
+- coefficients: `(condition, target, region, representation, time, fold, feature)`; and
+- tuned candidate audit, when applicable: condition, target, outer fold,
+  region, representation, time, candidate, and inner fold.
+
+Legacy schema-1 pooled runs omit the leading condition axis and continue to
+load as the single condition `all`.
+
+Regions are `PFC`, `HPC`, and `PFC+HPC`; representations are `pca` and
+`units`. Metrics are balanced accuracy and AUC for categorical targets and R2
+for numerical targets. Score units are fractions or coefficient of
+determination. Coefficient/intercept units, seconds, Hz, and elapsed seconds
+are stored explicitly in `meta`.
+
+## Configuration and saved schema
+
+`load_task_decoding_config` is the sole JSON loader. The required path/region
+objects identify metadata, augmented trials, feature parameters, distinct PFC
+and HPC probes, channel labels, inside-brain policy, cluster groups, and
+optional zero-based channel IDs. User controls select alignment, supported bin
+width, regional PC counts, target subset, `fixed` or `tuned` regularization,
+canonical `condition_names`, legal fold counts, optional trusted UTC bounds,
+and the contained output root.
+Unknown fields and invalid cross-field combinations are rejected.
+
+`scientific_config_payload` adds the analysis version and code-owned constants:
+the window, seed, coefficient tolerance, estimator controls, and tuning grid.
+It excludes execution-only output paths. The run fingerprint binds this
+scientific payload to input byte identities, the exact feature-parameter file,
+the scoped scientific source fingerprint, and session identity.
+
+`results.py` owns pooled result schema version 1 and condition-aware schema
+version 2. `save_task_decoding_run` validates all names, dtypes, shapes, axes,
+units, condition/target/fold coherence, transform reuse, tuning audit, and
+identity before atomic publication. `load_task_decoding_run` uses
+`allow_pickle=False`, repeats validation, and returns a mapping containing
+`arrays`, `meta`, `scientific_config`, `input_manifest`, and the run
+fingerprint. `condition_labels` and `select_condition_arrays` expose one
+validated presentation slice without fitting. Callers never treat arbitrary
+NPZ content as trusted.
+
+## Scientific validity and leakage boundaries
+
+Target eligibility is constructed on the complete chronological table, then
+projected to the common bilateral neural tensor. Outer and inner folds group by
+behavioral block. Fold planners reject impossible class coverage, empty folds,
+or invalid grouped partitions; unavailable targets/cells carry compact reason
+codes rather than fabricated scores.
+
+Scaling and PCA are fit on training rows only. PFC and HPC transforms are fit
+separately, and combined features concatenate those training-derived regional
+features. Held-out rows are transformed with the corresponding training fold
+state. Tuned mode performs grouped inner selection strictly inside an outer
+training fold and refits the selected candidate before outer scoring.
+
+After each condition-target cell finishes, `pipeline.py` serializes primitive
+arrays through `save_target_checkpoint`. Condition-aware progress uses
+`condition::target` labels and `condition--target.npz` filenames. A checkpoint
+is reused only when its full run fingerprint, condition-target identity,
+schema, and arrays validate. Resume therefore skips completed cells without
+accepting stale scientific work. Pooled `all`-only runs retain their original
+target-only names and schema.
+
+## Existing code deliberately reused
+
+- `session_metadata.py` resolves the canonical session and two probe records.
+- `spike_behavior/loading.py` supplies the established aligned spike loader.
+- `population/pca.py` supplies the existing regional PCA calculation.
+- `behavior_analysis/project_utils.py` supplies canonical missing/no-choice
+  semantics used by target validation.
+- NumPy, pandas, scikit-learn, and Matplotlib provide arrays/tables,
+  elastic-net models, metrics, and light-mode saved figures.
+
+Do not duplicate these functions inside this package. If one of their public
+contracts is insufficient, adapt its use here rather than modifying an
+external dependency.
+
+## Execution, ownership, and publication
+
+Configuration paths are portable and session-relative. Preparation resolves
+them once, verifies containment, writes canonical scientific/input/source
+sidecars, snapshots `run_session.py`, `run_batch.py`, and `pipeline.py`, and
+saves exact resume/status commands before neural loading begins. Persistent
+execution revalidates live inputs and scoped source identity against those
+sidecars.
+
+Foreground, detached local, and scheduled Slurm launches call the same
+`run_prepared_task_decoding` function. A detached parent creates one child in a
+new process session and atomically publishes `local_launch.json`; the child
+waits briefly for its matching receipt before claiming the execution guard.
+The Slurm path prepares the same immutable sidecars, marks submission pending
+before one `sbatch` call, and writes only `slurm_submission.json` after
+acceptance so a fast job's running state cannot regress. The wrapper executes
+the private prepared-run seam with `uv run --frozen --no-sync --offline` and
+translates scheduler TERM into the existing interruption boundary. The guard
+enforces a single writer. Normal interruption records `interrupted`, releases
+ownership, and leaves valid checkpoints for resume. CLI commands return only
+bounded status/acceptance or after foreground computation; scientific results
+are returned through the immutable run directory, not as a large command
+value.
+
+State and JSON sidecars use sibling-temporary replacement. Target checkpoints,
+final `results.npz`, summary, and PNGs are validated before
+`final_results_published` becomes true. Completed-run discovery requires both
+`lifecycle == "complete"` and that publication flag. An identical completed
+fingerprint is skipped; `--rerun` allocates a new directory rather than
+overwriting it.
+
+Dry-run resource provenance includes trial/unit/time/fold/fit dimensions,
+per-target common-row/class/block/grouped-fold diagnostics, exact tensor
+allocation bytes, runtime/platform/thread identity, and source sizes. Every
+execution atomically updates `resource_usage.json` after target checkpoints
+and at terminal completion/failure/interruption. The evidence records
+normalized peak RSS bytes, cumulative wall/user/system seconds across resume,
+per-target split/transform/feature/estimator timings, fit counts, and output
+bytes. Batch execution remains one worker unless an explicit compatible
+completed measurement is supplied; evidence is never inferred from an
+arbitrary run.
+
+Final reporting renders the applicable heatmaps before publishing the
+terminal resource snapshot. `summary.md` therefore receives the complete
+post-figure wall/CPU/RSS evidence rather than the earlier running checkpoint.
+If figure or summary publication fails, terminal failure evidence replaces
+the provisional resource status and an explicit resume publishes only missing
+immutable artifacts.
+
+The WP11 cluster path is deliberately single-session. The `standard` request
+is one CPU, `3G`, and `2-00:00:00`; the first full condition-resolved validation
+uses `--resource-profile condition_validation`, one CPU, `8G`, and
+`3-00:00:00`. Login-side tensor memory and active cgroup memory are both
+guarded at 50 percent before large allocation. Status combines durable
+state with one `sacct` query and never polls. If accounting fails or has no
+exact root-job row, status still returns the durable pipeline state with
+`scheduler: null` and an explicit `scheduler_error`; it does not infer a live
+scheduler state or hide completed results. Exact-commit/offline checks and
+non-destructive staged transfer are documented in the scientist README. WP13
+separately owns any array wrapper; it must reuse this preparation/execution
+path rather than duplicate scientific logic.
+
+## Pooled-window single-session usage
+
+The pooled revision-1 workflow uses
+`docs/examples/neural_analysis/pooled_task_decoding_config.json` as a small
+overlay on the sibling base configuration. Copy both files into the session
+root, update the base input/probe paths, and run a bounded dry run first:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.pooled.run_session dry-run --config /path/to/session/pooled_task_decoding_config.json
+```
+
+Create and execute a new foreground run with:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.pooled.run_session new --config /path/to/session/pooled_task_decoding_config.json
+```
+
+Add `--detach` to `new` for a local background child. The command prints the
+new immutable run directory. Resume only that exact directory; configuration
+is reconstructed from its canonical sidecars, not from the submitted audit
+copies:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.pooled.run_session resume --run-directory /path/to/session/analysis_runs/pooled_task_variable_decoding_YYYYMMDDTHHMMSSZ
+```
+
+Read bounded lifecycle and validation evidence without modifying the run:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.pooled.run_session status --run-directory /path/to/session/analysis_runs/pooled_task_variable_decoding_YYYYMMDDTHHMMSSZ
+```
+
+Each completed window/target cell has exactly three PNGs under `figures/`:
+native, transfer, and native-minus-transfer gap. `results.npz` remains the
+validated scientific source for every plot. `summary.md`, `run.log`, source
+snapshots, checkpoint files, and `resource_usage.json` stay in the same
+immutable run directory. Existing per-time-bin runs retain their original
+loader and command surface; they are not discovered or interpreted as pooled
+runs.
+
+To inspect a completed run interactively, launch the metadata-driven webapp and
+select **Condition generalization results**. The view automatically scans the
+selected session's `analysis_runs` directory, then offers saved run, training
+window, target, and native/transfer/gap selectors. Categorical targets also
+offer a metric selector that displays either balanced accuracy or AUC, rather
+than overlaying both; numerical targets use their sole R2 metric. The view
+validates and plots the selected `results.npz`; it does not recompute models or
+open raw neural data.
+The execution-time session path is displayed only as provenance, allowing a
+cluster run copied into the corresponding workstation session to remain
+portable.
+
+## Focused test ownership
+
+| Implementation | Focused tests |
+| --- | --- |
+| `config.py` | `task_decoding/test_config.py` |
+| `targets.py` | `task_decoding/test_targets.py` |
+| `conditions.py` | `task_decoding/test_conditions.py` |
+| `activity.py` | `task_decoding/test_activity.py` |
+| `modeling.py` | `task_decoding/test_modeling.py` |
+| `resource_usage.py` | `task_decoding/test_resource_usage.py` |
+| `results.py` | `task_decoding/test_results.py` |
+| `pipeline.py`, `run_session.py` | `task_decoding/test_pipeline.py` |
+| `run_batch.py` | `task_decoding/test_run_batch.py` |
+| `slurm.py`, `task_variable_decoding_slurm.sh` | `task_decoding/test_slurm.py` |
+| `plotting.py` | `task_decoding/test_plotting.py` |
+| saved-result webapp | `test_webapp_task_decoding.py`, `test_webapp_task_decoding_rendering.py`, `test_condition_generalization_webapp.py`, and routing tests |
+| READMEs, example, and command surface | `test_task_decoding_documentation.py` |
+
+`test_synthetic_integration.py` exercises both the legacy pooled path and a
+real six-condition schema-2 path through loading, fitting, checkpoints,
+publication, figures, and reentry. Run focused tests before the full
+task-decoding and affected webapp suites.
+
+## Adding a future target
+
+1. Add one `TargetDefinition` in canonical order in `config.py`, including its
+   family, source column, derivation, display label, and positive label when
+   categorical.
+2. Add only the target-specific encoding rule needed in `targets.py`; reuse the
+   common baseline and chronological validity rules.
+3. Extend target/config tests first for required columns, values, masks,
+   metadata, missingness, malformed values, and canonical ordering.
+4. If the target uses an existing family, leave activity, split, estimator,
+   pipeline, plotting, and webapp code unchanged. Those modules consume target
+   metadata generically.
+5. Extend saved-schema fixtures and the synthetic integration test, then update
+   the portable example and user documentation.
+
+Do not add a generic estimator registry or target plugin mechanism for one new
+variable. A small explicit definition and encoding branch is easier to audit.
+
+## Separate cross-condition generalization analysis
+
+`cross_condition/` implements an all-source/complementary-condition analysis
+for Context, Choice, Actual reward, and Value (correctness-based). Its v2
+bundle retains four condition transfers per target and adds a Context-only
+outcome-transfer view, reusing the incorrect-trained readout. It uses fixed
+session-wide regional PCs, matched Full/Before/After choice-relative windows,
+and separately saved equal-trial and equal-cell fits. It has its own controls,
+results format, session runner, batch runner, and summary-only webapp view; it
+does not extend the existing task-variable or session-prediction result modes.
+Preparation is explicit. Pair the self-contained saved run with its session
+metadata for offline summary inspection.
+
+See the [cross-condition usage guide](cross_condition/README.md) for required
+inputs, commands, batch-list syntax, v1/v2 saved-run behavior, output copying,
+and interpretation limits. See the [outcome-generalization plan](../../../docs/context_outcome_generalization_implementation_plan.md)
+for the approved extension contract.
+See the [scientific specification](../../../docs/cross_condition_generalization_spec_v1.md)
+for transfer cell definitions and data contracts.
+
+## Separate session prediction analysis
+
+`session_prediction/` adds individual held-out predictions to the session
+timeline, with its own version/schema. Its preparation/config modules align
+existing targets and canonical conditions to saved timeline choices and one
+shared full-table block map. `modeling.py` fits weighted fixed L2/ridge models
+on all saved unwhitened regional PCs; `results.py` owns named-array archives,
+portable PCA references and scientific identities. `run_session.py` and
+`run_batch.py` compose preparation; `plotting.py` contains display-only helpers.
+Two fixed modes share the same source PCA and full-table block map:
+`correct_rewarded_generalization` (default seven targets) and
+`mixed_outcome_decoding` (state, action, current-trial actual reward, and the
+same five continuous value/belief/doubt targets as generalization,
+training on correct-rewarded, correct-omission, and incorrect trials; up to 80
+models per window across both regions/five folds). Each preparation selects
+exactly one matched **Training/scoring window**: Full `[-1,+1)`, Before `[-1,0)`,
+or After `[0,+1)` choice-relative seconds. All predict within the full `[-2,+2)`
+choice windows and leave intertrial gaps unpredicted. Set `training_window` to
+`full` (default), `before`, or `after` in
+`session_prediction_config.json`, or pass `--training-window {full,before,after}`
+to the session or batch runner. Each command prepares one mode/window pair;
+other pairs are explicit separate preparations. All windows reuse matching PCA
+and the same deterministic full-table block folds.
+
+New products use v4/schema 3 and persist explicit training membership and
+matched scoring bounds. Original v1/schema-1 and v2/schema-2 Full-window
+products remain read-only displayable with their original contents and bytes;
+v1 is seven-target generalization, while v2 can be seven-target generalization
+or two-target mixed decoding without reward. V3/schema-3 products retain their
+original Full/Before/After windows and seven generalization or three mixed
+targets. To add missing mixed targets, explicitly Prepare predictions for the
+selected window. Compatible PCA is reused; existing products are not rewritten
+or automatically rerun. Both modes require all five continuous source columns;
+missing values use target-specific eligibility, and entirely empty numerical
+columns retain an unavailable target coordinate.
+At fixed C, mixed training changes sample size and regularization relative to
+average loss as well as outcome composition; it is not a controlled comparison
+of composition alone.
+
+`scoring.py` derives selected-target trial-mean performance from saved
+products, averaging probabilities/values over the selected matched window. It
+reports training/held-out, per-fold training/held-out, outcome, and separate
+left/right choice and state/context scores and counts. Reward reports class
+counts from actual recorded labels and mean `P(rewarded)`; prediction thresholds
+do not define those class counts. Binary tables show accuracy, balanced accuracy
+and Brier score (mean squared error of trial-mean probabilities against 0/1
+labels, range 0-1, lower is better). Continuous tables retain dimensionless R2
+and native-unit RMSE. Single-class groups retain ordinary accuracy, Brier score
+and counts while balanced accuracy is unavailable. Actual reward is the current
+trial's recorded reward flag. Before predicts eventual recorded reward, not
+subjective expectation; After is post-choice, not necessarily post-delivery.
+The existing timeline panel caches only small summaries; it does not fit, read
+raw inputs, rewrite archives, or change scientific fit identity.
+
+This path preserves the existing decoder's models, pooled `full` window and
+saved schemas. Existing target-loader callers remain strict by default;
+keyword-only missing-block/empty-numerical-target options are enabled only
+for the new analysis. Unlike the older read-only decoder views, the timeline
+offers explicit preparation buttons; changing display controls never fits.
+See [condition prediction usage](../SESSION_TIMELINE.md#condition-prediction-tracks)
+for CLI commands, interpretation, copy-back and required behavioral inputs.
+
+## Non-goals
+
+The original decoder pipelines do not replace or absorb the older exploratory
+PCA decoder. They do not pool sessions or units, support multiple probes per region, compute
+permutation significance or decoding onset, standardize numerical targets,
+tune bins/PC counts/class weights/thresholds, perform live fitting in
+Streamlit, scan arbitrary filesystem paths, or manage a general workflow
+engine. Scheduler wrappers and batch arrays remain separately gated rather
+than being hidden inside the local pipeline.

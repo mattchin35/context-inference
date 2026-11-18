@@ -2,10 +2,11 @@
 
 ## Status and authority
 
-**Current status:** U1-U4 are implemented, and the user explicitly accepted
-the current version-2 U4 workflow on 2026-09-25. The organization refactor
-described here is planned but not authorized to begin. R0 inventory work and
-R1 source movement each require separate approval.
+**Current status:** U1-U4 and R0-R6 are complete. R7 was authorized on
+2026-09-26. Its audit, approved legacy move, final documentation, and neural
+verification are complete. Final user acceptance remains; the repository-wide
+gate is not green because of unrelated behavior/main test failures and one
+undeclared test dependency recorded below.
 
 This plan supersedes the former NR2-NR18 package roadmap and the former broad
 layered target architecture. Historical execution details, reviews, paths,
@@ -218,8 +219,12 @@ the owning function's contract.
 Clarity has priority unless an existing path is performance-sensitive.
 
 - An ordinary import move requires correctness tests, not a benchmark.
-- Webapp startup must remain metadata/small-table only and must not load full
-  LFP, phase, or spike arrays.
+- Preserve the webapp's current loading behavior. Metadata validation and
+  metadata/summary-source resolution do not load numerical arrays, but the
+  default Unit raster/PSTH view loads the selected population's sorter and
+  aligned-spike arrays on its initial render. Do not introduce additional
+  eager loading or make the existing default view lazy without separate
+  approval.
 - Scientific moves must not introduce new full-array copies or eager loading.
 - Existing vectorized NumPy/SciPy/Pynapple operations remain unchanged.
 - Worker counts, memory maps, chunk/block sizes, checkpoint representation, and
@@ -354,8 +359,10 @@ from `lfp_summary_models.py` are sufficient before R2A changes their canonical
 module identity.
 
 Classify `sync_ephys.py` as a current root script/function entry point. Record
-its callable signatures and defaults plus the workflow selected by its
-`__main__` block. It has no argument parser or documented CLI contract.
+its callable signatures plus the workflow selected by its `__main__` block.
+Its hardcoded session, recording, and sorter paths are replaceable local
+examples, not strict compatibility contracts. It has no argument parser or
+documented CLI contract.
 
 R0 also records the current internal dependency graph for
 `src/neural_analysis` with a small repository or standard-library AST audit.
@@ -424,8 +431,9 @@ point.
 - time zones, bounds, extrapolation warnings, and missingness are unchanged;
 - written synchronization NPZ/note content is equivalent;
 - Open Ephys and SpikeGLX current paths retain their existing behavior;
-- the callable workflow signatures, defaults, return values, writes, and
-  dependency calls are unchanged;
+- the callable workflow signatures, return values, writes, and dependency
+  calls are unchanged;
+- tests do not freeze hardcoded session, recording, or sorter example paths;
 - direct module execution selects the same current hardcoded workflow when its
   real-data dependencies are stubbed; and
 - old import paths forward to the new implementations.
@@ -448,6 +456,22 @@ point.
 No benchmark is required. The move must not add a second read of large source
 files or materialize arrays that are currently streamed or selected. Focused
 synchronization tests and the complete neural suite must pass.
+
+### Implementation result
+
+R1 tests were committed first in `b7696aa`, with six expected RED failures for
+the absent canonical package and 59 passing focused tests. The implementation
+was committed in `6588fc5`. It adds only `synchronization/alignment.py`,
+`synchronization/spikeglx.py`, `synchronization/manual.py`, and a minimal
+initializer; the three old modules are compatibility aliases, while
+`sync_ephys.py` remains the root script/function entry.
+
+The final focused synchronization and LFP-loading run passed 76 tests. The
+complete neural suite passed 1,676 tests with the 22 previously inventoried
+warnings. A complete repository run was attempted but could not collect the
+unrelated behavior-analysis suite because `autograd` is absent from the local
+environment. No dependency was added, and no experimental data, cache,
+report, external system, or scheduler was accessed.
 
 ## 11. Work package R2 - Scientific-domain organization
 
@@ -498,6 +522,29 @@ Tests written first:
 - no module under `lfp` imports `lfp_summary`; and
 - old module imports forward correctly.
 
+#### R2A implementation result
+
+R2A tests were committed first in `087d356`. The absent canonical package
+produced 18 expected RED failures while the 149 existing focused tests passed.
+The implementation was committed in `e90a593`. It creates the minimal `lfp`
+package with `config.py`, `loading.py`, `power.py`, `spectrogram.py`,
+`phase.py`, and `synchrony.py`; moves the three reusable configuration records
+to `lfp/config.py`; and keeps their old workflow-model names as aliases to the
+same class objects.
+
+The old loading, Power, spectrogram, and Synchrony modules are compatibility
+aliases to their canonical modules. The old phase module forwards its moved
+scientific records and functions while retaining the existing plotting
+implementation until R3. Repository callers now use the canonical scientific
+owners except where the legacy phase path is still required for that plot and
+its existing patch seams.
+
+The focused R2A suite passed 167 tests. The complete neural suite passed 1,694
+tests with the 22 previously inventoried warnings. No scientific calculation,
+default, array contract, saved-result behavior, dependency, or user-facing
+entry point changed, and no experimental data, cache, report, external system,
+or scheduler was accessed.
+
 ### R2B - Spike behavior
 
 Split current responsibilities from:
@@ -519,6 +566,30 @@ Tests written first:
   seeded results, and saved tables are unchanged;
 - PSTH arrays and plot inputs are unchanged; and
 - old import paths remain compatible.
+
+#### R2B implementation result
+
+R2B tests were committed first in `4069b77`, with 23 expected RED failures for
+the absent canonical package and 89 passing focused tests. Per user direction,
+the commit also starts tracking `test_unit_spike_loading.py` and removes tests
+that coupled CT014 channel presets to hardcoded source literals. CT026 example
+tests now preserve probe-routing relationships without treating the example
+session path as authoritative.
+
+The implementation was committed in `7118a44`. It creates the minimal
+`spike_behavior` package with `loading.py`, `trials.py`, `binning.py`,
+`decoding.py`, `psth.py`, and `publication.py`. The publication module contains
+only the two established decoding CSV contracts and their filename/table
+helpers. Plotting and hardcoded direct dispatch remain at their legacy paths
+until R3. The old unit-loading module aliases the canonical loading owner; the
+two mixed legacy modules forward moved objects while retaining their plots and
+direct entry behavior.
+
+The focused R2B suite passed 112 tests, directly affected integrations passed
+442 tests, and the complete neural suite passed 1,714 tests with the 22
+previously inventoried warnings. Every moved computational body was compared
+with its pre-refactor AST and remained unchanged. No experimental data, cache,
+report, external system, or scheduler was accessed.
 
 ### R2C - Spike-LFP
 
@@ -543,6 +614,29 @@ Run the existing synthetic/injected representative PPC kernel workload before
 and after this slice. Do not load CT026 or another real session without a
 separate authorization.
 
+#### R2C implementation result
+
+R2C tests were committed first in `2c3fbba`, with 17 expected RED failures for
+the absent canonical package and 200 passing focused tests. The tests preserve
+the established Hilbert and phase-locking analysis versions, the legacy
+generator strings saved by the exploratory webapp, public and tested-private
+PPC helpers, and kernel/runtime monkeypatch seams.
+
+The implementation was committed in `d730325`. It creates the minimal
+`spike_lfp` package with `hilbert.py`, `phase_locking.py`, `ppc.py`, and
+`ppc_kernel.py`. Each old numerical module is an exact module alias of its
+canonical owner. Plotting remains in `unit_spike_plotting.py` until R3, while
+workflow workers, checkpoints, and process policy remain in `lfp_summary`.
+
+The focused R2C suite passed 217 tests, the affected PPC/runtime/profile/
+synthetic/webapp suite passed 349 tests, and the complete neural suite passed
+1,731 tests with the 22 previously inventoried warnings. The affected suite
+includes the existing injected representative timing/memory contracts,
+allocation and array-ownership checks, serial/parallel equality, seeded
+schedules, and checkpoint behavior. Three moved numerical modules were exact
+AST matches; PPC differed only in importing the canonical phase-locking owner.
+No real session, cache, report, external system, or scheduler was accessed.
+
 ### R2D - Population and cross-session analysis
 
 Move or split:
@@ -565,11 +659,39 @@ Tests written first:
   missingness, and overwrite behavior remain unchanged; and
 - old imports remain compatible.
 
+#### R2D implementation result
+
+R2D tests were committed first in `01891f3`, with 19 expected RED failures for
+the absent canonical package and 67 passing focused tests. The tests define
+ownership and compatibility without freezing the hardcoded mouse, session,
+date, region, or filesystem examples in the legacy cross-session entry point.
+
+The implementation was committed in `d9c9982`. It creates the minimal
+`population` package with `pca.py`, `decoding.py`,
+`switch_trajectories.py`, and `cross_session.py`. PCA is an exact legacy module
+alias. The mixed decoding, switch-trajectory, and cross-session modules
+forward their moved numerical and table functions while retaining plotting;
+the cross-session module also retains its current examples, defaults, and
+direct dispatch. The webapp imports canonical PCA while continuing to use the
+mixed legacy facades where it also needs their plots.
+
+The focused R2D suite passed 86 tests, the directly affected webapp and unit-
+plotting suite passed 99 tests, and the complete neural suite passed 1,750
+tests with the 22 previously inventoried warnings. All original function and
+class bodies were partitioned between canonical and retained modules without
+AST changes, and the canonical package has no dependency cycle back to legacy
+mixtures, workflows, or UI. No experimental data, cache, report, external
+system, or scheduler was accessed.
+
 ### R2 completion
 
 Each slice receives focused and affected integration tests plus the complete
 neural suite. R2 is complete only when all four accepted slices are green and
 their package boundaries do not introduce cycles back to workflows or UI.
+
+R2A-R2D are green. Their canonical packages have no dependency cycles back to
+workflow or UI modules, so the R2 completion gate is satisfied. Plot movement
+remains deferred to R3 and requires separate approval.
 
 ## 12. Work package R3 - Plotting organization
 
@@ -607,6 +729,32 @@ add brittle pixel-for-pixel snapshots when the current contract is structural.
 
 No plot, style, control, statistic, caption, or report content changes. Focused
 plot tests, affected webapp/report tests, and the complete neural suite pass.
+
+### R3 implementation result
+
+R3 ownership tests were committed first in `4c8a54c`, with 19 expected RED
+failures for the four absent domain plotting modules and 76 passing package-
+boundary tests. Commit `aae862a` updates one source-location test to inspect
+the new canonical Spike-LFP owner; it failed RED because that owner did not yet
+exist. Existing structural and content plot tests remain the behavioral
+contract rather than introducing pixel snapshots.
+
+The implementation was committed in `9e25afb`. It creates `plotting.py` in
+`lfp`, `spike_behavior`, `spike_lfp`, and `population`. The former mixed
+modules now forward the exact canonical callables while retaining their
+current example defaults and direct dispatch. `unit_spike_plotting.py` is a
+small compatibility facade over the four domain owners. Workflow-specific
+summary plotting remains unchanged in `lfp_summary_plotting.py`.
+
+The focused rendering suite passed 242 tests, the affected webapp/summary/
+report suite passed 217 tests, and the complete neural suite passed 1,768
+tests with the 22 previously inventoried warnings. An AST audit found all 67
+moved definitions unchanged except for disambiguating two unrelated private
+helpers that formerly shared the name `_draw_trial_event_markers` in separate
+modules. All canonical plotting definitions retain data-contract docstrings,
+and the new modules have no back-dependency on UI, workflows, or legacy mixed
+modules. No experimental data, cache, report, external system, or scheduler
+was accessed.
 
 ## 13. Work package R4 - LFP-summary workflow organization
 
@@ -728,6 +876,50 @@ Run focused tests after each slice, the full LFP-summary/Power/Synchrony/Spike/
 PPC/launcher/webapp integration set after R4D, and the complete neural suite at
 R4 completion.
 
+#### R4 implementation result
+
+R4A tests were committed first in `2bb1add`, and the implementation was
+committed in `a09c979`. It creates the stable `lfp_summary` foundation modules
+for models, session configuration, preparation, pipeline coordination, payload
+contracts, final-cache I/O, and work-cache I/O. The session builder now reads
+version-2 probes, `unit_channels`, and cache paths directly without restoring
+the removed population or channel-group metadata models. The focused suite
+passed 236 tests, and the broader workflow suite passed 1,098 tests.
+
+R4B tests were committed in `ac0b636` and `d7ba113`, followed by implementation
+commit `dae57a9`. The former mixed runtime is split into the smallest shared
+runtime owner plus Power, Synchrony, and Spike-phase runtimes. Moving the three
+already shared validation/membership helpers to the common owner removes the
+runtime/PPC back-import without adding an interface layer. All 60 original
+runtime definitions retain exact function-body ASTs, and the affected workflow
+suite passed 1,115 tests.
+
+R4C tests were committed in `b1e8fe5` and `250520d`, followed by implementation
+commit `14991a6`. PPC planning/allocation now has a separate canonical owner
+from execution/checkpoint behavior. Grouped and legacy execution remain
+together, serial and parallel paths are preserved, and spawn workers remain
+top-level callables in the canonical execution module. All 90 original PPC
+runtime definitions retain exact function-body ASTs. The focused planning,
+execution, checkpoint, profile, and real-spawn suite passed 301 tests. The
+deterministic injected workload remained exactly 10.0 injected seconds and 500
+sampled bytes before and after the move; production profiling still records
+positive elapsed time and resident memory. No CT026 or other real-session
+profile was run.
+
+R4D tests were committed in `8462030`, followed by implementation commit
+`7755d6e`. Validation, workflow plotting, and immutable snapshot inspection now
+have canonical `lfp_summary` owners. The Streamlit summary module forwards the
+same snapshot objects, historical report source identifiers remain at their
+legacy values, and old validation/plotting paths remain exact module aliases.
+The focused report, plot, and snapshot suite passed 361 tests.
+
+Integration commit `0002100` restores two tested module-level compatibility
+seams without changing computation. The complete neural suite passed 1,827
+tests with the 22 previously inventoried warnings. Existing configuration,
+fingerprint, manifest, payload, checkpoint, report, snapshot, worker, seed,
+array, axis, and unit contracts remain unchanged. No experimental data, cache,
+report, external system, or scheduler was accessed or mutated during R4.
+
 ## 14. Work package R5 - Webapp decomposition
 
 ### Scope and architecture
@@ -774,7 +966,11 @@ cleanup gate instead.
   change is approved;
 - cached and live provenance remain distinct;
 - missing inputs disable the same affected views with the same meaning;
-- startup and unrelated rerenders load no large numerical arrays;
+- metadata validation and metadata/summary-source resolution load no large
+  numerical arrays, while the default Unit raster/PSTH render retains its
+  current selected-population spike loading;
+- unrelated rerenders add no new eager numerical loading compared with the
+  baseline;
 - expensive existing actions occur only after the same explicit user action;
 - Streamlit cache inputs and invalidation semantics remain equivalent; a
   one-time in-memory cache miss caused by deployment of moved code is allowed;
@@ -788,6 +984,46 @@ Run the existing noninteractive startup smoke before and after the move. No new
 cache layer, background worker, eager preprocessing, or page capability is
 added. Focused webapp tests, directly used domain tests, summary integration
 tests, and the complete neural suite pass.
+
+### R5 implementation result
+
+The canonical package-boundary tests were committed first in `d66c825`, with
+nine expected RED failures for the absent `webapp` package. Repository-private
+monkeypatch seams were redirected to their canonical owners in tests-only
+commits `39e93a4` and `bc1dfb1`. The main decomposition was implemented in
+`ab5759d`.
+
+The documented `psth_webapp.py` path is now a 15-line compatibility and direct-
+execution entry point over `webapp/app.py`. Session inputs, Streamlit-cached
+loading, unit presentation, LFP views, Spike-LFP views, population views, and
+LFP-summary composition have direct modules. The compatibility-only
+`MetadataPopulationInputs` adapter remains in the app module rather than being
+promoted into the package; its deletion remains subject to the R7 cleanup
+gate.
+
+A focused audit caught the remaining first/second-probe-to-PFC/HPC metadata
+bridge. RED commit `7563cf7` and implementation commit `e128a31` replace it
+with direct version-2 `MetadataLFPSiteInputs` records carrying the declared
+probe id, site/display identity, LFP and synchronization paths, and zero-based
+saved channel. The separately supported manual route retains its established
+HPC/V1 and PFC labels and behavior. RED commit `f6bc428` and fix `35cf187`
+preserve the manual PFC default while selecting metadata sites by exact probe
+id.
+
+Of 68 pre-R5 definitions moved under `webapp`, 62 retain exact function-body
+ASTs. The six intentional changes are the app composition function, four
+interactive LFP/Spike-LFP renderers that now accept direct metadata site
+records, and metadata availability, which now checks version-2 probes instead
+of the derived compatibility population collection. Every function and class
+in the new package retains a data-contract docstring.
+
+The focused webapp/domain/summary integration set passed 404 tests. The same
+three-test noninteractive startup smoke passed in 1.50 seconds before the move
+and 1.44 seconds after it; metadata resolution still opens no scientific array.
+The complete neural suite passed 1,839 tests with the 22 previously inventoried
+warnings. No new cache, worker, eager preprocessing, control, view, or command
+was added, and no experimental data, cache, report, external system, or
+scheduler was accessed or mutated during R5.
 
 ## 15. Work package R6 - Launcher, relocation, and profiling
 
@@ -859,6 +1095,40 @@ Run focused launcher, relocation, profiling, shell-wrapper, LFP-summary, and
 complete neural suites. No real-data run, cache mutation, external copy, or
 Slurm action is authorized.
 
+### R6 result
+
+R6 is complete. Launcher ownership was frozen in tests-only commit `dc8a8fb`
+and implemented in `1d95adf`. The documented
+`lfp_spike_phase_launcher.py` command still owns request parsing, top-level mode
+dispatch, and direct execution. Its established retained-work preflight,
+launcher-state/report lifecycle, execution, locking, signal, cleanup, and
+resource-measurement helpers now have the single launcher-specific canonical
+owner `lfp_summary/launcher_runtime.py`. A caller/helper review found these
+groups share one transaction state and error path; keeping them together
+avoids artificial dependency bundles or new generic execution/state packages.
+The temporary copied entry logic used during the mechanical move was removed
+in `78faf81`.
+
+Cache-relocation ownership was frozen in `0366507` and moved in `a67488c`.
+`lfp_summary/cache_relocation.py` is canonical, while the old import and
+documented `python -m src.neural_analysis.lfp_summary_cache_relocation` command
+remain exact compatibility paths. Component bytes, rollback behavior,
+checksums, receipt content, and the persisted legacy command identity are
+unchanged.
+
+Profiling ownership was frozen in `fb8c853` and moved in `d8b3ead`.
+`ppc_profile.py`, `ct026_profile_adapter.py`, `ct026_profile_locks.py`, and
+`ct026_profile_runner.py` now live under `lfp_summary`; the old modules are
+exact aliases. The grouped and legacy PPC profile paths both remain, and the
+adapter, locks, and runner remain separate and explicitly CT026-specific.
+
+The combined launcher/relocation/profiling/LFP-summary gate passed 1,097 tests
+with the six previously inventoried warnings. The complete neural suite passed
+1,848 tests with the same 22 previously inventoried warnings. The final
+launcher cleanup was rechecked with 160 focused tests. No experimental data,
+real cache, report, external destination, scheduler, or Slurm job was accessed
+or mutated during R6.
+
 ## 16. Work package R7 - Compatibility cleanup and unused-code deletion
 
 ### R7A - Compatibility audit
@@ -868,11 +1138,17 @@ After all repository callers use canonical imports:
 - inventory every root forwarding module;
 - search source, tests, shell scripts, notebooks, and documentation;
 - identify likely external imports with the user;
-- retain the two documented root command modules and the current
+- retain the three documented root command paths and the current
   `sync_ephys.py` root script; and
 - propose each other wrapper removal separately.
 
 No wrapper is removed merely because repository tests no longer import it.
+
+The fresh audit found no clear need to remove a compatibility wrapper. Their
+small forwarding cost is outweighed by preserving possible external imports,
+so all root compatibility paths remain. The three permanent documented paths
+are `session_metadata_cli.py`, `psth_webapp.py`, and
+`lfp_spike_phase_launcher.py`.
 
 ### R7B - Unused candidates
 
@@ -890,22 +1166,19 @@ test but no production caller, while `analyze_treadmill_signal`,
 callers. This evidence is not yet enough to delete the module because external
 use has not been ruled out.
 
-Immediately before deletion:
+The R7 audit repeated exact module-name, filename, distinctive-symbol,
+command, notebook, dynamic-import, and package-entry-point searches and found
+no repository consumer. The user declined deletion and explicitly approved a
+compatibility-preserving move under `neural_analysis/legacy`. RED commit
+`f9e8833`, corrected inventory commit `6923359`, and implementation commit
+`3ecbcd4` retain the five modules under that package. Their old paths remain
+thin forwarders, direct execution remains routed to the retained source, and
+the package initializer imports nothing eagerly. The two hardcoded scripts
+were not imported or executed during verification.
 
-1. repeat exact module-name, filename, distinctive-symbol, command, notebook,
-   dynamic-import, and package-entry-point searches;
-2. verify that any useful-looking responsibility is either obsolete or already
-   covered by a retained tested implementation;
-3. obtain user confirmation that no script outside the repository depends on
-   the module;
-4. add and commit a removal test that is RED while the approved obsolete
-   modules remain present; and
-5. obtain explicit deletion approval.
-
-Delete approved unused modules rather than moving them to `legacy`. Git history
-retains their source. Do not delete the active and heavily used
-`spike_behavior_pynapple.py`; its similar name is not evidence that it is a
-candidate.
+`analog_treadmill_decode.py` remains at the root. The audit found no clear need
+to remove its tested conversion or three uncalled signal-analysis functions.
+The active `spike_behavior_pynapple.py` remains unchanged.
 
 ### R7C - Final documentation
 
@@ -925,6 +1198,34 @@ Run the complete neural and repository suites. Review the final tree from the
 perspective of a scientist locating each supported calculation, plot, webapp
 view, and production workflow. The user explicitly approves completion even if
 some large cohesive modules remain.
+
+### R7 implementation result
+
+R7 is implementation-complete. The no-caller and compatibility audit retained
+all forwarding paths because removing them offered little readability benefit
+and would narrow existing imports. At the user's direction, the five unused
+exploratory modules were moved under the non-eager `legacy` package instead of
+being deleted. Their root paths remain compatibility/direct-execution entries.
+`analog_treadmill_decode.py` remains at the root. The realized organization and
+legacy decision are recorded in `docs/neural_analysis_refactor.md`; the
+operational README needed no change because legacy modules are not maintained
+user workflows.
+
+The new legacy boundary passed 7 tests. The complete neural suite passed 1,855
+tests with the same 22 previously inventoried warnings, and compile-only
+validation passed for the whole neural package. No hardcoded legacy data script
+was imported or executed, and no experimental data or external system was
+accessed.
+
+The repository-wide command `uv run pytest -q --tb=short` stopped during
+collection because the untracked
+`src/tests/behavior_analysis/test_project_utils.py` imports the undeclared
+`autograd` package. Re-running with that one file excluded produced 2,509
+passes, 18 failures, and 63 warnings. All failures are outside
+`neural_analysis` in pre-existing behavior/main code or tests. Focused reruns
+confirmed that residualization passes in isolation while several tracked
+behavior/main failures also reproduce in isolation. R7 did not modify those
+unrelated modules, tests, or dependencies.
 
 ## 17. Behavior-preserving simplification candidates
 
@@ -989,11 +1290,11 @@ easier to review.
 | Numerical function move | Exact deterministic results or existing reviewed tolerance; shapes, axes, units, missingness |
 | Loader move | Same paths read, same records/arrays, same lazy/eager behavior |
 | Plot move | Same plotted data, structure, labels, captions, filenames, rendering smoke |
-| Webapp move | Same controls/actions, no startup computation, metadata/legacy routing, cached/live provenance |
+| Webapp move | Same controls/actions and current view-specific loading behavior, metadata/legacy routing, cached/live provenance |
 | Cache/artifact move | Same schemas, identities, publication, validation, and recovery |
 | PPC move | Numerical equivalence, seeds/schedules/checkpoints, serial/parallel behavior, runtime and peak memory |
 | CLI/launcher move | Same parsing, state transitions, failure/recovery behavior, command path |
-| Root script move | Same `__main__` dispatch, callable signatures/defaults, return values, and stubbed dependency calls; no parser added |
+| Root script move | Same `__main__` dispatch, callable signatures, return values, and stubbed dependency calls; hardcoded local example paths are not frozen; no parser added |
 | Deletion | Fresh no-caller audit, external-use confirmation, RED removal test, explicit approval |
 
 After each accepted work package:

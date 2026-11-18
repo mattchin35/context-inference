@@ -19,6 +19,10 @@ from src.behavior_analysis.project_utils import (
 )
 from src.behavior_analysis.plotting_utils import build_presentation_colors, build_state_colormap, get_state_colors
 from src.behavior_analysis import state_space_plotting
+from src.behavior_analysis.block_regression import (
+    make_valid_block_history_mask as _neutral_valid_mask,
+    compute_sliding_block_regression as _neutral_sliding_regression,
+)
 
 
 class Session(Protocol):
@@ -54,9 +58,7 @@ def make_valid_block_history_mask(block_df: pd.DataFrame) -> pd.Series:
     pd.Series
         Boolean mask with shape `(n_blocks,)`, aligned to `block_df.index`.
     """
-    has_current_block_outcome = is_present_value(block_df["trials_to_correct"])
-    has_previous_block_history = is_present_value(block_df["prev_n_correct"])
-    return has_current_block_outcome & has_previous_block_history
+    return _neutral_valid_mask(block_df)
 
 
 def prepare_block_lm_hmm_data(
@@ -151,10 +153,12 @@ def compute_sliding_block_regression(
         index otherwise. Slopes have units trials per reward; intercepts have
         units trials.
     """
+    return _neutral_sliding_regression(
+        block_df, valid_mask, predictor_column, response_column, window_size, step_size
+    )
+
     if window_size <= 0:
         raise ValueError("window_size must be positive.")
-    if step_size <= 0:
-        raise ValueError("step_size must be positive.")
 
     output_columns = [
         "window_start_position",

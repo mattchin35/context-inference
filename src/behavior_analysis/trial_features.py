@@ -140,6 +140,8 @@ def hmm_relative_value(
     value_mode="expected_reward",
     tanh_scale=1,
     experimenter_reward_given=None,
+    *,
+    validate_outcome_evidence=False,
 ):
     """
     Minimal HMM relative value feature.
@@ -148,6 +150,15 @@ def hmm_relative_value(
     value_mode:
         - "expected_reward": E[r_left] - E[r_right]
         - "bayesian_log_odds": log(p_left / p_right)
+
+    Parameters are dimensionless probabilities/scales and reward-indicator
+    magnitudes. actions/rewards and optional manual flags are aligned arrays
+    of shape (n_trials,), with actions 0=right, 1=left. Returns an aligned
+    float/object array (n_trials,) of left-positive pre-choice values, with
+    None on skipped rows. No physical water-volume conversion is performed.
+    Keyword-only validate_outcome_evidence enables a ValueError with retained
+    row and observation context for zero/non-finite normalization mass; its
+    default False preserves existing callers' arithmetic and behavior.
     """
     actions = np.asarray(actions)
     rewards = np.asarray(rewards)
@@ -212,6 +223,19 @@ def hmm_relative_value(
         )
 
         p_outcome = p_reward * prior
+        if validate_outcome_evidence:
+            outcome_mass = np.sum(p_outcome)
+            if not np.isfinite(outcome_mass) or outcome_mass <= 0:
+                raise ValueError(
+                    f"Invalid Bayesian outcome normalization at row {i}: "
+                    f"action={action!r}, reward={reward!r}, "
+                    f"outcome_mass={outcome_mass!r}, "
+                    f"state_transition_prob={state_transition_prob!r}, "
+                    f"active_reward_probability={active_reward_probability!r}, "
+                    f"inactive_reward_probability={inactive_reward_probability!r}, "
+                    f"correct_reward_size={correct_reward_size!r}, "
+                    f"incorrect_reward_size={incorrect_reward_size!r}"
+                )
         p_outcome /= np.sum(p_outcome) + eps
 
         # Hazard/transition update
@@ -234,6 +258,8 @@ def hmm_relative_value_reward_decay(
     value_mode="bayesian_log_odds",
     tanh_scale=1.0,
     experimenter_reward_given=None,
+    *,
+    validate_outcome_evidence=False,
 ):
     """
     HMM relative value variant with asymmetric outcome updates:
@@ -248,6 +274,15 @@ def hmm_relative_value_reward_decay(
         1) compute/store output from current prior
         2) outcome update (reward vs omission)
         3) hazard/transition update for next trial
+
+    actions/rewards and optional manual flags are aligned arrays (n_trials,).
+    Actions use 0=right, 1=left; rewards are reward-indicator magnitudes.
+    Probability/decay parameters and tanh_scale are dimensionless. Returns a
+    left-positive float/object array (n_trials,), with None on skipped rows.
+    Equal positive belief components yield exact zero despite normalization
+    roundoff. Keyword-only validate_outcome_evidence raises ValueError at the
+    existing reward update for zero/nonfinite outcome mass; default False
+    preserves legacy validation behavior. No physical units are converted.
     """
     actions = np.asarray(actions)
     rewards = np.asarray(rewards)
@@ -283,7 +318,10 @@ def hmm_relative_value_reward_decay(
 
         # 1) Start-of-trial regressors from current prior belief
         p_left_prior = np.clip(prior[ChoiceSide.LEFT], eps, 1 - eps)
-        B_prior = logit(p_left_prior)
+        # Epsilon normalization can move both equal components below 0.5.
+        # Recognize that symmetric belief directly, without a score deadband.
+        equal_belief = prior[ChoiceSide.LEFT] == prior[ChoiceSide.RIGHT] and prior[ChoiceSide.LEFT] > 0
+        B_prior = 0.0 if equal_belief else logit(p_left_prior)
         relative_value[i] = np.tanh(tanh_scale * B_prior)  # signed_belief
 
         action = _parse_choice_side(action, N_ACTIONS)
@@ -301,6 +339,8 @@ def hmm_relative_value_reward_decay(
                 inactive_reward_probability=inactive_reward_probability,
                 correct_reward_size=correct_reward_size,
                 incorrect_reward_size=incorrect_reward_size,
+                validate_outcome_evidence=validate_outcome_evidence,
+                row_index=i,
             )
         elif np.isclose(reward, 0.0):
             posterior = _decayed_log_odds_posterior(
@@ -318,6 +358,8 @@ def hmm_relative_value_reward_decay(
                     inactive_reward_probability=inactive_reward_probability,
                     correct_reward_size=correct_reward_size,
                     incorrect_reward_size=incorrect_reward_size,
+                    validate_outcome_evidence=validate_outcome_evidence,
+                    row_index=i,
                 )
             else:
                 posterior = _decayed_log_odds_posterior(
@@ -340,6 +382,9 @@ def _bayesian_reward_posterior(
     inactive_reward_probability,
     correct_reward_size,
     incorrect_reward_size,
+    *,
+    validate_outcome_evidence=False,
+    row_index=None,
 ):
     """Return normalized HMM reward posterior.
 
@@ -359,6 +404,10 @@ def _bayesian_reward_posterior(
         Reward magnitude expected for rewarded correct choices.
     incorrect_reward_size : float
         Reward magnitude expected for unrewarded or incorrect choices.
+    validate_outcome_evidence : bool
+        Raise ValueError for nonpositive/nonfinite reward normalization mass.
+    row_index : int or None
+        Retained zero-based trial position for an error message, with no units.
 
     Returns
     -------
@@ -377,6 +426,17 @@ def _bayesian_reward_posterior(
         incorrect_reward_size=incorrect_reward_size,
     )
     posterior = p_reward_delivery * p_reward_size * prior
+    if validate_outcome_evidence:
+        outcome_mass = np.sum(posterior)
+        if not np.isfinite(outcome_mass) or outcome_mass <= 0:
+            raise ValueError(
+                f"Invalid decay-HMM reward normalization at row {row_index}: "
+                f"action={action!r}, reward={reward!r}, outcome_mass={outcome_mass!r}, "
+                f"active_reward_probability={active_reward_probability!r}, "
+                f"inactive_reward_probability={inactive_reward_probability!r}, "
+                f"correct_reward_size={correct_reward_size!r}, "
+                f"incorrect_reward_size={incorrect_reward_size!r}"
+            )
     posterior /= np.sum(posterior) + eps
     return posterior
 
@@ -663,6 +723,40 @@ def relative_hazard_index(relative_monotonic_cf_value, lam):
         raise ValueError("lam must be > 0.")
 
     return np.tanh(lam * np.asarray(relative_monotonic_cf_value, dtype=float))
+
+
+def immediate_persistence_regressor(actions, experimenter_reward_given=None) -> np.ndarray:
+    """Return the previous valid observed action as a pre-choice signed score.
+
+    Parameters
+    ----------
+    actions : array-like, shape (T,)
+        Chronological choices encoded 0=Right, 1=Left, with the usual no-choice
+        sentinels. Each usable choice updates memory regardless of reward.
+    experimenter_reward_given : array-like, shape (T,), or None
+        Manual/skip flags using make_skip_trial_mask conventions. Skipped rows
+        neither receive predictions nor replace the previous observed action.
+
+    Returns
+    -------
+    np.ndarray, shape (T,)
+        Dimensionless float64 scores: +1 favors Left, -1 favors Right, zero
+        before any usable choice, and NaN on skipped rows. Scores depend only
+        on earlier choices; no reward values or physical units are involved.
+    """
+    actions = np.asarray(actions)
+    skipped = make_skip_trial_mask(experimenter_reward_given, actions)
+    if skipped is None:
+        skipped = np.zeros(len(actions), dtype=bool)
+    scores = np.full(len(actions), np.nan, dtype=float)
+    previous_choice = 0.0
+    for row in np.flatnonzero(~skipped):
+        action = _parse_choice_side(actions[row], N_ACTIONS)
+        if action is None:
+            continue
+        scores[row] = previous_choice
+        previous_choice = 1.0 if action == ChoiceSide.LEFT else -1.0
+    return scores
 
 
 def perseveration_regressor(choices, decay=0.25):

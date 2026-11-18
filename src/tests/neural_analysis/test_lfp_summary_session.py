@@ -15,7 +15,11 @@ from src.neural_analysis.lfp_summary_session import (
     build_lfp_summary_config,
     build_metadata_spike_phase_config,
 )
-from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
+from src.neural_analysis.session_metadata import (
+    ResolvedSession,
+    load_session_metadata,
+    resolve_session_metadata,
+)
 
 
 def _write_resolved_session(tmp_path: Path):
@@ -146,6 +150,35 @@ def test_selected_population_uses_metadata_group_and_exact_probe_paths(tmp_path:
     assert population.selected_channels == (7, 8, 9)
     assert population.quality_settings == ()
     assert population.stable_unit_ids == ()
+
+
+def test_config_build_does_not_read_derived_version_one_session_views(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Version-2 probes and cache fields are sufficient for summary configuration."""
+
+    session = _write_resolved_session(tmp_path)
+
+    def forbidden_view(_session: ResolvedSession) -> object:
+        raise AssertionError("derived version-one metadata view was accessed")
+
+    for property_name in (
+        "populations",
+        "channel_groups",
+        "lfp_summary_cache_directory",
+    ):
+        monkeypatch.setattr(ResolvedSession, property_name, property(forbidden_view))
+
+    config = build_lfp_summary_config(
+        session,
+        LFPSummarySessionRequest(population_id="rear-probe"),
+    )
+
+    assert config.output_directory == session.cache_directory
+    assert config.unit_population is not None
+    assert config.unit_population.probe_label == "rear-probe"
+    assert config.unit_population.selected_channels == (7, 8, 9)
 
 
 def test_request_output_directory_overrides_optional_metadata_cache(tmp_path: Path) -> None:

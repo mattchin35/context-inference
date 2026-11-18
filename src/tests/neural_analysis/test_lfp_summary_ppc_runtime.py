@@ -24,6 +24,8 @@ from src.neural_analysis import lfp_summary_ppc_kernel as ppc_kernel
 from src.neural_analysis import lfp_summary_runtime
 from src.neural_analysis import lfp_summary_work_cache as work_cache
 from src.neural_analysis import spike_lfp_summary
+from src.neural_analysis.lfp_summary import ppc_planning
+from src.neural_analysis.lfp_summary import runtime_common
 from src.neural_analysis.lfp_summary_models import (
     PPCExecutionConfig,
     UnitPopulationConfig,
@@ -1520,7 +1522,7 @@ def test_plan_reuses_generator_owned_schedule_buffers_in_site_major_job_order(
         return schedule
 
     monkeypatch.setattr(
-        ppc_runtime, "generate_trial_derangement_schedule", owned_schedule
+        ppc_planning, "generate_trial_derangement_schedule", owned_schedule
     )
     plan = _plan(config, **inputs)
     jobs = tuple(job for job in plan.job_plans if job.selected_trial_rows.size == 2)
@@ -1600,7 +1602,7 @@ def test_plan_empty_and_single_trial_conditions_do_not_request_derangements(
         raise AssertionError("empty/single-trial plan requested a derangement")
 
     monkeypatch.setattr(
-        ppc_runtime,
+        ppc_planning,
         "generate_trial_derangement_schedule",
         forbidden_schedule,
     )
@@ -1683,7 +1685,7 @@ def test_edge_union_three_trial_incomplete_schedule_has_hand_saturation_and_reus
         return np.array([[2, 0, 1]], dtype=np.int64)
 
     monkeypatch.setattr(
-        ppc_runtime,
+        ppc_planning,
         "generate_trial_derangement_schedule",
         fixed_three_trial_schedule,
     )
@@ -1930,7 +1932,7 @@ def test_plan_allocation_uses_the_true_later_site_unit_and_edge_peak(
         return np.array([[2, 0, 1]], dtype=np.int64)
 
     monkeypatch.setattr(
-        ppc_runtime,
+        ppc_planning,
         "generate_trial_derangement_schedule",
         fixed_schedule,
     )
@@ -4506,14 +4508,14 @@ def test_grouped_component_run_identity_and_metadata_bind_real_inputs_and_execut
             return np.broadcast_to(alternate_row, generated.shape).copy()
         return generated
 
-    monkeypatch.setattr(ppc_runtime, "generate_trial_derangement_schedule", alternate_valid_schedule)
+    monkeypatch.setattr(ppc_planning, "generate_trial_derangement_schedule", alternate_valid_schedule)
     alternate_phase, alternate_spikes = _grouped_inputs(config)
     alternate = _run_grouped_component(config, alternate_phase, alternate_spikes, tmp_path / "alternate-schedule")
     alternate_metadata = json.loads((alternate.run_directory / "metadata.json").read_text(encoding="utf-8"))
     assert alternate_metadata["execution_plan_fingerprint"] != metadata["execution_plan_fingerprint"]
     assert alternate.run_fingerprint != baseline.run_fingerprint
     fingerprints.add(alternate.run_fingerprint)
-    monkeypatch.setattr(ppc_runtime, "generate_trial_derangement_schedule", original_schedule)
+    monkeypatch.setattr(ppc_planning, "generate_trial_derangement_schedule", original_schedule)
 
     original_code_version = ppc_runtime._GROUPED_PPC_CODE_VERSION
     monkeypatch.setattr(ppc_runtime, "_GROUPED_PPC_CODE_VERSION", "test-code-version-change")
@@ -4961,7 +4963,7 @@ def test_grouped_executor_keeps_eligibility_filtered_edges_inside_planned_union_
         return original_kernel(**kwargs)
 
     monkeypatch.setattr(
-        ppc_runtime,
+        ppc_planning,
         "estimate_grouped_ppc_allocation",
         recording_estimator,
     )
@@ -5472,7 +5474,7 @@ def test_grouped_component_releases_gated_membership_and_full_source_counts_afte
     """S4 deletes planner-only full tables before parent summary allocation."""
     config = _grouped_config()
     phase, spikes = _grouped_inputs(config)
-    original_membership = lfp_summary_runtime._analysis_condition_membership
+    original_membership = runtime_common._analysis_condition_membership
     original_counts = ppc_runtime._grouped_source_trial_spike_counts
     original_summary = ppc_runtime._empty_grouped_summary_arrays
     original_plan = ppc_runtime.plan_grouped_ppc_component
@@ -5508,7 +5510,7 @@ def test_grouped_component_releases_gated_membership_and_full_source_counts_afte
         return plan
 
     monkeypatch.setattr(
-        lfp_summary_runtime,
+        runtime_common,
         "_analysis_condition_membership",
         recording_membership,
     )
@@ -5813,9 +5815,9 @@ def test_grouped_component_preflights_full_scalar_construction_scratch_before_al
         """Construction/allocation must not occur after a dimension-only rejection."""
         raise AssertionError("unsafe planning table was allocated")
 
-    monkeypatch.setattr(lfp_summary_runtime, "_analysis_condition_membership", forbidden)
+    monkeypatch.setattr(runtime_common, "_analysis_condition_membership", forbidden)
     monkeypatch.setattr(ppc_runtime, "_grouped_source_trial_spike_counts", forbidden)
-    monkeypatch.setattr(ppc_runtime, "generate_trial_derangement_schedule", forbidden)
+    monkeypatch.setattr(ppc_planning, "generate_trial_derangement_schedule", forbidden)
     monkeypatch.setattr(ppc_runtime, "plan_grouped_ppc_component", forbidden)
     monkeypatch.setattr(ppc_runtime, "_empty_grouped_summary_arrays", forbidden)
     monkeypatch.setattr(ppc_runtime, "write_ppc_checkpoint", forbidden)
@@ -5963,7 +5965,7 @@ def test_array_fingerprint_streams_exact_c_order_content_without_bulk_copies(
             return value
         return candidate
 
-    monkeypatch.setattr(ppc_runtime, "sha256", bounded_sha256)
+    monkeypatch.setattr(ppc_planning, "sha256", bounded_sha256)
     monkeypatch.setattr(ppc_runtime.np, "array", guarded_array)
     monkeypatch.setattr(ppc_runtime.np, "ascontiguousarray", guarded_ascontiguousarray)
     monkeypatch.setattr(ppc_runtime.np, "copy", guarded_copy)
@@ -6007,9 +6009,9 @@ def test_planner_schedule_fingerprint_uses_the_same_bounded_content_hash(
         return original_fingerprint(*arrays)
 
     monkeypatch.setattr(
-        ppc_runtime, "generate_trial_derangement_schedule", recording_generator
+        ppc_planning, "generate_trial_derangement_schedule", recording_generator
     )
-    monkeypatch.setattr(ppc_runtime, "_array_fingerprint", recording_fingerprint)
+    monkeypatch.setattr(ppc_planning, "_array_fingerprint", recording_fingerprint)
     plan = _plan(config, **inputs)
     assert generated_schedules
     for job in plan.job_plans:
@@ -6249,7 +6251,7 @@ def test_grouped_planner_uses_one_owned_advanced_index_source_count_block(
         return original_estimator(**kwargs)
 
     monkeypatch.setattr(
-        ppc_runtime, "estimate_grouped_ppc_allocation", recording_estimator
+        ppc_planning, "estimate_grouped_ppc_allocation", recording_estimator
     )
     plan = _plan(planner_config, **inputs)
     assert plan.job_plans
@@ -6314,7 +6316,7 @@ def test_grouped_allocation_validates_counts_and_position_axes_without_vector_ma
     protected_values = (source_counts, edge_positions, observed_positions)
     original_asarray = ppc_runtime.np.asarray
     original_unique = ppc_runtime.np.unique
-    original_kernel_estimator = ppc_runtime.estimate_segmented_kernel_allocation
+    original_kernel_estimator = ppc_planning.estimate_segmented_kernel_allocation
     original_array = ppc_runtime.np.array
     original_copy = ppc_runtime.np.copy
     original_ascontiguousarray = ppc_runtime.np.ascontiguousarray
@@ -6384,7 +6386,7 @@ def test_grouped_allocation_validates_counts_and_position_axes_without_vector_ma
         forbid_protected_contiguous_copy,
     )
     monkeypatch.setattr(
-        ppc_runtime,
+        ppc_planning,
         "estimate_segmented_kernel_allocation",
         recording_kernel_estimator,
     )
@@ -8463,7 +8465,7 @@ def test_grouped_parallel_worker_peak_counts_staged_checkpoint_identity_bytes(
     # Force the otherwise unavoidable geometry record accounting to zero so
     # the smaller 24-byte staged identity, rather than computation, determines
     # the lifetime maximum.  The pure estimate has no execution side effects.
-    monkeypatch.setattr(ppc_runtime, "_geometry_allocation_bytes", lambda _counts: 0)
+    monkeypatch.setattr(ppc_planning, "_geometry_allocation_bytes", lambda _counts: 0)
     estimate = ppc_runtime.estimate_grouped_ppc_allocation(
         active_job_count=0,
         worker_result_job_count=1,
@@ -9001,7 +9003,7 @@ def test_grouped_parallel_scalar_preflight_charges_all_six_inputs_before_plannin
         raise AssertionError("parallel scalar preflight reached planner construction")
 
     monkeypatch.setattr(
-        lfp_summary_runtime,
+        runtime_common,
         "_analysis_condition_membership",
         forbid_planner_array,
     )

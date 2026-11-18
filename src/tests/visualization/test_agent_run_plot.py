@@ -75,6 +75,15 @@ def test_plot_run_dataframe_accepts_dark_theme():
     assert to_rgba(fig.get_facecolor()) == to_rgba("#111111")
 
 
+def test_plot_run_dataframe_accepts_custom_figure_size():
+    """Callers should be able to widen one plot without changing the default."""
+    wide_fig, _ = plot_run_dataframe(make_run_df(), figsize=(24, 5))
+    default_fig, _ = plot_run_dataframe(make_run_df())
+
+    assert tuple(wide_fig.get_size_inches()) == (24.0, 5.0)
+    assert tuple(default_fig.get_size_inches()) == (12.0, 5.0)
+
+
 def test_plot_run_dataframe_rejects_unknown_theme():
     with pytest.raises(ValueError, match="theme"):
         plot_run_dataframe(make_run_df(), theme="sepia")

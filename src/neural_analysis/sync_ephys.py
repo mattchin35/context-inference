@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.neural_analysis import ephys_sync_utils
+from src.neural_analysis.synchronization import alignment as ephys_sync_utils
 
 
 def _require_existing_file(file_path: Path) -> Path:
@@ -176,16 +176,16 @@ def main_open_ephys_workflow() -> dict[str, tuple[pd.DataFrame, pd.DataFrame]]:
         Kilosort-relative and Open Ephys global sample coordinates.
     """
     session_path = Path(
-        "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260803_latent_inference"
+        "/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260809_latent_inference"
     )
-    raw_recording_name = "2026-08-03_11-19-09"
+    raw_recording_name = "2026-08-09_11-23-12"
     record_node_name = "Record Node 101"
     experiment_name = "experiment1"
     recording_name = "recording1"
     derived_record_node_name = "Record_Node_101"
-    processor_prefix = "Neuropix-PXI-110."
+    processor_prefix = "Neuropix-PXI-103."
     probe_names = ("ProbeA", "ProbeB")
-    kilosort_subdir = "Kilosort4.1.3_2026-09-11_115727"
+    kilosort_subdir = "Kilosort4.1.3_2026-09-16_132246"
     irig_line = 0
     bit_period_s = 1.0
     utc_offset_hours = 0.0

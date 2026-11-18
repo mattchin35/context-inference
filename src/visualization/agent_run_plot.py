@@ -176,6 +176,7 @@ def plot_run_dataframe(
     show: bool = False,
     theme: str = "light",
     ax=None,
+    figsize: tuple[float, float] = (12, 5),
 ):
     """Plot trialwise agent values with mouse or agent actions.
 
@@ -207,6 +208,9 @@ def plot_run_dataframe(
         Figure color theme.
     ax : matplotlib axis or None
         Optional existing axis.
+    figsize : tuple[float, float], default=(12, 5)
+        Figure width and height in inches when ``ax`` is None. Ignored when an
+        existing axis is supplied.
 
     Returns
     -------
@@ -232,7 +236,7 @@ def plot_run_dataframe(
     bins, bin_types = _get_state_bins(states)
     created_figure = ax is None
     if created_figure:
-        fig = Figure(figsize=(12, 5))
+        fig = Figure(figsize=figsize)
         FigureCanvasAgg(fig)
         ax = fig.add_subplot(111)
     else:

@@ -1,0 +1,994 @@
+# Session timeline and PCA viewer
+
+Stage 1 displays completed choices, behavioral events, and regional population
+PC scores on one elapsed-session timeline. Time zero is the first trial start.
+Each neural window covers `[-2, +2)` seconds around an actual choice; the real
+gaps between choices stay blank. Choices outside a probe's recording coverage
+remain visible without neural measurements from that probe.
+
+Preparation runs once for a session, bin size, and population selection. It
+saves the fitted basis and all scores. Viewing, panning, trial jumps, event
+toggles, PC-row changes, and display-only PC z-scoring reuse those products.
+Changing bin size selects a different configuration and can change the PC axes.
+
+## Inputs
+
+Use the existing `neural_session.json` in the session's data directory. See
+the [metadata quickstart](README.md#create-and-validate-session-metadata) for
+the supported source layouts. No additional configuration file is required.
+
+- The processed trial table supplies completed choices, original `cur_trial`
+  IDs, `start_time`, `choice_time`, and action `0=right`, `1=left`. Current and
+  existing legacy experimenter-reward flags follow the normal project rules.
+  Incorrect and unrewarded choices are included. Experimenter rewards,
+  nonchoices, and the unsaved active end-of-file trial are excluded.
+  The optional `reward` column uses `1=rewarded`, `0=unrewarded`; missing or
+  other values stay unknown. Correctness is not used as a reward substitute.
+- Optional event CSVs use the existing `Time`, `Event`, and `Note` columns:
+  `trial_start`, `left_entry`, `right_entry`, LED on/off transitions, and
+  `enter_left_patch`/`enter_right_patch`/`enter_dark_period` context entries.
+- Each probe supplies the existing aligned spike archive with
+  `spike_utc_unix` and `irig_utc_unix`, sorter `spike_clusters.npy`, manually
+  curated `cluster_info.tsv`, and `channel_quality.csv` or `.json`.
+- One population includes all quality-selected channels on a probe. Channels
+  must be good and inside brain, and optional metadata `unit_channels`
+  further restricts them. Clusters use manual Phy `group` values `good` and
+  `mua`, following existing normalization. Named LFP sites do not split this
+  population. LFP data are not required by the viewer.
+
+Version-3 `analysis.probe_roles` supplies PFC/HPC defaults. With version-2
+metadata, select the probe keys explicitly in the app or command. Assigning
+one probe is supported; the other panel is marked unavailable. An unassigned
+configuration can display behavior alone.
+
+## Prepare before opening the viewer
+
+From the repository root, install the locked dependencies if needed:
+
+```bash
+uv sync --locked
+```
+
+For version-3 metadata with existing PFC/HPC roles:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json
+```
+
+The default bin width is **500 ms**. Supported widths are 500, 100, 50, and
+20 ms, producing 8, 40, 80, and 200 bins per window respectively.
+
+For explicit probe assignments, using the exact keys in the metadata:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json \
+  --pfc-probe ProbeA --hpc-probe ProbeB --bin-width-ms 100
+```
+
+Omit either probe argument to prepare just the specified population. When no
+probe arguments are supplied, existing version-3 metadata roles are used;
+version-2 metadata has no automatic anatomical assignment.
+
+Add `--dry-run` to inspect the configuration without loading spikes or writing
+outputs. A matching completed result is reused by default. Add `--rerun` only
+to recompute explicitly; this creates a new timestamped directory and leaves
+the old result intact.
+
+## Open and navigate
+
+```bash
+uv run streamlit run src/neural_analysis/psth_webapp.py -- \
+  --session-metadata /path/to/session/neural_session.json
+```
+
+1. Select **Session timeline and PCA** in **Plot view**.
+2. Check the PFC/HPC probe selections and bin width. The viewer automatically
+   loads matching prepared products. If none exist, behavior is displayed and
+   **Prepare** computes/saves the selected configuration. **Recompute** creates
+   a new run when explicitly needed.
+3. Set **Visible duration (s)** and **Window start (s)**, or select an original
+   trial ID and click **Jump**. The initial duration is 60 seconds.
+4. Drag horizontally inside the figure to pan. The bottom session navigator
+   changes the visible time range. The mouse wheel scrolls the page.
+5. Select a PC rank range independently for each population. The initial
+   selection is the first ten available PCs. Change optional event checkboxes
+   to show trial starts, licks, and LED intervals/transitions.
+6. Optionally enable **Z-score each PC** to inspect each PC's variability on
+   its own scale. This defaults off and works with existing prepared results;
+   no recomputation or archive update is needed.
+
+**Show active context** is on by default when logged context entries are
+available. Faint shading behind the choices indicates blue for left active,
+red for right active, and gray for dark periods. The shading uses the actual
+context-entry timestamps and continues through gaps between choices until
+the next entry or session end. It affects only the choices row.
+
+Choice markers show actual reward outcomes: **large filled triangles**
+(12 px) are rewarded and **small open triangles** (7 px) are unrewarded.
+Left/right colors and lanes stay the same, including for correct choices
+without reward. Gray crosses indicate unknown reward status. Hover includes
+the outcome alongside the trial ID, time, and active context.
+
+New prepared results retain reward flags in the choice table. When an older
+result omits them, the metadata-driven viewer uses a cached behavior-table
+read and checks choice identities before attaching outcomes in memory. This
+does not rewrite the archive or require PCA recomputation. A standalone old
+archive without its behavior source displays unknown reward status.
+
+Time before the first logged context entry remains unshaded and is labeled
+**Unknown** in choice hover. If context entries are absent, the checkbox is
+disabled and the viewer reports context unavailable. Context is not inferred
+from chosen side, correctness, LEDs, or model estimates. Turning off shading
+keeps context in choice hover. Existing prepared results already contain the
+event stream, so enabling this overlay does not require PCA recomputation.
+
+The chart axes stay synchronized during native panning. Changing PC ranks,
+z-scoring, colors, or event visibility preserves the current time window,
+including a window reached by mouse panning or the bottom session navigator.
+PC rows still update to the selected ranks in their original order.
+
+**Window start**, **Visible duration**, and **Jump** explicitly request a new
+time window. Clicking Jump again restores its target even if you have panned
+away since the previous click. Changing the session, probe assignment, or bin
+width starts a new configuration/view. Reloading the page also starts a new
+view; browser navigation is not written into the saved analysis.
+
+The sidebar time fields retain the last explicit navigation request; mouse
+panning and the bottom navigator operate locally in the browser. They do not
+rerun Python or update those fields. Numerical results and variance coverage
+remain unchanged.
+
+For large figures, enable **Load only visible neural interval**. It loads the
+window specified by the time controls plus neighboring time on either side
+and retains a compact full-session navigator. Panning is confined to the loaded
+interval. Use Window start or Jump to load another part of the session;
+dragging the native range slider does not request new data from Python.
+
+The chart defaults to a light background. Hover a choice for trial ID, side,
+time, reward outcome, and true active context from the logged transitions.
+Hover a heatmap cell for region/probe, PC identity and session variance percentage, original
+trial ID, elapsed/UTC/choice-relative bin intervals, and the signed score (or
+per-PC z-score when enabled). LED intervals use verified on/off pairs;
+unpaired transitions remain markers without invented endpoints.
+
+## Read the PCA display
+
+Each population is fitted separately using all of its complete choice windows.
+Units are z-scored once across pooled window/bin observations. Constant units
+are omitted. Saved PCA uses full SVD, no whitening, and no post-PCA score
+scaling. The PC rows stay in session explained-variance order.
+
+By default, colors are signed and centered at zero, using fixed regional limits
+calculated from all scores in the configuration. Gray center-color cells are
+measured near-zero scores; blank gaps have no neural measurements. The optional manual
+color-range control changes display limits only and labels saturation. It
+does not change scores or normalize rows.
+
+With **Z-score each PC**, the display uses `(score - mean) / SD` separately
+for each PC in each population. The reference includes all that population's
+prepared choice-window bins across the session, with population SD (`ddof=0`).
+It excludes gaps. Constant PCs display zero. The same bin keeps the same
+z-score when you pan, change the selected PC rows, or load only the visible
+neural interval.
+
+Heatmap colorbars and hover values then use **PC SD** units. Automatic symmetric
+limits span all prepared z-scores for the selected PC rows, so they stay fixed
+while navigating; selecting different rows can change those limits. Manual
+limits use SD units, initially +/-3, and are separate from raw-score limits.
+The option changes only heatmap values, color limits, and their labels. It
+preserves timing, gaps, context, PC order, loadings, and the original variance
+percentages. Low-variance PCs become as visually prominent as leading PCs,
+including any noise they contain.
+
+Z-scoring runs live on only the selected PC rows, without new dependencies or
+saved arrays. A synthetic benchmark of 1,000 windows with 200 bins each measured
+about 38 ms for 10 PCs and 670 ms for 100 PCs (median of three calls). These
+measure normalization only, excluding result loading, figure construction, and
+browser rendering; they are not real-session latency guarantees.
+
+The footer shows the smallest leading-PC counts covering **80%, 90%, and
+95%** of total variance in each population's complete fitting dataset. It also
+reports unit/window counts and omitted constants. Displaying fewer PCs does
+not change the denominator or footer. Regions can have different eligible
+windows and unit counts, so their summaries describe their own fitting data.
+
+These PCs describe pooled choice-window activity, not a decision-specific or
+noise-corrected latent dimensionality. Signs and identities apply to the
+saved configuration and need not match another session or bin width. Stage 2
+adds the separate per-choice summary described below.
+
+## Optional SparsePCA components
+
+Select **SparsePCA** in **Decomposition**, choose **SparsePCA alpha**, then
+click **Prepare**. Alpha defaults to 1; larger values favor sparser neuron
+loadings. A matching saved result loads automatically. Changing alpha or bin
+width selects another configuration and does not fit until Prepare is clicked.
+**Recompute** creates a new timestamped result and preserves the previous one.
+
+The same completed-choice counts and session-wide unit standardization are
+used as for ordinary PCA. Each region fits `min(30, choice windows * bins,
+variable units)` components. Scores are sklearn's ridge-transform coefficients. Sparse
+means many neuron weights are zero, not that activity is sparse over time.
+Some components can still emphasize single neurons; the 30-component cap avoids
+requiring a full set of neuron axes.
+
+Rows are labeled **SC1**, **SC2**, etc., in the estimator's returned order.
+These are stable IDs within one preparation, not ranks by explained variance.
+Use the regional sparse-component sliders and **Z-score each component** as
+with ordinary PCs. Z-scores use each component's mean and population SD over
+all prepared session choice-window bins, including bins outside the viewport.
+Color legends then show **component SD**. Context, rewards, events, speed,
+panning, Jump, and bounded neural loading retain their usual behavior.
+
+Sparse components need not be orthogonal. Therefore ordinary variance
+percentages, session 80/90/95% counts, Stage 2 counts/tables, and condition
+prediction controls are hidden in this mode. Existing ordinary-PCA prediction
+models cannot be applied to sparse scores. Select **PCA** to return to those
+controls and their existing saved products.
+
+Prepare from the command line with the existing entry point:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json \
+  --algorithm sparse_pca --sparse-alpha 1 --bin-width-ms 500
+```
+
+The existing batch entry point accepts the same algorithm/alpha options.
+`--dry-run` inspects configuration without fitting or writing, `--rerun`
+prepares a new result, and `--benchmark` records saved load/plot costs. Sparse
+options cannot be combined with `--speed` or `--window-summary`; those actions
+remain independent. No metadata edits or new dependencies are required.
+
+Other estimator settings are fixed and saved: ridge alpha 0.01, LARS solver,
+1000 maximum iterations, tolerance 1e-8, random seed 0, and one sklearn job.
+The viewer reports iteration-limit exhaustion as **convergence unconfirmed**;
+finite scores remain available without an automatic retry. Zero-loading
+components keep their IDs and display as zero rows. The run log records sklearn
+warnings, and the NPZ contains the fitted center, loadings, preprocessing,
+objective history, settings, units, and axes without fabricated PCA variance.
+
+Sparse preparations have separate configuration identities and analysis version
+`session-timeline-sparse-pca-v1`. They use the existing timestamped
+`session_timeline_pca_*` directory layout; configuration/summary metadata identify
+the algorithm. Ordinary PCA identities and archives are preserved. Sparse
+fitting can be substantially slower than PCA, especially at finer bins; it is
+always a separate preparation step, while the viewer loads saved scores.
+The initial full-count sparse preparations remain readable and keep their
+separate identities; new preparations use the cap of 30.
+
+CT026 2026-08-04 was prepared at 500 ms and alpha 1 with 30 components per
+region. Preparation took about five minutes; the saved 3.18-MB file loaded in
+about 35 ms. Both regional fits reached 1000 iterations, so their optimization
+convergence is explicitly unconfirmed. The coefficients passed independent
+ridge-score validation; this does not establish convergence. Review those
+warnings before treating the fitted loadings as final scientific results.
+
+## Stage 2: fixed-axis variance within each choice
+
+With Stage 1 prepared, click **Prepare window summary**. This loads the saved
+scores and direct unit-variance totals; it does not load spikes, bin again,
+or fit another PCA. A matching saved summary is reused on later opens.
+**Recompute window summary** explicitly creates another timestamped sidecar.
+
+**Show fixed-axis window counts** adds a purple point row below each regional
+heatmap. Each point is the smallest number of original session axes needed
+to account for 95% of that choice window's variance. Points occur at actual
+choice times, with no connecting lines. Hover shows the count, original trial
+ID, time, status, total variance, bin count, unit count, and basis completeness.
+Showing/hiding these rows preserves the current panned time interval.
+
+Select an original trial in **Jump to trial** to show its contribution tables
+below the figure. Clicking **Jump** also centers the timeline; selecting alone
+updates the readout. Each region reports the count, total variance, bins,
+units, and completeness. The table lists the selected original **Session PC**
+identities in decreasing within-window contribution order, their fractions,
+and cumulative fractions through the 95% threshold. The heatmaps keep their
+original session PC order. Their rank ranges, z-scoring, and color settings
+do not change these summaries.
+
+For every PC, the numerator is sample variance across the window's time bins
+(`ddof=1`). The denominator is the saved sum of sample variances of all units
+after their original session-wide standardization. Scores are centered within
+each window by the variance calculation. Sustained mean displacement alone
+therefore contributes no variance. This is fixed-axis participation, not a
+new local PCA or a noise-corrected dimensionality estimate. Correlated session
+axes can all contribute, so the count can exceed `bins - 1`.
+
+Exactly constant score columns have zero variance, without an added variance
+cutoff. Sorting breaks ties by original session PC rank. Complete bases must
+conserve the direct unit total within `1e-10` on the PC/unit variance ratio;
+the 95% comparison allows `1e-12` fractional roundoff. Both tolerances are saved.
+Zero-total, nonfinite, insufficient-bin, and inconsistent windows have no
+count point; their reason is available in the trial readout. An incomplete
+basis is never renormalized: a threshold-reaching count is labeled
+**restricted**, and failure to reach 95% is reported explicitly. All saved axes
+are considered, including those outside the displayed range.
+
+The CLI uses the same explicit action on an already prepared configuration:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json \
+  --bin-width-ms 500 --window-summary
+```
+
+The existing probe arguments, `--dry-run`, `--rerun`, and `--benchmark` also
+apply. A missing Stage 1 configuration raises an error instead of implicitly
+fitting it. For an approved session list, the batch command accepts
+`--window-summary` and parallelizes across sessions using the existing workers.
+Inspect a single experimental session before running a batch.
+
+Python callers can use `run_window_variance.run_window_variance(stage1_path)`,
+load its result with `window_variance_io.load_window_variance`, and pass
+`window_variance=summary.regions` to `plot_session_timeline`.
+
+## Measured Stage 2 performance
+
+CT026 2026-08-04 was checked at 500 and 20 ms on an Intel i9-12900 workstation
+(24 logical CPUs, 62.5 GiB RAM, about 26 GiB available during measurement).
+Both regions had 715 complete windows: PFC 174 units/PCs, HPC 316 units/PCs.
+All windows passed variance conservation and the minimal-count threshold
+check; maximum conservation error was below `1.9e-15`. No experimental batch
+was run. User inspection of these new descriptive outputs remains appropriate.
+
+| Bin width / payload scope | Stage 1 load | Summary load | Stage 2 calculation | Figure | JSON | Payload |
+| --- | --- | --- | --- | --- | --- | --- |
+| 500 ms, full session | 0.090 s | 0.034 s | 0.026 s | 1.057 s | 0.698 s | 16.1 MB |
+| 20 ms, elapsed 0-125.757 s | 1.722 s | 0.034 s | 0.318 s | 1.046 s | 0.660 s | 14.6 MB |
+| 20 ms, full session | 1.637 s | 0.032 s | 0.313 s | 4.125 s | 16.506 s | 406.2 MB |
+
+Figures in this table use ten PCs per region and existing default event tracks.
+The complete Stage 2 calculation always uses all 715 windows and all axes,
+even with bounded heatmaps. Warm z-scored figure construction/serialization
+measured 0.935/0.688 s (500 ms full) and 1.001/0.594 s (20 ms bounded).
+These are individual measurements, with filesystem cache state unspecified,
+and exclude browser rendering. They are not latency guarantees.
+
+The accepted 500-ms Stage 1 preparation took 3.723 s including output writing;
+the separately prepared 20-ms configuration took 27.042 s. The recorded regional
+source loading/binning/PCA/projection sums were 1.791/0.299/0.850/0.152 s at
+500 ms and 2.219/2.894/6.571/2.044 s at 20 ms. Output compression and other
+orchestration account for the remaining preparation time. This work is shared
+Stage 1 preparation, separate from Stage 2.
+
+The complete score arrays occupy 22.4 MB at 500 ms and 560.6 MB at 20 ms.
+Saved summaries are about 8.5 MB at either width. Benchmark process peak RSS
+was 0.565 GB (500 ms full), 1.858 GB (20 ms bounded), and 4.562 GB (20 ms full);
+these are process-lifetime peaks including imports, score loads, and plotting,
+not incremental metric memory. The validation script deliberately loads a
+second copy while measuring the load operation. Stage 1 preparation peaks
+were separately recorded as 0.695 and 2.568 GB.
+
+These measurements support keeping Stage 2 local. The full 20-ms browser
+payload exceeds Streamlit's usual message limit, so **Load only visible neural
+interval defaults on at 20 ms**. Use Window start or Jump to load other intervals;
+native panning stays inside the loaded interval. Window-count points remain
+session-wide. Wider loaded intervals or many displayed PCs can still produce
+large payloads. A cluster would not reduce that browser payload.
+
+Browser inspection covered both count rows, contribution tables, point hover,
+shared panning, row visibility, rank/z-score changes, and 20-ms bounded loading.
+Detailed validation JSON, script copies, and logs remain beside each summary
+in the CT026 data directory.
+
+## Optional signed treadmill speed
+
+Add a session-relative Teensy log path to the existing `behavior` object:
+
+```json
+"treadmill": "teensy/CoolTerm Capture (Untitled_0) 2026-08-04 12-08-14-010.txt"
+```
+
+The field is optional in metadata versions 2 and 3. Omitted, null, or empty
+means no speed source. All other metadata fields retain their existing meaning.
+The current speed workflow decodes NeuroKairos IRIG from the log; it does not
+require a PC timestamp date, timezone, calibration field, probe, or neural bin.
+
+**For existing prepared PCA results, register their scientific identity before
+editing the original metadata JSON.** The original archive fingerprint included
+that whole JSON file's stat. While the original sources still match, use:
+
+```python
+from src.neural_analysis.session_metadata import load_session_metadata, resolve_session_metadata
+from src.neural_analysis.population.session_timeline_io import register_timeline_scientific_identity
+
+session = resolve_session_metadata(load_session_metadata(metadata_path), metadata_path)
+register_timeline_scientific_identity(session, original_results_npz)
+```
+
+Repeat for each existing bin-width result to retain. This writes only
+`scientific_identity.json` beside the existing archive. It validates the old
+configuration first and leaves NPZ bytes, paths, and mtimes unchanged, preserving
+their Stage 2 summaries. New configurations use actual resolved scientific
+inputs instead of the whole JSON timestamp, so optional speed-path edits do
+not invalidate them. A changed neural/behavior source or population still does.
+An already edited metadata file cannot silently authorize an old unregistered
+archive. Back up metadata before editing it.
+
+Speed is prepared independently of neural data:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json --speed --dry-run
+
+uv run -m src.neural_analysis.population.run_session_timeline \
+  --session-metadata /path/to/session/neural_session.json --speed
+```
+
+Or click **Prepare speed** in the viewer. It parses/aligns once and saves the
+result. A matching result is reused; **Recompute speed** or `--speed --rerun`
+creates a new timestamped run. `--speed` and `--window-summary` are mutually
+exclusive. Probe and neural bin arguments do not configure speed. The existing
+batch entry point accepts `--speed`, with the usual dry-run and worker controls;
+inspect a designated experimental session before running an experimental batch.
+
+**Show speed** is on by default when a matching result is available. The row
+sits below events and above PCs, and works with behavior alone or either/both
+neural populations. A missing, unprepared, stale, or invalid speed source affects
+only this optional row; ordinary neural preparation remains independent.
+Display interactions never read the raw log, decode IRIG, or prepare speed.
+
+The row shows **signed logged mm/s**, including negative values and actual zero
+updates. It holds each value until the next recorded update using horizontal
+steps. It does not take absolute values, invert direction, smooth, resample,
+or insert artificial zeros/endpoints. Speed remains visible between choices
+when its measurements cover those intervals. Retained samples keep their source
+order and equal-time values. The line ends at the last speed timestamp.
+
+Version `treadmill-speed-v2` handles one specific logging ambiguity: a group of
+reset offsets printed immediately before its sync record. It discards the
+ambiguous speed updates only when retained readings on either side are less
+than 50 ms apart in both source-clock and UTC time. It does not assign a guessed
+timestamp. The step plot holds the previous reading until the next retained
+update. Other resets, unsupported timing, longer gaps, or missing neighbors
+remain explicit preparation errors. `meta.rejected_speed_records` records each
+omitted parsed row, logged value, neighboring rows, and both intervals.
+
+The source-clock reconstruction uses sync intervals plus offsets from the latest
+sync edge; it never sums every message or relies on batched PC receipt times.
+Current IRIG frames provide absolute UTC anchors. The viewer then subtracts
+the common first-trial origin. The speed y range uses the full prepared series
+and is independent of PC selection, PC z-scoring, time window, and neural bins.
+Hover shows signed mm/s, elapsed/UTC seconds, and the parsed source row.
+
+The complete speed series is sent to the browser; no choice-window or bounded
+neural filtering is applied to it. The existing neural loading bounds still
+limit native panning when that option is enabled. Showing/hiding speed preserves
+the current panned time interval, and Jump/time controls request a new interval
+as before. The navigator retains the existing session extent.
+
+Outputs are separate from all PCA runs:
+
+```text
+analysis_runs/treadmill_speed_<date>_<time>_<configuration_id>/
+  results.npz
+  config.json
+  run.log
+  summary.md
+  run_session.py
+  run_batch.py
+  measurements.json
+```
+
+The NPZ has named `(speed_sample,)` arrays `utc_s`, `speed_mm_s`, and
+`source_rows`, plus `(decoded_frame,)` arrays `frame_clock_s` and `frame_utc_s`.
+Its `meta` dictionary records version, source identity, units, axes, generator,
+code revision, parameters, and timing diagnostics. The source log's path, size,
+mtime, and analysis version control reuse; trial origin, probe assignments,
+and neural bin width do not. Logs and measurements separate parsing, alignment,
+writing, and total time. No statistical tests are part of speed preparation.
+
+CT026 2026-08-04 was prepared with 54,731 of 54,733 readings and all 63 decoded
+frame anchors. The two omitted speed rows are zero-based parsed positions
+110224 and 144284. Their retained UTC intervals are 36.646 ms and 8.142 ms.
+The signed range remains -198.72 to 526.86 mm/s. Preparation took 0.36 s
+(0.25 s parsing, 0.05 s alignment); the saved 414-kB NPZ loaded in about 3 ms.
+Both original PCA archives and their Stage 2 summaries remain byte-identical
+and reusable after adding the speed metadata.
+
+One measured viewer comparison used 10 PCs per region, the full 500-ms result,
+and bounded 20-ms neural loading. Speed added about 2.42 MB to either chart's
+JSON; figure construction plus serialization took about 1.5-1.8 s with or
+without speed. These are single local calls, excluding browser latency and
+with unspecified filesystem cache state, rather than a latency guarantee.
+Validation JSON, benchmark script/measurements, and the rejection ledger are
+saved in the speed run directory.
+
+## Outputs, measurements, and batch preparation
+
+Outputs stay under the original session data directory:
+
+```text
+analysis_runs/session_timeline_pca_<date>_<time>_<configuration_id>/
+  results.npz
+  config.json
+  run.log
+  summary.md
+  run_session.py
+  run_batch.py
+  window_variance_<date>_<time>_<configuration_id>/
+    results.npz
+    config.json
+    run.log
+    summary.md
+    run_session.py
+    run_batch.py
+```
+
+The named-array NPZ retains choices/events, origin, regional eligibility,
+qualified unit IDs, bin edges, scaling, full loadings/spectrum/scores, and a
+dictionary called `meta` with parameters, units, axes, source identities,
+versions, and timings. Script copies and the summary/log make the run easy to
+inspect. Experimental outputs are refused inside the source repository.
+Clearing the app's in-memory cache does not delete prepared results.
+
+Stage 2 sidecars contain named arrays for original-order sample variances,
+sorted original PC IDs/fractions/cumulative fractions, counts/statuses,
+direct totals, regional choice positions, bin edges, and unit IDs. Their
+`meta` dictionary records the metric version, generator, parameters, units,
+axis conventions, code revision, and exact Stage 1 path/size/mtime identity.
+Changing that source identity or the metric version invalidates reuse.
+No Stage 1 archive is modified.
+
+Add `--benchmark` to the preparation command to save a timestamped benchmark
+JSON beside the result. It separately measures NPZ loading, default figure
+construction, JSON serialization/payload size, and process peak memory, and
+includes the recorded loading/binning/PCA/projection timings. Filesystem cache
+state is unspecified; peak RSS includes the process lifetime. Browser
+responsiveness still needs inspection. Smaller synthetic sessions do not
+establish performance on a real session.
+
+For an accepted collection of sessions, make a text file with one metadata
+path per line; relative paths are relative to that list file. Blank lines and
+lines starting with `#` are ignored. Inspect the batch first:
+
+```bash
+uv run -m src.neural_analysis.population.run_session_timeline_batch \
+  --session-list /path/to/sessions.txt --bin-width-ms 500 --dry-run
+```
+
+Remove `--dry-run` to prepare. Workers run across sessions, defaulting to
+available CPU cores capped by session count. Set `--workers 1` or another
+smaller count when RAM or disk throughput limits concurrency. Version-2
+sessions can use the same explicit `--pfc-probe`/`--hpc-probe` arguments when
+their metadata keys match across the list. Inspect one designated real
+session before running an experimental batch.
+
+Python callers can use `run_session_timeline`,
+`session_timeline_io.load_timeline_result`, and
+`timeline_plotting.plot_session_timeline` for the same separate preparation,
+load, and figure-building steps used by the app. Pass `zscore_pcs=True` to
+`plot_session_timeline` for the same optional display normalization.
+
+The webapp uses a small Streamlit v2 chart component to keep the same Plotly
+element alive during display updates. It uses Plotly's installed JavaScript
+bundle locally, with no CDN or additional dependency. The existing figure
+builder supplies the chart; no saved-result format changes are needed.
+Frontend lifecycle tests run through pytest when Node is on PATH;
+alternatively set `NODE_BINARY` to its executable.
+
+## Condition prediction tracks
+
+Choose **Analysis**, then **Prepare predictions** to fit one mode/window pair
+on the selected regional session PCs:
+
+- **Correct-rewarded generalization** (default): seven task readouts trained on
+  correct-rewarded trials. Binary tracks are **State generalization** and
+  **Action generalization**.
+- **Mixed-outcome decoding**: **State decoding**, **Action decoding**, and
+  **Reward decoding** classifiers, plus ridge readouts for Q-learning relative
+  value, forgetting Q-learning relative value, HMM signed belief, HMM-decay
+  signed belief, and relative doubt. All eight targets train on the union of
+  correct-rewarded, correct-omission, and incorrect trials, using each target's
+  valid labels. Actual reward is the current trial's recorded reward flag
+  (`1=rewarded`, `0=unrewarded`); correctness is not a substitute. It fits
+  eight targets, up to 80 models across both regions/five folds; generalization
+  fits up to 70.
+
+Each preparation fits exactly one **Training/scoring window**: **Full**
+`[-1,+1)`, **Before** `[-1,0)`, or **After** `[0,+1)` seconds relative to
+choice. The same interval defines supervised fitting and trial-mean scoring.
+All variants still predict the full `[-2,+2)` choice window and leave gaps
+between choices unpredicted. They use the matching saved session PCA and the same
+deterministic full-table five-fold behavioral-block assignment.
+
+Preparation requires the session's existing
+`task_decoding_config.json`, augmented trial CSV, and behavioral feature-parameter
+JSON. The optional `session_prediction_config.json` accepts only
+`base_config_path`, `bin_width_ms`, `analysis_mode`, and `training_window`;
+defaults are the sibling base config, 500 ms,
+`correct_rewarded_generalization`, and `full`. The other mode ID is
+`mixed_outcome_decoding`. The GUI's selected mode, window, probes, and bin width
+override preparation defaults. Mixed mode does not require the continuous
+source columns, but still requires the base config and feature-parameter JSON.
+The base loader still validates its full decoder config, including both region
+blocks; an invalid unused setting must be corrected in that input config.
+
+Preview a metadata-driven preparation without fits or writes:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.session_prediction.run_session \
+  --session-metadata /path/to/session/neural_session.json --dry-run
+```
+
+Remove `--dry-run` to prepare. Schema-2 metadata needs explicit `--pfc-probe`
+and/or `--hpc-probe` keys; schema-3 metadata uses its regional roles. Compatible
+PCA/results are reused. Missing PCA is prepared only on an explicit preparation
+request. `--rerun` creates another prediction run and retains the same compatible
+PCA; it does not overwrite either old output. The batch counterpart is
+`src.neural_analysis.task_decoding.session_prediction.run_batch --session-list
+/path/to/sessions.txt`, with the same mode/window/probe/bin, dry-run and rerun
+options. Both commands accept `--training-window full`, `--training-window
+before`, or `--training-window after`; omission uses the controls-file value or
+Full default. One command prepares one mode and one window. Other windows and
+modes require explicit preparation and are never fit automatically.
+
+For mixed decoding, add `--analysis-mode mixed_outcome_decoding` to either CLI.
+For example:
+
+```bash
+uv run python -m src.neural_analysis.task_decoding.session_prediction.run_session \
+  --session-metadata /path/to/session/neural_session.json \
+  --analysis-mode mixed_outcome_decoding --bin-width-ms 500 --dry-run
+```
+
+Each saved product contains one mode/window pair; preparing mixed decoding or
+another window reuses matching PCA and preserves existing products. It does not
+fit the other mode or windows.
+
+In **Session timeline and PCA**, enable **Show predictions**, select the saved
+run and target, and optionally select raw PC scores or weighted contributions.
+Original order uses regional PC-rank ranges; contribution order shows the top
+N PCs by the saved, session-fixed strength ranking. Every model uses all saved
+PCs independently of visible row count. Raw-PC z-scoring is display-only;
+weighted rows retain target or log-odds units and fixed session color limits.
+Model details expose fitted-fold status, total/outcome training counts,
+binary class counts, and intercepts. Counts describe the saved training masks;
+they do not trigger balancing or subsampling.
+
+Open **Prediction performance** for the selected saved target. Scores use one
+value per trial: mean prediction over the saved Training/scoring window.
+State/action use mean left probability; reward uses mean `P(rewarded)`. Apply
+the 0.5 threshold to predictions for accuracy and balanced accuracy. Class 0/1
+counts come from actual target labels (rewarded/unrewarded for reward), not
+thresholded predictions.
+Binary tables also show **Brier score**: mean squared error between the trial's
+mean probability and its 0/1 actual label. It ranges from 0 to 1; lower is
+better. It is calculated before thresholding, so it retains probability
+uncertainty. Single-class groups retain ordinary accuracy, Brier score and
+counts; balanced accuracy is unavailable. Continuous targets show dimensionless
+R2 and RMSE in target units. The panel covers the whole saved session,
+independently of pan or visible PCs.
+
+Use **Scoring split** to choose training or held-out scores. **Scoring fold**
+offers folds 0-4 for per-fold inspection and, for held-out scores, a pooled view.
+Training shows only rows used to fit that fold's model; training folds are never
+pooled. In generalization, training omission/incorrect outcome intersections
+are empty because those outcomes were not fit. Per-fold tables retain outcome
+summaries. Reward class 0/1 counts always come from actual recorded labels, not
+thresholded predictions. Pooled held-out scores use each trial's own held-out
+model and count it once per region.
+
+For laterality, select **Laterality scoring population** and compare left/right
+**Choice** and **State/context** rows separately for PFC and HPC. Counts and
+left-minus-right differences accompany the scores. A positive accuracy
+difference is in percentage points and favors left; a positive RMSE or Brier
+score difference means larger left errors. Choice and context can disagree on incorrect trials.
+Side differences can also reflect behavior/outcome composition, so they alone
+do not identify a hemisphere effect.
+
+Undefined metrics remain unavailable: single-class groups still have ordinary
+accuracy, constant/singleton targets still have RMSE, and zero-trial groups
+are not assigned zero performance. Missing actual targets, invalid baseline,
+missing blocks and unavailable models are excluded from scoring; missing side
+labels affect only that split. This does not remove otherwise usable timeline
+predictions. Performance is cached from v1-v4 products and saved
+coefficients/PCA, without refitting, raw inputs, new files or schema migration.
+
+The Analysis and Training/scoring window selectors filter saved runs and targets.
+A selected mode/window pair with no saved result stays unprepared; the last saved
+behavior/PCA background remains visible with its actual bin width, while all
+predictions, actual-target overlays, and weighted contributions are hidden.
+Hiding prepared predictions also retains the saved background. These paths work
+without raw inputs and never fit.
+
+Switching modes or saved PCA configurations preserves horizontal navigation,
+including browser pan. PC controls follow the displayed saved basis. With
+**Load only visible neural interval** (default at 20 ms), a browser range outside
+the destination loaded interval resets to the control-selected interval; the
+caption identifies the loaded bounds. Use Window start or Jump to load elsewhere.
+
+Training pools the selected mode's eligible bins in the chosen Full
+`[-1,+1)`, Before `[-1,0)`, or After `[0,+1)` seconds; scoring uses the same
+interval. Predictions occupy the unchanged full `[-2,+2)` choice window with
+intertrial gaps. One shared deterministic
+five-fold behavioral-block assignment excludes the destination block from
+supervised training. Missing actual values do not prevent predictions; missing
+blocks do. Entirely missing continuous targets remain selectable with explicit
+unavailability. Fewer than five blocks is a preparation error. Canonical
+condition hover preserves overlapping memberships from the full trial table.
+
+These are **block-held-out predictions using a fixed session-wide PCA basis**:
+PCA and unit scaling include held-out neural data, and training includes later
+blocks and post-choice activity. This is an offline readout. State and action
+models can coincide because their correct-rewarded labels coincide. Ridge uses
+fixed alpha=1, logistic uses fixed C=1, intercepts are unpenalized, and every
+training trial has total weight one. Binary outputs mean P(left); binary PC
+contributions add to log-odds rather than probability. Continuous predictions
+are not clipped. Strength ranks describe varying additive terms, not unique
+or causal importance.
+
+Mixed state decoding targets recorded task state, and action decoding targets
+choice. Incorrect trials let the labels differ; correct omissions alone do not.
+Different labels need not yield different fitted curves or establish causal
+separation. Mixed training also changes sample size: at fixed logistic C, more
+trials reduce regularization relative to average loss. Mode differences do not
+isolate outcome composition. No class/outcome balancing or penalty rescaling
+is applied.
+
+Actual reward decoding predicts the current trial's recorded reward flag.
+Before predicts eventual recorded reward, not subjective expectation. After is
+post-choice, not necessarily post-delivery. Reward overlays show trial labels,
+not delivery-event timing.
+
+Runs live under `analysis_runs/condition_session_prediction_*`, with named-array
+`results.npz`, small `config.json`, logs, summary, runner copies and computational
+source snapshots. For a copied session, retain the prediction directory and
+the exact referenced PCA `results.npz` at its original session-relative path.
+Saved display then needs only metadata and these products, even without raw
+behavior/spikes or the original machine paths. Current preparation widgets do
+not relabel a saved result as another resolution or basis. Viewing and target,
+event, PC or navigation changes do not refit or write analysis products.
+New products use `condition-session-prediction-v4` / schema 3 and explicitly
+record mode, ordered targets, training membership, and matched training/scoring
+window bounds. Original v1/schema-1 and v2/schema-2 Full-window products remain
+selectable read-only. V1 has seven generalization targets; v2 retains its
+seven-target generalization or two-target mixed set. V3/schema-3 products
+retain their original windows and seven-target generalization or three-target
+mixed set (state/action/reward). To add missing targets, explicitly **Prepare
+predictions** in Mixed-outcome decoding for the selected window; this reuses
+compatible PCA and creates a new product. Legacy products are not automatically
+rerun. Both modes require all five continuous source columns in the augmented
+table; missing row values affect only that target, and an entirely empty
+numerical column remains an unavailable target. Loading old products
+preserves their bytes and identity without raw inputs or migration.
+
+Fine-resolution viewport filtering limits contributions and browser payloads;
+the current NPZ loader still loads full regional score arrays into memory.
+
+## Choice-window LFP power and phase synchrony: offline preparation
+
+The separate `phase_synchrony` analysis uses the metadata's named LFP sites
+and ordered site pairs. It preserves original choice IDs, row positions and
+UTC times. Its primary interval is `[-1,+1)` seconds; the secondary interval
+is `[-2,+2)`. These are one estimate per choice, with no across-trial pooling.
+Open Ephys inputs need the derived LFP scaling sidecar, IRIG anchors and a
+verified nominal AP `sample_rate_hz` in synchronization metadata. A rate inferred
+from UTC-anchor slopes cannot establish the AP-to-LFP index conversion.
+
+Prepare only site power, leaving other probes and analyses independent:
+
+```bash
+uv run -m src.neural_analysis.phase_synchrony.run_session \
+  --session-metadata /path/to/session/neural_session.json \
+  --components power --sites HPC1 --intervals primary secondary
+```
+
+Omit `--sites` to select all metadata sites. With no `--components`, the
+defaults are `power coherence lfp-phase`. Use `--pair HPC1 HPC2` to request an
+ordered pair, repeating the argument for additional pairs. Pair sites must
+belong to the selected sites. Metadata pairs are used when no pair is given;
+if metadata declares none, distinct site combinations follow metadata order.
+
+Selected-unit PPC requires explicit probe-qualified IDs and one LFP site:
+
+```bash
+uv run -m src.neural_analysis.phase_synchrony.run_session \
+  --session-metadata /path/to/session/neural_session.json \
+  --components spike-ppc --unit ProbeB:8 --lfp-site HPC1 \
+  --intervals primary secondary
+```
+
+Repeat `--unit` for additional designated units; no all-unit default exists.
+The existing Phy good/mua and good inside-brain channel rules apply, including
+metadata `unit_channels`. No 50-spike threshold is imposed. Fewer than two
+valid spikes yields unavailable PPC, with counts/exclusions saved per frequency.
+
+`--dry-run` lists planned/reusable components from metadata and saved headers,
+without reading signal arrays or creating outputs. `--prepare-only native-lfp`
+prepares selected calibrated, notched continuous channels without behavior;
+`--prepare-only phase` prepares selected sites/intervals without metric reductions.
+`--order power coherence lfp-phase` changes family order within each interval
+sweep and must list every requested family exactly once. Primary products
+are published before secondary-only work, even if intervals are listed in
+the opposite order. Independent completed products survive another failure.
+
+Compatible products and prerequisites are reused. `--rerun` creates new
+requested outputs while reusing prerequisites. Combined with `--prepare-only`,
+it forces that preparation. Previous outputs remain immutable. One writer
+per session is allowed; viewers can read completed products during processing.
+
+Each invocation writes a new session-local
+`analysis_runs/session_timeline_phase_synchrony_<date>_<time>_<run_id>/`
+with `components/`, `config.json`, `run.log`, `summary.md`, `measurements.json`,
+and main/batch script snapshots. Reusable native waveforms, auto-PSDs, phase
+and selected spike preparations live under
+`processed/session_timeline_phase_synchrony/`. Each NPZ has named arrays and
+a dictionary `meta` describing units, axes, scientific settings and identities.
+Do not move these experimental outputs into the source repository.
+
+The batch entry point accepts `--session-list /path/to/sessions.txt` with the
+same component/site/unit/interval flags. Paths in that text file resolve
+relative to the list file; comments and blank lines are ignored. Sessions
+use separate processes, defaulting to CPU count capped by session count.
+Set `--workers` lower when RAM or disk throughput limits concurrency. Inspect
+the designated single experimental session before requesting a batch.
+
+Power integrates Welch density into physical `uV^2`, using theta 6-10 Hz and
+gamma 30-80 Hz with 58-62 Hz excluded. It is not divided by window duration.
+Welch uses native-rate voltages, periodic Hann 0.5-s segments, 50% overlap,
+constant detrending and mean density. Coherence reuses matching auto-PSDs.
+Phase uses drift-aware uniform-UTC sampling before Morlet/decimation, the
+500-Hz phase grid and 2-100 Hz frequencies spaced by 2 Hz. The 60-Hz notch
+has Q=30. Numerical and absolute phase-amplitude thresholds are both 0.0;
+zero/nonfinite coefficients remain invalid. LFP phase metrics require complete
+window support; real right guards support spike interpolation but do not enter
+metric counts. These semantic markers distinguish the products from legacy
+nominal-clock phase caches.
+
+PLV and coherence span 0-1 but describe different quantities. Signed PPC is
+retained. Coherence averages matched cross/auto spectra and retains amplitude
+information; PLV/PPC use normalized Morlet phase differences at each frequency.
+Their numerical thresholds are not interchangeable. A consistent nonzero phase
+offset can still give high PLV. Within-window LFP PPC is a finite-count transformation of squared
+PLV on the same observations; successive filtered samples are not independent
+oscillation cycles. Spike PPC uses all within-window spike pairs per unit.
+These are descriptive measurements, without significance or causal claims.
+Shared sources, reference and event locking can affect the measures, and spike
+bursts/history remain relevant to within-trial spike PPC. The viewer's
+**Metric interpretation** expander explains these distinctions.
+
+Measurements separate shared prerequisites, metric work, publication and reuse.
+Where an existing API bundles operations, the combined stage is recorded.
+Native source reads currently cover each selected full recording. Analysis
+cache state does not establish OS cache state; peak RSS is a process-lifetime
+high-water mark. Figure construction and browser responsiveness require separate
+measurements.
+
+### Open the saved LFP/synchrony timeline
+
+Use the same metadata-driven Streamlit launch command above and select
+**Session timeline: LFP power and synchrony** in **Plot view**. Behavior appears
+without PCA, spikes or a complete set of neural results. Prepare neural products
+in a separate terminal, then click **Refresh results**. The viewer never starts
+preparation or background jobs.
+
+**Saved analysis settings** selects scientific settings from completed runs.
+**Centered interval**, **LFP sites**, **LFP pairs** and **Saved units** select
+existing estimates. **Spike-PPC LFP site** initially follows the selected saved
+unit's actual phase channel. Clearing a display selection hides those rows.
+Every unavailable selected component is identified, including a missing site
+when other sites already have power results. Switching interval does not compute
+an unprepared interval.
+
+The interval dropdown shows **Primary: [-1, +1) s around choice** and
+**Secondary: [-2, +2) s around choice**. **Summary band** initially shows
+**Theta (6-10 Hz)** only. Select **Gamma (30-80 Hz)** to show gamma summaries
+instead, or **Both bands** for the complete set. Gamma still excludes 58-62 Hz.
+Band switching filters summary rows across power, coherence, LFP PLV/PPC and
+selected-unit PPC; it does not recompute, alter saved values, or reset the
+current panned interval. The optional frequency heatmap and selected-choice
+frequency inspection remain separate controls.
+
+Time zero and choice labels use the same original behavior as the PCA timeline.
+Use **Visible duration (s)**, **Window start (s)** or **Jump to trial** to request
+a range. Dragging the chart or its compact navigator changes the range locally.
+Refresh, event visibility, added tracks and PLV/PPC switching preserve that
+browser range. The sidebar retains the last explicit navigation request.
+
+The **LFP phase metric** toggle selects PLV or signed within-window LFP-LFP PPC.
+Coherence stays separate. Each power site/band has its own nonnegative `uV^2`
+axis fixed from the complete saved product; panning does not renormalize it.
+Hover identifies original trial/row, interval center/bounds, support counts,
+retained bandwidth or spike-count range, and the actual probe/saved channel.
+Open **Saved sources and timing** for full settings, displayed source runs and
+UTC completion times, separate later failed/unfinished attempts, execution
+timings and measured Python display/payload costs. Python construction and JSON
+serialization times exclude browser rendering.
+
+**Frequency heatmap** displays one saved scalar per frequency and choice window.
+Columns occupy the actual estimation intervals; inter-choice gaps and excluded
+frequencies remain blank. Overlapping windows keep independent true tiles.
+These are whole-window summaries, not continuously estimated time courses.
+
+Enable **Inspect a choice** for an original row, choose **Inspection LFP site**,
+an explicit saved **Inspection unit** if desired, and **Phase frequency (Hz)**.
+The panels load only saved waveform/phase/spike/histogram inputs. Missing
+preparations are labeled unavailable; selecting a frequency does not substitute
+a nearby frequency or trigger a transform. LFP traces are `uV`, phase is radians
+at the identified frequency, spike times are relative to the original choice,
+and polar bars count the saved valid spike phases. Real interpolation guards
+are excluded from the displayed metric interval.
+
+Python callers can load compatible products with
+`phase_synchrony.results.load_product`, build figures with
+`plotting.plot_synchrony_timeline` / `plot_choice_inspection`, and export with
+`plotting.export_validation_figures(behavior, products, run_directory,
+row_position=..., frequency_hz=8, site_id=..., unit_id=...)`. `behavior` is the
+ordinary behavior-only `SessionTimelineResult`; products are loaded
+`SavedProduct` records, including available inspection prerequisites. Export
+writes captioned opaque-white PNGs under `run_directory/figures`, refuses
+overwrites, and uses Matplotlib/Agg without Kaleido. Numerical calculation,
+loading, figure construction and PNG export remain separate stages.
+
+### CT026 centered-choice validation and measured order
+
+CT026 2026-08-28 was validated on an Intel i9-12900 workstation with 24 logical
+CPUs and about 62 GiB RAM. The 695 original completed choices were retained.
+Both intervals include PFC1, HPC1, HPC2, the three metadata pairs, and only
+`ProbeB:8` with `HPC1` (saved channel 222). No experimental batch was run.
+
+| Requested action | Products | Total seconds | First requested product seconds |
+| --- | ---: | ---: | ---: |
+| Initial power, both intervals | 6 | 168.10 | 48.96 |
+| Incremental power from cached PSDs | 6 | 0.60 | 0.14 |
+| Coherence after power | 6 | 4.37 | 0.69 |
+| Initial LFP phase/PLV/PPC | 6 | 305.98 | 68.67 |
+| Selected-unit PPC using saved phase | 2 | 6.35 | 3.03 |
+| Warm reuse of all components | 20 | 0.28 | 0.09 |
+
+Initial analysis caches were absent. OS filesystem-cache state was unspecified;
+the later same-probe channel read benefited from prior file access. Initial
+source reads took about 29.85/37.96 seconds for the first channels on the two
+probes, and 0.78 seconds for the subsequent channel. Choice waveform preparation
+took about 12 seconds per site/interval. These timings support preparing power
+first, reusing its auto-PSDs for coherence, then preparing phase for pair metrics
+and reusing it for selected-unit PPC. Keep this workflow local and offline.
+
+A separate bounded profile of HPC1 primary phase preparation with cached native
+input took 29.00 seconds including profiling overhead: about 10.82 seconds in
+choice phase extraction/interpolation, 5.62 seconds in Morlet preparation and
+8.59 seconds in publication, predominantly compression. These measurements do
+not identify Morlet alone as the bottleneck. No major optimization or dependency
+change was introduced. Profile evidence is saved with the validation.
+
+Power/coherence had the expected 7/15 segments and LFP phase had exactly
+1,000/2,000 metric observations, excluding real guards. All LFP band summaries
+were available for all 695 choices. The saved LFP PLV/PPC identity agreed to
+within `3.4e-16`. Selected-unit primary PPC was defined for 687 choices; the
+remaining eight had fewer than two valid spikes and stayed unavailable.
+Secondary PPC was defined for all 695. Negative PPC values were preserved.
+Saved polar histogram totals matched per-frequency contributing spike counts.
+These are validity checks, not significance tests or coupling claims.
+
+| Saved viewing/export | Primary seconds | Secondary seconds |
+| --- | ---: | ---: |
+| Load 10 completed products | 0.187 | 0.174 |
+| Overview figure construction | 0.698 | 0.583 |
+| Overview JSON serialization | 0.177 | 0.211 |
+| Add frequency heatmap: figure construction | 0.774 | 0.761 |
+| Heatmap JSON serialization | 0.687 | 0.800 |
+| Saved inspection prerequisites | 1.352 | 2.472 |
+| Two captioned PNG exports | 1.478 | 1.435 |
+
+Overview payloads were about 5.5 MB; the optional phase heatmap increased them
+to about 21.3 MB. These are Python measurements, excluding browser rendering.
+Browser hover, original-trial navigation, shared pan, Refresh, PLV/PPC switching,
+added heatmaps and selected-choice inspection were checked qualitatively.
+Use the overview first and enable a selected heatmap when needed.
+
+The preparation driver's process-lifetime peak RSS was about 15.85 GB; the
+separate saved-display/export process peaked at 3.34 GB. These are not per-stage
+increments. Use `--workers 1` for recordings of this size on this workstation
+unless RAM/I/O measurements justify more concurrent sessions.
+
+Session-local evidence is under
+`analysis_runs/session_timeline_phase_synchrony_validation_20261105_034428_633646_a215bab7/`:
+runner snapshots, `validation.py`, `visualize_validation.py`, config/log/summary,
+execution and display measurements, bounded profile, offline HTML timelines
+and captioned primary/secondary PNGs. Only one unit was designated, so no
+additional-unit timing benchmark was inferred. User inspection of CT026 output
+precedes additional experimental sessions and Round 2.

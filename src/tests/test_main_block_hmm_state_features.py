@@ -1,88 +1,16 @@
-import importlib.util
-import sys
-from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pandas as pd
 
 
-def load_main_module():
-    """Import `main.py` with lightweight dependency stubs.
-
-    Returns
-    -------
-    module
-        Imported main module with heavy behavior-analysis dependencies
-        replaced by lightweight module objects.
-    """
-    behavior_analysis_pkg = ModuleType("behavior_analysis")
-    behavior_analysis_pkg.performance_plots = ModuleType("behavior_analysis.performance_plots")
-    behavior_analysis_pkg.raster_plots = ModuleType("behavior_analysis.raster_plots")
-    behavior_analysis_pkg.session_analysis = ModuleType("behavior_analysis.session_analysis")
-    behavior_analysis_pkg.simulate_priors = ModuleType("behavior_analysis.simulate_priors")
-    behavior_analysis_pkg.plot_model_values = ModuleType("behavior_analysis.plot_model_values")
-    behavior_analysis_pkg.block_state_space_modeling = ModuleType(
-        "behavior_analysis.block_state_space_modeling"
-    )
-    behavior_analysis_pkg.trial_state_space_modeling = ModuleType(
-        "behavior_analysis.trial_state_space_modeling"
-    )
-    behavior_analysis_pkg.gather_trial_features = ModuleType(
-        "behavior_analysis.gather_trial_features"
-    )
-    behavior_analysis_pkg.trial_state_space_modeling.DEFAULT_TRIAL_GLM_PREDICTOR_COLUMNS = (
-        "FQlearning_rel_value",
-    )
-    sys.modules["behavior_analysis"] = behavior_analysis_pkg
-    sys.modules["behavior_analysis.performance_plots"] = behavior_analysis_pkg.performance_plots
-    sys.modules["behavior_analysis.raster_plots"] = behavior_analysis_pkg.raster_plots
-    sys.modules["behavior_analysis.session_analysis"] = behavior_analysis_pkg.session_analysis
-    sys.modules["behavior_analysis.simulate_priors"] = behavior_analysis_pkg.simulate_priors
-    sys.modules["behavior_analysis.plot_model_values"] = behavior_analysis_pkg.plot_model_values
-    sys.modules[
-        "behavior_analysis.block_state_space_modeling"
-    ] = behavior_analysis_pkg.block_state_space_modeling
-    sys.modules[
-        "behavior_analysis.trial_state_space_modeling"
-    ] = behavior_analysis_pkg.trial_state_space_modeling
-    sys.modules[
-        "behavior_analysis.gather_trial_features"
-    ] = behavior_analysis_pkg.gather_trial_features
-
-    mouse_pkg = ModuleType("mouse_behavior_preprocessing")
-    mouse_pkg.process_behavior_log = ModuleType("mouse_behavior_preprocessing.process_behavior_log")
-    sys.modules["mouse_behavior_preprocessing"] = mouse_pkg
-    sys.modules["mouse_behavior_preprocessing.process_behavior_log"] = mouse_pkg.process_behavior_log
-
-    seaborn_stub = ModuleType("seaborn")
-    seaborn_stub.set_style = lambda *_args, **_kwargs: None
-    seaborn_stub.set_context = lambda *_args, **_kwargs: None
-    seaborn_stub.xkcd_palette = lambda colors: colors
-    sys.modules["seaborn"] = seaborn_stub
-
-    utilplot_stub = ModuleType("src.state_space_modeling.utilplot")
-    sys.modules["src.state_space_modeling.utilplot"] = utilplot_stub
-    state_space_modeling_pkg = ModuleType("src.state_space_modeling")
-    state_space_modeling_pkg.utilplot = utilplot_stub
-    sys.modules["src.state_space_modeling"] = state_space_modeling_pkg
-
-    main_path = Path(__file__).resolve().parents[1] / "main.py"
-    module_spec = importlib.util.spec_from_file_location(
-        "main_module_for_block_hmm_state_feature_test",
-        main_path,
-    )
-    assert module_spec is not None
-    assert module_spec.loader is not None
-    module = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(module)
-    return module
+from src.tests.test_main_multisession import load_main_module
 
 
-def test_main_multisession_collects_block_hmm_state_features_for_session_list(
+def test_main_multisession_avoids_legacy_state_features_and_preserves_plot_settings(
     tmp_path,
     monkeypatch,
 ):
-    """Multisession flow should collect separately modeled block-HMM state CSVs.
+    """Normal full flow avoids legacy state CSVs and retains behavior plot settings.
 
     Parameters
     ----------
@@ -95,8 +23,8 @@ def test_main_multisession_collects_block_hmm_state_features_for_session_list(
     Returns
     -------
     None
-        Asserts that `main_multisession` passes the resolved session list to
-        the block-state feature collector.
+        Asserts that normal full flow never collects legacy learned-model
+        features and retains trials-to-correct display caps in its figures.
     """
     main_module = load_main_module()
     sessions = [
@@ -112,6 +40,10 @@ def test_main_multisession_collects_block_hmm_state_features_for_session_list(
         ),
     ]
     captured = {}
+    monkeypatch.setattr(main_module, "resolve_multisession_dates", lambda **kwargs: ["2026-05-11", "2026-05-12"])
+    monkeypatch.setattr(main_module, "collect_mouse_block_residual_model_summaries", lambda **kwargs: None)
+    monkeypatch.setattr(main_module, "save_and_plot_multisession_choice_window_agreement", lambda **kwargs: None)
+    monkeypatch.setattr(pd.DataFrame, "to_csv", lambda *args, **kwargs: None)
 
     monkeypatch.setattr(
         main_module,
@@ -337,9 +269,6 @@ def test_main_multisession_collects_block_hmm_state_features_for_session_list(
 
     main_module.main_multisession(multisession_collection_only=False)
 
-    assert captured["sessions"]
-    assert all(session.sess_id_full.startswith("CT016_") for session in captured["sessions"])
-    assert isinstance(captured["mouse"], str)
-    assert captured["output_path"].name == "cross_session_analysis"
+    assert "sessions" not in captured
     assert captured["side_ttc_trial_display_cap"] == 25
     assert captured["summary_grid_trial_display_cap"] == 25

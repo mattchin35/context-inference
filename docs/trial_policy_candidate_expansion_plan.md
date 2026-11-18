@@ -1,0 +1,563 @@
+# Trial-policy candidate expansion plan
+
+Status: implemented and validated on 2026-11-08 after user approval. This extends the completed
+first round in `trial_dynamax_hmm_implementation_plan.md` and follows the causal
+history and probability contracts in `trial_dynamax_hmm_spec.md`.
+
+2026-11-17 chance revision (v9): the user approved a ninth default, `chance`,
+with constant .5 left/right probabilities and `-ln(2)` observed-choice evidence.
+It has no history or free parameters, with explicit `constant_half` readout
+and `none` history metadata. It shares the existing priors, transitions,
+eligibility masks, smoother, arrays, and membership grids. Original eight-model
+subsets remain available. See `trial_policy_chance_implementation_plan.md` for
+the complete approved scope and acceptance checks.
+
+Tests were written, confirmed failing, and committed first as `9a275a9`.
+The adapter, one probability-conversion branch, metadata version/description,
+and Chance label/color/caption are the only production additions. There are no
+new dependencies or changes to existing candidate parameters, main entry points,
+or the 20-choice agreement analysis.
+
+The complete v9 implementation passed 348 distinct tests: 326 policy/model/plot
+checks and 22 main trial-workflow cases. Synthetic validation passed with 140
+retained rows and 137 eligible choices; designated CT016 May 29 validation passed
+with 858 eligible choices. All eight retained models have exactly unchanged
+scores, availability, probabilities, and likelihoods. Earlier artifacts and
+non-policy data were preserved. The inspected nine-model figure and full report
+are linked in the completion section of the detailed chance implementation plan.
+Chance mean posterior is .3838 and largest-posterior membership is .5524; these
+remain conditional retrospective model-support summaries. No batch was run.
+
+2026-11-17 perseveration revision (v8): the user approved replacing default
+`immediate_persistence` with `perseveration`, retaining the former as an optional
+candidate. This aligns the choice-history computation with the window plots:
+reuse `trial_features.perseveration_regressor` on eligible observed choices, then
+scatter its pre-choice signed scores back to the retained trial rows. Default
+decay is .25 per eligible choice. Excluded attempts freeze history without decay
+advancement; missing rewards still update this choice-only model. Fresh source
+sessions and crops initialize neutral.
+
+The approved choice rule is ordinary logistic with fixed temperature `1/ln(9)`
+(approximately .455), giving 90% preference at a maximum score of one and weaker
+preferences approaching 50/50. This differs from the earlier in-memory diagnostic
+that used fixed 90/10 for every nonzero score. No parameters are fitted. Home E+D
+keeps threshold 2.5, scale .5, doubt rate .5, and its existing weights/readout.
+
+Only the candidate adapter/registry, provenance/version/warning text, and plot
+label/color change. Existing main defaults inherit the new tuple; main.py and
+window analysis code are not edited. The replay reuses the existing linear-time
+helper, the HMM still has eight states, and there are no new dependencies.
+
+Tests were written, confirmed failing, and committed first as `53e44a6`:
+hand-calculated weighted values, shared window-feature parity, graded endpoint
+and weak-preference probabilities, exclusions and missing-reward updates,
+causality/crops, decay validation and zero-decay uniform history, parameter/cache
+identity, historical immediate-persistence subsets, distinct labels/colors,
+saved source decay, and single/multisession cache and threaded replay paths.
+
+Validation passed: 308 policy/model/plotting tests and 20 main trial-workflow
+tests (328 distinct tests). A further focused results/perseveration check passed
+after the metadata-unit update. One new workflow test was corrected to resolve
+saved parameters explicitly before calling the existing runner, whose required
+`feature_params` argument and public interface remain unchanged.
+
+Synthetic validation passed on the deterministic 140-trial history, including
+exclusions and missing reward. CT016 2026-05-29 then passed with all 858 retained
+choices eligible. Weighted scores match the saved window regressor to CSV
+rounding (maximum absolute difference 1.11e-16), with identical directions.
+The seven retained models' scores, probabilities, likelihoods, and availability
+are exactly unchanged from v7; Home E+D's effective parameters are unchanged.
+Eight prior numerical artifacts, the prior current CSV, non-policy columns,
+block output, and parameter file were preserved. Existing main.py user edits
+were checked unchanged; no main source edits or experimental batch were made.
+
+The inspected v8 PNG and validation report/driver/main/batch/log snapshots are in
+this directory (UTC timestamp, November 17 local date):
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT016/CT016_20260529_latent_inference/figures/trial_policy_hmm/2026-11-18_04-12-58_220025_UTC/`
+
+Largest-posterior membership is 56.4% perseveration, 7.1% win-switch, and 20.7%
+Home E+D. These conditional retrospective assignments differ from the earlier
+fixed-90/10 sensitivity calculation because the approved production readout is
+graded. They are not independent strategy-validation statistics. User inspection
+precedes any broader experimental run.
+
+2026-11-16 default revision (v7): the user approved replacing default
+`probe_persistence_doubt` with `win_switch_lose_stay` and removing standalone
+`reward_decay_hmm` from the defaults. Both displaced candidates remain selectable;
+the ideal observer retains its decay-HMM dependency. The eight defaults are FQL,
+Bayesian HMM, WSLS, Q-learning, ideal observer, immediate persistence,
+win-switch/lose-stay, and home-referenced expectancy doubt, in that order.
+
+The new candidate is a simple reward-switch/omission-stay rule, not the existing
+equal-weight `simple_probe_persistence` readout, whose signals cancel after a
+reward. It reuses WSLS's observed-history replay with its signed recommendation
+negated and matches the benchmark model's signed values. The trial comparison
+uses the same discrete .10 error as WSLS/persistence, with 50/50 initialization
+and missing-reward history freezing. Existing optional temperature keys remain
+valid in shared configurations even when those models are not selected.
+
+No dependencies or additional history loops are needed. Existing main defaults
+inherit the revised tuple; metadata version v7 invalidates prior default caches,
+and a stable Win-switch label/color is added to the existing membership grids.
+Tests were written and confirmed failing before implementation, then committed
+as `197bbf2`. They cover hand rules and 90/10 likelihoods, reuse/parity with the
+existing rule, ordinary exclusions, missing rewards, causality/cropped starts,
+eight-state metadata/round trips, optional-model selection/configuration, and
+single/multisession defaults and plot labels.
+
+Validation passed: 286 policy/benchmark-model/plotting checks and 18 single and
+multisession trial-workflow checks (304 total). The historical nine-model subset
+remains covered explicitly, alongside the revised defaults and optional models.
+One old graded-rule test now selects its original five graded models explicitly,
+including the no-longer-default decay HMM; its temperature expectations are unchanged.
+
+The deterministic synthetic pipeline passed with 140 retained trials and 137
+eligible choices, including missing-reward prediction/history freezing. The
+approved CT026 2026-08-28 run passed with 699 retained trials and 696 scored choices.
+The seven retained models have exactly unchanged raw scores, choice probabilities,
+log likelihoods, and prediction masks compared with v6 on the same input history.
+The new rule is the inverse of WSLS on every trial. All posterior rows normalize;
+NPZ round trip, non-policy columns, ten prior numerical artifacts, and block and
+parameter files were preserved. No upstream analysis or experimental batch ran.
+
+The inspected eight-model PNG and validation report/script/log snapshots are in
+this directory (UTC timestamp, November 16 local date):
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/figures/trial_policy_hmm/2026-11-17_04-21-20_205568_UTC/`
+
+Independent maxima are unique on 527 scored choices and tied on 169; smoothed
+marginal maxima are unique on all 699 retained rows. These are conditional,
+retrospective assignments rather than evidence of unique behavioral mechanisms.
+User changes to main.py were explicitly authorized to remain untouched while
+finishing this validation. User inspection precedes any broader experimental run.
+
+2026-11-11 probe extension (v6): the user approved `probe_persistence_doubt` and
+`home_referenced_expectancy_doubt` as the eighth and ninth default candidates,
+using existing TaskParams defaults and native probabilities. Ordered subsets
+remain selectable. Thin trial-policy adapters reuse the existing model replays;
+they return raw decision drives with logistic temperature .5, which equals the
+native `(1+tanh(drive))/2` left-choice readout. Earlier candidates retain their
+replay and choice rules. Adding candidates changes normalized model probabilities
+and the destinations sharing the outer HMM's off-diagonal transition mass.
+
+The shared replay functions now accept an optional keyword-only `update_mask`.
+`valid_mask` controls prediction eligibility; `update_mask` is its observed-outcome
+subset and defaults to `valid_mask`, preserving existing feature/benchmark callers.
+Missing-reward animal choices receive predictions while freezing all probe-model
+state. Manual/no-choice/unknown-flag attempts emit no prediction and freeze state.
+No reward is fabricated. Home counts survive omissions and reset on an opposite
+reward, with initialization at the first retained row of each source session.
+
+Metadata v6 saves each selected probe's weights, curve/rate, readout temperature,
+and history rule, and includes the reused replay module in the source digest.
+Plots use the existing general membership grids with nine distinct labeled rows.
+No dependencies, fitting, HMM equations, or session worker changes are introduced.
+The two additional replays are linear in trial count; no optimization is needed.
+
+Tests were written, confirmed failing, and committed first as `98ceb9a`:
+native replay/readout parity with default and nondefault parameters, hand-calculated
+reward probes and omission returns, home-count persistence/reset, causal prefixes,
+fresh session/crop initialization, missing-reward predictions with frozen state,
+all ordinary exclusions, selected-parameter validation/cache identity, nine-state
+round trips, nine-row plots, and single/multisession ordered-subset integration.
+
+The final affected checks passed in isolated pytest processes: 313 trial-policy,
+replay, feature, benchmark-model, and plotting tests; 16 main trial-workflow tests;
+92 existing main-workflow tests; and 41 expectant/benchmark integration and report
+tests (462 total). Existing warnings remain the JAX/TFP deprecation and the
+intentional invalid-input Bayesian tests. No new dependency or library API is used.
+
+Synthetic validation passed with 140 deterministic trials, 137 eligible choices,
+and 136 complete outcome updates, including explicit home rewards, omitted probes,
+returns, ordinary exclusions, and a missing reward. The nine-row PNG was inspected.
+The approved CT026 2026-08-28 validation then passed with 699 retained trials and
+696 eligible choices/updates. All posterior rows are finite and normalized; the
+NPZ round trip and non-policy table columns match. Eight previous numerical
+artifacts, the prior current CSV, block CSV, and parameter file were preserved.
+Direct comparison with the preceding v5 artifact confirms that the original
+seven scores, choice probabilities, log likelihoods, and prediction masks are
+exactly unchanged on the same input history.
+
+The inspected v6 CT026 figure, report, driver, main/batch snapshots, and log are
+in (UTC timestamp, November 11 local date):
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/figures/trial_policy_hmm/2026-11-12_04-42-00_531635_UTC/`
+
+Independent maxima are unique on 602 of 696 scored choices, with all tied maxima
+retained on the other 94. Smoothed marginal maxima are unique on all 699 rows;
+this does not establish strong posterior certainty. The new probe and home
+models have the largest smoothed marginal on 16 and 36 rows respectively.
+These are descriptive conditional assignments without a statistical test or
+out-of-sample validation. No upstream analysis or experimental batch was run;
+user inspection remains the next step before any broader experimental run.
+
+2026-11-11 graded-choice extension (v5): the user approved ordinary logistic
+choices for the five graded candidates, with fixed temperatures QL=.14,
+FQL=.14, HMM=.40, decay HMM=.40, and observer=.40. These are explicit first-pass
+assumptions calibrated to approximately 90% preference after one reward from a
+neutral state with default learning parameters. They are not fitted or adjusted
+using session ranges. WSLS and persistence retain their .10 discrete error.
+
+The implementation adds candidate choice-rule declarations and one common
+probability/log-likelihood conversion. Graded likelihoods use `log_expit` directly
+for numerical stability; no 0.1-0.9 cap, neutral band, lapse, or new history update
+is introduced. Greedy directions remain diagnostics, and raw signed scores are
+saved as `policy_scores[T,K]`. Legacy NPZs without that optional array still load.
+
+`SingleSessionAnalysisConfig.trial_policy_temperatures`, the single runner's
+`choice_temperatures`, and multisession `trial_policy_temperatures` accept partial
+fixed overrides keyed by graded model ID. For example, `{"q_learning": .20}`
+changes only QL's readout temperature. Defaults for other selected models remain
+fixed; discrete/unknown model temperature keys are rejected. Effective choice
+settings and their source enter cache identity and figure captions. The generic
+low-level comparison keeps its original fixed-error behavior when choice settings
+are omitted for API compatibility; normal main workflows explicitly resolve and
+pass the selected candidates' graded/discrete settings.
+
+Tests were written, confirmed failing, and committed first as `27858fa`.
+The affected checks passed: 297 trial-policy/feature/observer/plotting tests,
+92 existing main-workflow tests, and 15 single/multisession trial-workflow tests
+(404 total). Tests cover zero/symmetry/monotonicity, uncapped choices, stable
+extreme log likelihoods, FQL decay to 50/50, preserved replay eligibility,
+temperature overrides and permutation, raw-score round trips, old archives,
+cache identity, discrete policies, and matching serial/threaded source outputs.
+
+Full-pipeline validation then passed on the 140-trial synthetic history and the
+current CT026 2026-08-28 processed table (699 rows, 696 eligible comparisons).
+Logistic probabilities and stable log likelihoods were checked directly against
+the saved raw scores and fixed temperatures. Seven previous numerical artifacts,
+the prior current CSV, block outputs, parameter file, and non-policy columns were
+preserved. No experimental batch or upstream feature analysis was run.
+
+Among the 696 eligible CT026 comparisons, probabilities fell within 45-55% on
+24 FQL, 34 QL, 19 decay-HMM, 14 observer, and 1 full-HMM trials. These descriptive
+counts include the neutral initialization and do not apply a hard neutral band.
+Independent maxima were unique on 571 scored trials; smoothed marginal maxima
+were unique on all 699 retained rows. A unique maximum is not necessarily a
+high posterior probability. Bayesian HMM and WSLS may still agree in direction,
+but their graded versus fixed confidence now yields different likelihoods.
+
+The inspected v5 PNG, validation report, saved driver, and script/log snapshots
+are in (UTC timestamp, November 11 local date):
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/figures/trial_policy_hmm/2026-11-12_03-59-49_805169_UTC/`
+
+The report distinguishes exact choice-probability agreement from greedy-direction
+agreement, records the effective choice settings, and links immutable v5 arrays.
+Figure captions distinguish logistic temperatures from discrete-policy error.
+
+2026-11-11 extension: the user approved a seventh default, `immediate_persistence`,
+and choice-memory updates despite missing rewards. Its definition is reused from
+the existing benchmark model. A shared `trial_features.immediate_persistence_regressor`
+now supplies both the benchmark's previous-choice calculation and the trial-HMM
+adapter; no separate learning rule or benchmark probability mapping is introduced.
+The exponentially weighted perseveration regressor is a different policy and
+remains unchanged. Subsequent sections describing six candidates record the
+earlier expansion; the current default list appends immediate persistence.
+
+The extension adds no dependencies and uses linear-time choice replay. Tests
+were committed first as `f032b9d`, after confirming failures for the absent
+candidate, shared helper, and seven-model integration. They cover hand-calculated
+repeats, reward independence, actual mouse history, skipped attempts, cropping,
+missing-reward updates, shared benchmark delegation, metadata, and seven-row plots.
+The existing six-candidate subset and benchmark behavior remain covered.
+
+Metadata version `trial_policy_hmm_v4` saves per-candidate history-update rules.
+The existing `history_update_valid` array still means a usable choice/outcome
+pair; the new policy instead uses eligible observed choices. Existing result
+array shapes remain trial by selected candidate, and older NPZs remain loadable.
+
+The persistence extension passed 326 affected tests: 31 persistence/benchmark
+model tests, 237 trial-policy/feature/plotting tests, 14 main trial-workflow tests,
+and 44 benchmark workflow/plotting and trial-outcome tests. This includes the
+existing benchmark suite after extracting its previous-choice calculation.
+No dependencies, HMM likelihood equations, or transition construction changed.
+
+Synthetic full-pipeline validation used 140 deterministic trials with manual,
+no-choice, unknown-flag, and missing-reward rows. The user-designated CT026
+2026-08-28 session was then checked using its current processed table: 699
+retained rows, 696 eligible comparisons, and 391 eligible rows with differing
+candidate predictions. Posterior rows were finite and normalized within the
+existing tolerance. All four preceding numerical artifacts, the block CSV,
+saved parameters, and non-policy table columns were preserved. No batch ran.
+
+The inspected seven-row figure, validation report, and reproducibility files are
+in this directory (UTC timestamp, corresponding to November 11 in New York):
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/figures/trial_policy_hmm/2026-11-12_03-10-46_633593_UTC/`
+
+The cyan Persistence row uses the same membership display as the other models.
+The numerical v4 artifact and effective parameters are linked from
+`validation_report.json`. The original first-retained-row initialization,
+shared 0.1 opposite-action error, and 0.9 outer HMM stay probability remain.
+
+## Scope and decisions
+
+Add standard Q-learning, reward-decay HMM log odds, and the existing mouse-history
+ideal observer to the trial-policy comparison. Reuse the existing learning rules,
+likelihood calculation, Dynamax smoothing, and source-session workflow. There is
+no parameter fitting or simulated agent history in this extension.
+
+The user approved all six candidates as the default, retaining explicit subsets.
+Keep the original three in their existing order and append the additions.
+
+The user also requires a general tie display whose size does not depend on the
+number of possible tied-model combinations. The proposed layout below uses one
+row per model, not one category per observed or possible combination. The user
+subsequently approved implementation of the complete expansion.
+
+The archive/discovery prerequisite is implemented in the working tree. Tests
+were written, confirmed failing, and committed first (`f5ca3fe`). Discovery now
+checks only `*/processed/<session>_augmented_trials.csv` below the mouse root.
+Future archives use `.archived.csv`, and trial-policy snapshots use
+`trial_policy_export.csv`. Existing archives remain intact and count toward
+content deduplication. All 139 affected workflow/persistence tests passed; a
+read-only check resolves CT026 2026-08-28 correctly with its old archive present.
+This fix does not implement the candidate expansion.
+
+## Candidate definitions
+
+All scores describe the state before the current trial outcome. Actions remain
+`0=Right, 1=Left`; a positive score favors Left. Scores are dimensionless because
+rewards are binary delivery indicators, not water volumes.
+
+| Stable ID | Existing computation | Effective parameters |
+|---|---|---|
+| `q_learning` | `trial_features.qlearning_relative_value`: `Q_left - Q_right` | `QL_learning_rate` (currently 0.3), `n_actions=2` |
+| `reward_decay_hmm` | `trial_features.hmm_relative_value_reward_decay`: `tanh(tanh_scale * B_prior)` | Existing Bayesian task-belief parameters plus `hmm_reward_decay_lambda` (currently 0.1) |
+| `ideal_observer` | Reward-decay HMM score minus raw relative doubt | Same decay-HMM parameters plus `omission_lam` (currently 0.5) |
+
+Standard Q-learning updates only the chosen action:
+`Q[action] += learning_rate * (reward - Q[action])`. Its unchosen action does
+not undergo the forgetting used by the existing FQL candidate.
+
+The decay HMM updates from rewards using Bayes. On omissions it uses
+`B_post = (1 - lambda_decay) * B_prior`; it then applies the task-context hazard
+transition. That task-context transition is separate from the outer HMM's
+transition between candidate behavioral policies.
+
+For the ideal observer, maintain pre-choice right/left counterfactual omission
+counts, initialized to zero. An omission increments the chosen side; a reward
+clears both counts. Read out
+`doubt = (1 - exp(-omission_lam * left_count)) -
+(1 - exp(-omission_lam * right_count))` before updating those counts. Subtract
+this raw doubt from the pre-choice decay-HMM score, without residualization,
+normalization, or an additional tanh.
+
+"Ideal observer" retains the repository's existing name for this composite
+policy; this extension does not establish that it is an optimal policy.
+
+Use explicit `TaskParams`, then the existing saved-session parameter/default
+resolution in normal workflows. Do not substitute generic function defaults
+(Q-learning 0.1 and decay HMM 0.2 differ from `TaskParams`). Preserve each source's
+parameter provenance and defaulted-field warnings.
+
+## Architecture and localized changes
+
+### 1. Existing feature arithmetic: `trial_features.py`
+
+Keep the existing decay-HMM replay and public return contract. Address symmetric
+beliefs inside that replay: explicitly equal right/left belief components must
+produce zero log odds, including after epsilon normalization. Use the belief
+components to identify equality; do not impose a near-zero threshold on scores.
+Retain existing non-neutral calculations unless a test demonstrates a necessary
+correction. This fixes the real case where omission-only history drifts into a
+tiny rightward score that would otherwise become a 90/10 prediction.
+
+Add an opt-in outcome-evidence check for the decay HMM, analogous to the existing
+full Bayesian check. Validate positive finite normalization mass at its existing
+reward update and report retained row, observation, and parameters on failure.
+Do not perform a second replay to validate it. Preserve legacy behavior with
+validation disabled, apart from the explicitly tested neutral-belief correction.
+
+### 2. Candidate adapters: `trial_policy_models.py`
+
+Add ordinary adapter functions and three candidate records. Use explicit stable
+IDs in adapter/parameter lookup; do not make their identity depend on positions
+in the default tuple. Preserve original IDs and relative ordering.
+
+The Q-learning adapter calls the existing feature function. A small shared
+decay-HMM helper calls the existing feature with outcome validation enabled.
+Both the standalone decay candidate and the ideal observer use this helper.
+Replaying the small decay component twice when both are selected is acceptable;
+do not introduce a dependency graph or component cache for this extension.
+
+The observer replays doubt with the existing
+`CounterfactualDoubtState`, `update_counterfactual_doubt`, and raw doubt readout
+in `behavior_modeling/counterfactual_doubt.py`. A short chronological loop reads
+the pre-choice value, then updates only on `history_update_valid` rows. It uses
+the prepared history rather than the whole session table. Do not call the
+high-level observer helper on historical CSVs: that helper may reuse stale
+features and derive parameters from task columns.
+
+All adapters return aligned float64 scores and boolean prediction availability,
+each `(T,)`. Manual, no-choice, and unknown-flag rows skip prediction and freeze
+history. A usable choice with missing reward still receives a pre-choice score
+but freezes both belief and omission state. Crops and separate sessions initialize
+at their first retained row. True context and block boundaries do not drive or
+reset policy state.
+
+Validate only the selected candidates' effective parameters: Q-learning rate
+and decay fraction in `[0, 1]`, positive finite doubt rate, and the existing
+two-action/Bayesian parameter contracts. Genuine score zero maps to indifference;
+unexpected nonfinite computation raises an error with session/trial/model context.
+
+### 3. Provenance and integration
+
+In `trial_policy_results.py`, record each candidate's indifference rule rather
+than claiming a single global exact-zero rule without explaining the decay
+belief correction. Include the shared counterfactual-doubt source in the code
+digest. Use a new analysis version for the changed numerical/provenance behavior,
+preserving existing artifacts and their loader compatibility.
+
+Extend effective parameter metadata and existing source-local parameter checks.
+Keep `(T, K)` likelihood/posterior arrays and the existing result schema. Model
+selection, ordering, and parameters remain part of cache identity. No likelihood
+or Dynamax rewrite is expected; test the existing code with six candidates.
+
+Propagate the approved default candidate set through existing single-session and
+multisession options in `main.py`; retain explicit subsets and smoothing-off runs.
+Do not rerun upstream feature collection or block analysis solely to add candidates.
+
+Equal prior mass remains per selected candidate. On CT026 8/28 the full Bayesian
+and WSLS candidates made identical predictions on all eligible rows. Adding
+candidates changes their individual probabilities; do not silently merge models,
+drop candidates, or reinterpret individual posterior probability as policy-family
+support. Keep the configured outer stay probability unchanged and save the
+resulting six-state matrix.
+
+### 4. General tie display
+
+Use explicit, distinct colors and short labels for the new IDs. Replace the
+winner-marker panels with a trial-by-model membership grid: horizontal position
+is trial, and each model has exactly one labeled row. Fill a cell in that
+model's color whenever it attains the maximum. One filled cell in a trial column
+means a unique winner; multiple filled cells mean a tie; all rows filled means
+an all-model tie. Unselected cells are white, and unavailable comparisons are
+gray. No combination-specific category, color, or legend entry is needed.
+
+Render contiguous cells rather than overlapping point markers so long sessions
+remain readable. The display height grows only with the number of candidates.
+Apply the same layout separately to independent likelihood winners and
+retrospective smoothed-marginal winners. Retain the existing probability traces
+and caption explaining how to read ties and excluded trials.
+
+Plot only saved arrays, retain source boundaries and the existing light PNG
+style, and inspect a full-length example. Keep existing three-candidate artifacts
+plottable. This change affects display only; preserve the existing winner masks,
+probability tolerances, and nullable state labels.
+
+## Tests written and committed before implementation
+
+Use pytest through `uv run`; confirm meaningful failures, then commit tests before
+production edits. Change existing expected defaults/names only where the approved
+requirements change. Add tests to the existing suites rather than a new framework.
+
+1. Hand-calculated Q-learning pre-choice values, chosen-only updates, and explicit
+   `TaskParams` rate; distinguish its recommendations from FQL on a short history.
+2. Decay-HMM reward updates, omission log-odds decay, and subsequent hazard update;
+   neutral omission-only history remains exactly indifferent. Include full decay
+   (`lambda=1`), symmetric hazard, and mirrored left/right histories.
+3. Impossible rewarded observations raise from the existing update with row and
+   parameter context; validation remains opt-in for legacy callers. Valid
+   non-neutral feature values retain their previous numerical behavior.
+4. Hand-calculated observer omission counts and signed scores, including reward
+   reset of both counters. Verify score equals decay component minus raw doubt,
+   and that doubt can reverse a recommendation. Compare ordinary complete-history
+   output with existing feature composition, allowing only the neutral correction.
+5. Parameterized new-adapter causality, cropped/session initialization, excluded
+   row freeze, missing-reward prediction/freeze, and immunity to stale features,
+   future observations, and true task-context columns.
+6. Six-candidate and selected-subset likelihoods, tie masks, smoothing, and candidate
+   permutation consistency. Test genuine indifference separately from missingness;
+   preserve the existing tiny nonzero FQL direction test.
+7. NPZ round trip, ordered candidate IDs, effective parameters, per-candidate
+   indifference provenance, cache invalidation for changed relevant parameters,
+   and safe loading of original three-candidate artifacts.
+8. Single/multisession integration with the approved defaults and explicit subsets;
+   per-source parameters and histories remain independent and unrelated table
+   columns survive attachment. Confirm cache reuse avoids numerical recomputation.
+9. Six-candidate plot labels/colors and full tie masks; verify membership cells
+   for unique, partial-tie, all-tie, and excluded trials from saved arrays,
+   including source boundaries. Assert one row per candidate regardless of the
+   number of tie combinations. Render three- and six-candidate examples.
+
+Run the focused suites first, then the existing trial-feature, observer,
+trial-policy, and main workflow regressions affected by these changes.
+
+## Dependencies, performance, and validation
+
+No new packages. Reuse NumPy/SciPy, existing counter helpers, and installed
+Dynamax through the current smoother. Adapter replay is linear in retained
+trials per candidate; six-state smoothing uses the existing implementation.
+Retain current session-level parallelism and avoid nested workers or optimization
+work without evidence of a bottleneck.
+
+After unit tests, run a small synthetic full-pipeline example where the new
+candidates disagree, plus neutral and skipped-row examples. Then rerun only
+the user-designated CT026 2026-08-28 session in a new versioned output location,
+preserving previous results. Check eligible-row counts, posterior normalization,
+pairwise prediction agreement, and figure readability. Save the parameters,
+version, scripts, log, and a short scientific summary using the existing run
+record machinery. User inspection precedes any broader experimental batch.
+
+## Completion and validation handoff
+
+Implementation is complete in `trial_policy_models.py`, `trial_features.py`,
+`trial_policy_results.py`, and `trial_policy_plotting.py`. Existing main workflow
+defaults inherit the expanded `DEFAULT_MODEL_IDS`; explicit subsets still work.
+No likelihood or smoother implementation changed, and no dependencies were added.
+
+Tests were written and confirmed failing before production edits, then committed
+as `4a8a0ff`. The final affected checks passed across separate pytest processes:
+
+- 288 policy, feature, observer, persistence, and plotting tests.
+- 92 existing main workflow tests (including the corrected archive-name expectation).
+- 13 trial-policy single/multisession workflow tests.
+- Total: 393 passing tests. Existing warnings are the JAX/TFP deprecation and
+  intentionally invalid-input probes in the original Bayesian guard tests.
+
+The synthetic pipeline used a deterministic 140-trial history with manual,
+no-choice, unknown-flag, and missing-reward examples: 137 eligible comparisons,
+136 history updates, and 70 eligible rows where candidate predictions differed.
+The saved PNG was inspected for legible labels, membership grids, and caption.
+Its reproducible driver is `.cache/trial_policy_implementation/validate_expanded_policies.py`.
+
+The only experimental run was the user-designated CT026 2026-08-28 session:
+
+- 698 retained trials; 695 eligible comparisons and history updates. Unknown
+  manual flags on original trial IDs 136, 436, and 578 freeze replay and exclude
+  comparison evidence while retaining all HMM positions.
+- Candidate predictions differed on 293 eligible trials. Independent likelihood
+  maxima were tied on 694 of 695 eligible trials; smoothed marginal maxima were
+  tied on 405 of all 698 retained rows. These have different denominators because
+  HMM assignments also exist on excluded rows.
+- Full Bayesian HMM and WSLS predictions still agree on every eligible trial.
+  Their separate equal-prior shares remain visible. This analysis cannot identify
+  one of these two policies over the other on this history with these parameters.
+- All posterior rows are finite and normalize within the established tolerance.
+  NPZ round trip, non-policy table columns, prior numerical artifacts, block CSV,
+  and saved trial-feature parameters were checked. The prior current CSV was
+  preserved before refresh. No upstream analysis or experimental batch was run.
+- The full-length PNG was inspected. Rows 3 and 5 have six fixed labeled model
+  rows; ties use multiple colored cells in the same trial column. They require
+  no additional rows or legend entries for new combinations.
+
+Experimental figure and report directory:
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/figures/trial_policy_hmm/2026-11-08_05-23-56_881415_UTC/`
+
+It contains `trial_policy_diagnostic.png`, `validation_report.json`,
+`validation_summary.md`, `validation_driver.py`, `main.py`, `batch.py`, and
+`run.log`. The report records exact effective parameters, parameter-file source,
+pairwise prediction agreement, preservation checks, and artifact links.
+
+Numerical artifact:
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT026/CT026_20260828_latent_inference/processed/trial_policy_hmm/trial_policy_hmm_v2/770e7032d6c3bbb8bcc5d9ed2176e2842446444873e551967f3f7ecffa866192/2026-11-08_05-23-57_589877_UTC/results.npz`
+
+Existing three-candidate v1 artifacts remain loadable and were not overwritten.
+Main integration and the block-stage modules retain their existing worktree
+changes; unrelated user staging was left untouched. User inspection of the new
+figure remains the gate before any broader experimental analysis.

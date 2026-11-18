@@ -100,6 +100,15 @@ def test_recovery_only_targets_exact_runtime_locks_and_git_ignores_untracked(
     assert first != changed_head and first != changed_source
 
 
+def test_default_git_fingerprint_uses_repository_top_level() -> None:
+    """The production default hashes the same tracked sources as an explicit root."""
+    repository_root = Path(__file__).resolve().parents[3]
+
+    assert adapter.production_git_fingerprint() == adapter.production_git_fingerprint(
+        repository_root=repository_root,
+    )
+
+
 def test_recovery_rejects_symlinked_fingerprint_directories(tmp_path: Path) -> None:
     """Recovery never follows a fingerprint-directory symlink outside work."""
     external = tmp_path / "external"

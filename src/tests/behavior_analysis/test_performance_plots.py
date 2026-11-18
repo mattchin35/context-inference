@@ -10,7 +10,14 @@ import pandas as pd
 import pytest
 
 matplotlib.use("Agg")
+from src.behavior_analysis.session_analysis import (  # noqa: E402
+    add_block_agent_mouse_agreement_columns,
+)
+
 session_analysis = ModuleType("src.behavior_analysis.session_analysis")
+session_analysis.add_block_agent_mouse_agreement_columns = (
+    add_block_agent_mouse_agreement_columns
+)
 
 
 def _import_performance_plots():
@@ -163,7 +170,11 @@ def test_plot_expectant_switching_diagnostics_saves_light_mode_png(tmp_path: Pat
         {
             "action": [1, 1, 0, 1],
             "reward": [1, 1, 0, 1],
+            "cur_block": [0, 0, 1, 1],
             "state": ["left", "left", "left", "left"],
+            "simple_probe_persistence_value": [1.0, 1.0, -1.0, 1.0],
+            "expectancy_persistence_doubt_value": [1.0, -1.0, -1.0, 1.0],
+            "observer_value": [0.25, 1.5, -0.75, 0.5],
             "simple_probe_persistence_prob_left": [0.5, 0.5, 0.5, 0.12],
             "expectancy_persistence_doubt_prob_left": [0.5, 0.49, 0.42, 0.21],
             "previous_choice": [0, 1, 1, -1],
@@ -185,6 +196,194 @@ def test_plot_expectant_switching_diagnostics_saves_light_mode_png(tmp_path: Pat
     assert save_path.exists()
     image = plt.imread(save_path)
     assert np.allclose(image[0, 0, :3], 1.0)
+
+
+def test_expectant_diagnostic_choices_use_size_coded_markers_without_choice_line(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Choices should be dots, with rewarded choices emphasized by marker size."""
+    performance_plots = _import_performance_plots()
+    captured = {}
+    trial_df = pd.DataFrame(
+        {
+            "action": [1, 0, "no_choice", 1],
+            "reward": [1, 0, 0, 1],
+            "cur_block": [10, 10, 20, 20],
+            "state": ["left", "left", "right", "right"],
+            "simple_probe_persistence_value": [1.0, -1.0, np.nan, 1.0],
+            "expectancy_persistence_doubt_value": [-1.0, -1.0, np.nan, 1.0],
+            "observer_value": [0.25, -1.5, np.nan, 0.5],
+            "simple_probe_persistence_prob_left": [0.5, 0.4, np.nan, 0.7],
+            "expectancy_persistence_doubt_prob_left": [0.5, 0.3, np.nan, 0.8],
+            "previous_choice": [0, 1, np.nan, -1],
+            "reward_triggered_probe": [0, -1, np.nan, 0],
+            "expectant_switch": [0, -0.02, np.nan, 0],
+            "doubt_choice_signal": [0, 0, np.nan, 0.39],
+            "expectancy_reward_count": [0, 1, np.nan, 2],
+            "expectancy_strength": [0.002, 0.018, np.nan, 0.119],
+        }
+    )
+
+    def capture_figure(fig, save_path):
+        captured["fig"] = fig
+        captured["save_path"] = save_path
+
+    monkeypatch.setattr(performance_plots, "save_performance_figure", capture_figure)
+
+    performance_plots.plot_expectant_switching_diagnostics(
+        trial_df,
+        plot_path=tmp_path,
+        sess_id_full="CT999_marker_test",
+    )
+
+    choice_axis = captured["fig"].axes[0]
+    line_labels = {line.get_label() for line in choice_axis.lines}
+    collections = {collection.get_label(): collection for collection in choice_axis.collections}
+    assert "Observed choice (left=+1)" not in line_labels
+    assert set(collections) == {"Observed choice (left=+1)", "Rewarded choice"}
+    observed_offsets = collections["Observed choice (left=+1)"].get_offsets()
+    assert observed_offsets.shape[0] == 3
+    assert observed_offsets[:, 1].tolist() == [1.0, -1.0, 1.0]
+    assert collections["Rewarded choice"].get_offsets().shape[0] == 2
+    assert collections["Rewarded choice"].get_sizes()[0] > (
+        collections["Observed choice (left=+1)"].get_sizes()[0]
+    )
+    plt.close(captured["fig"])
+
+
+def test_expectant_diagnostic_reward_count_and_strength_use_separate_y_axes(
+    monkeypatch,
+    tmp_path: Path,
+):
+    """Reward count and expectancy strength should retain independent scales."""
+    performance_plots = _import_performance_plots()
+    captured = {}
+    trial_df = pd.DataFrame(
+        {
+            "action": [1, 1, 0, 1],
+            "reward": [1, 1, 0, 1],
+            "cur_block": [10, 10, 20, 20],
+            "simple_probe_persistence_value": [1.0, 1.0, -1.0, 1.0],
+            "expectancy_persistence_doubt_value": [-1.0, -1.0, -1.0, 1.0],
+            "observer_value": [0.25, 1.5, -0.75, 0.5],
+            "simple_probe_persistence_prob_left": [0.5, 0.5, 0.5, 0.12],
+            "expectancy_persistence_doubt_prob_left": [0.5, 0.49, 0.42, 0.21],
+            "previous_choice": [0, 1, 1, -1],
+            "reward_triggered_probe": [0, -1, -1, 0],
+            "expectant_switch": [0, -0.02, -0.12, 0],
+            "doubt_choice_signal": [0, 0, 0, 0.39],
+            "expectancy_reward_count": [0, 5, 10, 15],
+            "expectancy_strength": [0.002, 0.018, 0.119, 0.25],
+        }
+    )
+
+    def capture_figure(fig, save_path):
+        captured["fig"] = fig
+
+    monkeypatch.setattr(performance_plots, "save_performance_figure", capture_figure)
+
+    performance_plots.plot_expectant_switching_diagnostics(
+        trial_df,
+        plot_path=tmp_path,
+        sess_id_full="CT999_axis_test",
+    )
+
+    assert tuple(captured["fig"].get_size_inches()) == (24.0, 10.0)
+    assert len(captured["fig"].axes) == 5
+    combined_axis = captured["fig"].axes[0]
+    combined_lines = {
+        line.get_label(): line
+        for line in combined_axis.lines
+    }
+    assert combined_axis.get_ylabel() == "Choice / context / model value"
+    assert combined_lines["Probe+P value"].get_linewidth() < 1.0
+    assert combined_lines["Expect+D+P value"].get_linewidth() < 1.0
+    assert combined_lines["History ideal value"].get_linestyle() == "--"
+    assert combined_lines["History ideal value"].get_ydata().tolist() == [
+        0.25,
+        1.5,
+        -0.75,
+        0.5,
+    ]
+    assert combined_axis.get_ylim()[1] > 1.5
+
+    agreement_axis = captured["fig"].axes[1]
+    assert agreement_axis.get_ylabel() == "Block agreement"
+    assert agreement_axis.get_ylim() == pytest.approx((-0.02, 1.02))
+    probe_segments = [
+        line
+        for line in agreement_axis.lines
+        if line.get_color() == performance_plots.AGENT_MOUSE_AGREEMENT_COLORS["Probe+P"]
+    ]
+    expect_segments = [
+        line
+        for line in agreement_axis.lines
+        if line.get_color() == performance_plots.AGENT_MOUSE_AGREEMENT_COLORS["Expect+D+P"]
+    ]
+    ideal_segments = [
+        line
+        for line in agreement_axis.lines
+        if line.get_color() == performance_plots.AGENT_MOUSE_AGREEMENT_COLORS["Ideal"]
+    ]
+    assert [line.get_xdata().tolist() for line in probe_segments] == [
+        [-0.5, 1.5],
+        [1.5, 3.5],
+    ]
+    assert [line.get_xdata().tolist() for line in expect_segments] == [
+        [-0.5, 1.5],
+        [1.5, 3.5],
+    ]
+    assert [line.get_xdata().tolist() for line in ideal_segments] == [
+        [-0.5, 1.5],
+        [1.5, 3.5],
+    ]
+    assert all(line.get_linestyle() == "--" for line in ideal_segments)
+
+    count_axis = captured["fig"].axes[3]
+    strength_axis = captured["fig"].axes[4]
+    assert count_axis.get_ylabel() == "Reward count"
+    assert strength_axis.get_ylabel() == "Expectancy strength"
+    assert "Reward count" in [line.get_label() for line in count_axis.lines]
+    assert [line.get_label() for line in strength_axis.lines] == ["Expectancy strength"]
+    legend_labels = {text.get_text() for text in count_axis.get_legend().get_texts()}
+    assert legend_labels == {"Reward count", "Expectancy strength"}
+    assert count_axis.get_ylim()[1] > 15
+    assert strength_axis.get_ylim()[1] < 1
+    plt.close(captured["fig"])
+
+
+def test_prepare_expectant_block_agreement_spans_aligns_nonconsecutive_blocks():
+    """Block scores should span the exact contributing trial positions."""
+    performance_plots = _import_performance_plots()
+    trial_df = pd.DataFrame(
+        {
+            "cur_block": [10, 10, 20, 20, 20, 30],
+            "action": [1, 0, 1, 0, 1, "no_choice"],
+            "reward": [1, 0, 1, 0, 1, 0],
+            "simple_probe_persistence_value": [1, -1, 1, 1, 1, np.nan],
+            "expectancy_persistence_doubt_value": [-1, -1, -1, -1, 1, np.nan],
+            "observer_value": [1, -1, -1, -1, 1, np.nan],
+        }
+    )
+
+    spans = performance_plots.prepare_expectant_block_agreement_spans(trial_df)
+
+    assert spans["block_id"].tolist() == [10, 20, 30]
+    assert spans["trial_start"].tolist() == [-0.5, 1.5, 4.5]
+    assert spans["trial_end"].tolist() == [1.5, 4.5, 5.5]
+    assert spans.loc[:1, "simple_probe_persistence_mouse_agreement"].tolist() == pytest.approx(
+        [1.0, 2 / 3]
+    )
+    assert spans.loc[:1, "expectancy_persistence_doubt_mouse_agreement"].tolist() == pytest.approx(
+        [0.5, 2 / 3]
+    )
+    assert spans.loc[:1, "observer_mouse_agreement"].tolist() == pytest.approx(
+        [1.0, 2 / 3]
+    )
+    assert np.isnan(spans.loc[2, "simple_probe_persistence_mouse_agreement"])
+    assert np.isnan(spans.loc[2, "expectancy_persistence_doubt_mouse_agreement"])
+    assert np.isnan(spans.loc[2, "observer_mouse_agreement"])
 
 
 def test_plot_session_agent_mouse_agreement_saves_overall_lines(monkeypatch, tmp_path: Path):
