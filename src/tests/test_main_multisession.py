@@ -307,6 +307,12 @@ def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monk
         raising=False,
     )
 
+    monkeypatch.setattr(
+        main_module,
+        "save_and_plot_win_switch_home_for_session",
+        lambda *_args, **_kwargs: {"plot": tmp_path / "win_switch_home.png"},
+        raising=False,
+    )
     outputs = main_module.plot_expectant_switching_for_session(
         augmented_trial_df=trial_df,
         session=session,
@@ -319,6 +325,7 @@ def test_expectant_session_outputs_call_value_and_component_plots(tmp_path, monk
     assert outputs["candidate_diagnostic_plot"] == (
         tmp_path / "candidate_diagnostic.png"
     )
+    assert outputs["win_switch_home_diagnostic_plot"] == tmp_path / "win_switch_home.png"
     assert calls == ["diagnostic", "candidate_diagnostic"]
 
 
