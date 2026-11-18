@@ -114,3 +114,30 @@ def test_matplotlib_and_interactive_movement_preserve_measured_values_and_events
     finally:
         for figure in figures.values():
             plt.close(figure)
+
+
+def test_movement_block_summary_shows_finite_dots_medians_and_support(saved_replays):
+    """Figure 6A includes negative values and reports a metric's own denominator."""
+    replay, movement, meta = saved_replays
+    movement["block_scores"] = pd.DataFrame({
+        "metric": ["pfc_hpc"] * 3 + ["pfc_speed"] * 3 + ["hpc_speed"] * 3,
+        "block_id": [1, 2, 3] * 3,
+        "correlation": [.2, .5, .8, -.8, .3, np.nan, np.nan, np.nan, np.nan],
+        "reason": [""] * 5 + ["Missing support"] * 4,
+    })
+    figures = render_replays(replay, movement, meta, "light")
+    try:
+        summary = figures["figure6_block_correlations"]
+        axis = summary.axes[0]
+        assert [tick.get_text().split("\n")[-1] for tick in axis.get_xticklabels()] == [
+            "3/3 blocks", "2/3 blocks", "0/3 blocks",
+        ]
+        medians = {line.get_gid(): line.get_ydata()[0] for line in axis.get_lines() if line.get_gid()}
+        assert medians["pfc_hpc:median"] == pytest.approx(.5)
+        assert medians["pfc_speed:median"] == pytest.approx(-.25)
+        assert "hpc_speed:median" not in medians
+        dots = np.concatenate([collection.get_offsets()[:, 1] for collection in axis.collections])
+        np.testing.assert_allclose(np.sort(dots), [-.8, .2, .3, .5, .8])
+    finally:
+        for figure in figures.values():
+            plt.close(figure)
