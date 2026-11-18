@@ -56,11 +56,13 @@ CHOICE_WINDOW_AGENT_LABELS = {
     "win_switch_lose_stay_mouse_agreement": "Win-switch/lose-stay",
 }
 # Display selection only; computation and block-agreement defaults retain all models.
-MULTISESSION_CHOICE_WINDOW_AGENTS = (
+CHOICE_WINDOW_COMPARISON_AGENTS = (
     "qlearning_mouse_agreement", "fql_mouse_agreement", "hmm_logodds_mouse_agreement",
     "perseveration_mouse_agreement", "wsls_mouse_agreement", "observer_mouse_agreement",
     "home_referenced_expectancy_doubt_mouse_agreement", "win_switch_lose_stay_mouse_agreement",
 )
+MULTISESSION_CHOICE_WINDOW_AGENTS = CHOICE_WINDOW_COMPARISON_AGENTS
+SINGLE_SESSION_CHOICE_WINDOW_PLOT_VERSION = "comparison_models_v1"
 AGENT_MOUSE_AGREEMENT_COLORS = {
     "QL": "#1f77b4",
     "FQL": "#d62728",
@@ -1797,7 +1799,8 @@ def plot_session_choice_window_agreement(
         Saved provenance containing parameters.window_sizes, agent mappings,
         discarded_choices, and optionally context_transition_trial_positions.
     plot_path : pathlib.Path
-        Destination for the standalone PNG; existing files are reused.
+        Export root. PNGs live in its versioned comparison-model subdirectory;
+        matching files there are reused, preserving earlier full-model figures.
     sess_id_full : str
         Session identifier used in the title and output filename.
 
@@ -1805,9 +1808,10 @@ def plot_session_choice_window_agreement(
     -------
     pathlib.Path
         Saved opaque-white PNG. Reads saved results only; no agent scoring,
-        model fitting, or window aggregation occurs.
+        model fitting, or window aggregation occurs. The filename is inside
+        plot_path/comparison_models_v1, distinct from older full-model PNGs.
     """
-    plot_path = Path(plot_path)
+    plot_path = _choice_window_export_directory(plot_path)
     plot_path.mkdir(parents=True, exist_ok=True)
     save_path = plot_path / f"{sess_id_full}_choice_window_agreement.png"
     if save_path.exists():
@@ -1818,14 +1822,18 @@ def plot_session_choice_window_agreement(
     if missing:
         raise ValueError(f"window_table is missing plotting columns: {missing}")
     agent_labels = CHOICE_WINDOW_AGENT_LABELS
+    agents, unavailable = _resolve_choice_window_agents(
+        metadata["parameters"].get("agent_value_columns", {}), None, None,
+    )
     with plt.rc_context(_choice_window_plot_style()):
         fig, axes = plt.subplots(len(sizes), 2, figsize=(15, 4.5 * len(sizes)), squeeze=False)
         for row, size in enumerate(sizes):
             agreement_ax, count_ax = axes[row]
-            selected = window_table.loc[window_table["window_size"].eq(size)]
-            agents = metadata["parameters"].get("agent_value_columns", {})
+            selected = window_table.loc[window_table["window_size"].eq(size) & window_table["agent"].isin(agents)]
             boundaries = metadata.get("context_transition_trial_positions", [])
-            _plot_choice_window_agreement_on_ax(agreement_ax, selected, agents, boundaries, size)
+            empty_message = "No requested models available in saved results" if not agents else "No complete choice windows"
+            _plot_choice_window_agreement_on_ax(agreement_ax, selected, agents, boundaries, size,
+                                               empty_message=empty_message)
             for agent_index, agent in enumerate(agents):
                 agent_rows = selected.loc[selected["agent"].eq(agent)]
                 if agent_rows.empty:
@@ -1841,6 +1849,8 @@ def plot_session_choice_window_agreement(
                 count_ax.axvline(boundary - 0.5, color="gray", linewidth=0.6, linestyle=":", alpha=0.5)
             count_ax.set_xlabel("Original recorded trial position (zero-based)")
             count_ax.spines[["right", "top"]].set_visible(False)
+            if selected.empty:
+                count_ax.text(.5, .5, empty_message, ha="center", va="center", transform=count_ax.transAxes)
         fig.suptitle(f"{sess_id_full} Choice-Window Agreement", fontsize=17)
         tails = metadata.get("discarded_choices", {})
         caption = (
@@ -1849,6 +1859,9 @@ def plot_session_choice_window_agreement(
             "Missing predictions reduce each agent's denominator; dotted lines mark context transitions. "
             "Descriptive agreement; no statistical tests."
         )
+        if unavailable:
+            labels = _choice_window_display_labels()
+            caption += "\nUnavailable models: " + ", ".join(labels.get(agent, agent) for agent in unavailable) + "."
         fig.text(0.02, 0.015, caption, fontsize=10, va="bottom")
         fig.tight_layout(rect=(0, 0.11, 1, 0.96))
         fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
@@ -1898,20 +1911,22 @@ def plot_session_choice_window_agreement_panel(
         context_transition_trial_positions, and discarded_choices by size.
         No scoring, aggregation, or input mutation occurs.
     plot_path : pathlib.Path
-        Session figures directory. An existing matching PNG is reused.
+        Export root; matching PNGs in its versioned comparison-model directory
+        are reused. Earlier PNGs outside that directory remain unchanged.
     sess_id_full : str
         Full session identity for the title and filename.
     window_size : int
         Positive number of valid choices per window, selecting saved rows.
     agent_selection : iterable[str] or None, keyword-only
-        Ordered unique saved agent identifiers to display. None preserves the
-        full saved model set. Known models absent from saved metadata are named
-        in the caption and never recomputed or substituted. Data are unchanged.
+        Ordered unique saved agent identifiers to display. None selects the
+        default eight-model comparison set. Known models absent from saved
+        metadata are named in the caption and never recomputed or substituted.
+        Data are unchanged.
     presentation_profile : str or None, keyword-only
         Required with agent_selection: a lowercase alphanumeric/underscore
         output identity, e.g. main_comparison_v1. Change its version when the
         selection changes. Restricted plots use readable labels and an external
-        legend; original unfiltered figures retain their existing layout.
+        legend; default comparison figures retain their existing axis layout.
 
     Returns
     -------
@@ -1919,14 +1934,15 @@ def plot_session_choice_window_agreement_panel(
         Opaque-white, 150-dpi PNG named
         ``{sess_id_full}_choice_window_{window_size}_agreement.png``.
         A restricted figure inserts ``_{presentation_profile}`` before
-        ``_agreement.png``. Its axis shares drawing code with the diagnostic.
+        ``_agreement.png``. All outputs live in plot_path/comparison_models_v1.
+        Its axis shares drawing code with the diagnostic.
     """
     from .choice_window_analysis import validate_window_size
 
     size = validate_window_size(window_size)
     saved_agents = metadata["parameters"].get("agent_value_columns", {})
     agents, unavailable = _resolve_choice_window_agents(saved_agents, agent_selection, presentation_profile)
-    plot_path = Path(plot_path)
+    plot_path = _choice_window_export_directory(plot_path)
     suffix = f"_{presentation_profile}" if presentation_profile is not None else ""
     save_path = plot_path / f"{sess_id_full}_choice_window_{size}{suffix}_agreement.png"
     if save_path.exists():
@@ -1935,16 +1951,15 @@ def plot_session_choice_window_agreement_panel(
     missing = sorted(required.difference(window_table.columns))
     if missing:
         raise ValueError(f"window_table is missing plotting columns: {missing}")
-    selected = window_table.loc[window_table["window_size"].eq(size)]
+    selected = window_table.loc[window_table["window_size"].eq(size) & window_table["agent"].isin(agents)]
     labels = dict(CHOICE_WINDOW_AGENT_LABELS)
     if presentation_profile is not None:
         labels = _choice_window_display_labels()
-        selected = selected.loc[selected["agent"].isin(agents)]
     boundaries = metadata.get("context_transition_trial_positions", [])
     plot_path.mkdir(parents=True, exist_ok=True)
     with plt.rc_context(_choice_window_plot_style()):
         fig, ax = plt.subplots(figsize=(10, 6.5) if presentation_profile is not None else (10, 5.5))
-        empty_message = "No requested models available in saved results" if presentation_profile is not None and not agents else "No complete choice windows"
+        empty_message = "No requested models available in saved results" if not agents else "No complete choice windows"
         _plot_choice_window_agreement_on_ax(
             ax, selected, agents, boundaries, size, display_labels=labels, empty_message=empty_message,
         )
@@ -1965,7 +1980,8 @@ def plot_session_choice_window_agreement_panel(
             "Descriptive agreement; no statistical tests."
         )
         if unavailable:
-            caption += "\nUnavailable models: " + ", ".join(labels.get(agent, agent) for agent in unavailable) + "."
+            caption_labels = _choice_window_display_labels()
+            caption += "\nUnavailable models: " + ", ".join(caption_labels.get(agent, agent) for agent in unavailable) + "."
         fig.text(0.02, 0.015, caption, fontsize=10, va="bottom")
         if presentation_profile is not None:
             # Reserve independent bands for axis labels, legend and caption.
@@ -1998,17 +2014,20 @@ def plot_session_choice_window_agreement_summary(
         missing/nonfinite values are excluded. Every finite window receives
         equal weight, regardless of its saved prediction denominator.
     metadata : dict
-        Saved parameters.agent_value_columns defines model order. Optional
+        Saved parameters.agent_value_columns identifies available models;
+        defaults follow the shared comparison order. Optional
         discarded_choices maps window size strings to incomplete-tail counts.
         Inputs remain unchanged; no numerical analysis or model fitting occurs.
     plot_path : pathlib.Path
-        Session figures directory; an existing matching PNG is reused.
+        Export root; matching PNGs in its versioned comparison-model directory
+        are reused. Earlier PNGs outside that directory remain unchanged.
     sess_id_full : str
         Full source session identity for the title and filename.
     window_size : int
         Positive valid-choice count per window, selecting saved rows.
     agent_selection : iterable[str] or None, keyword-only
-        Ordered unique model identifiers; None selects all saved models.
+        Ordered unique model identifiers; None selects the default eight-model
+        comparison set, retaining the full numerical artifact unchanged.
         Known unavailable models are named in the caption without substitution.
     presentation_profile : str or None, keyword-only
         Versioned filename profile, required together with agent_selection.
@@ -2022,6 +2041,7 @@ def plot_session_choice_window_agreement_summary(
         Opaque-white, 150-dpi PNG named
         ``{sess_id_full}_choice_window_{window_size}_summary.png``. Restricted
         exports insert ``_{presentation_profile}`` before ``_summary.png``.
+        All outputs live in plot_path/comparison_models_v1.
         Dots retain saved window fractions; medians/quartiles use the same
         unweighted pandas convention as the existing block-summary renderer.
     """
@@ -2031,7 +2051,7 @@ def plot_session_choice_window_agreement_summary(
     saved_agents = metadata["parameters"].get("agent_value_columns", {})
     agents, unavailable = _resolve_choice_window_agents(saved_agents, agent_selection, presentation_profile)
     suffix = f"_{presentation_profile}" if presentation_profile is not None else ""
-    save_path = Path(plot_path) / f"{sess_id_full}_choice_window_{size}{suffix}_summary.png"
+    save_path = _choice_window_export_directory(plot_path) / f"{sess_id_full}_choice_window_{size}{suffix}_summary.png"
     if save_path.exists():
         return save_path
     required = {"window_size", "window_index", "agent", "agreement"}
@@ -2068,7 +2088,7 @@ def plot_session_choice_window_agreement_summary(
             ax.text(.5, .5, message, ha="center", va="center", transform=ax.transAxes)
         ax.set_title(f"{size}-choice windows: median and IQR")
         ax.spines[["right", "top"]].set_visible(False)
-        group = re.sub(r"_v[0-9]+$", "", presentation_profile).replace("_", " ").title() if presentation_profile else "All Models"
+        group = re.sub(r"_v[0-9]+$", "", presentation_profile).replace("_", " ").title() if presentation_profile else "Model Comparison"
         fig.suptitle(f"{sess_id_full} Choice-Window Agreement\n{group}", fontsize=17)
         discarded = metadata.get("discarded_choices", {}).get(str(size), "unknown")
         caption = (
@@ -2085,6 +2105,16 @@ def plot_session_choice_window_agreement_summary(
         fig.savefig(save_path, dpi=150, facecolor="white", transparent=False)
         plt.close(fig)
     return save_path
+
+
+def _choice_window_export_directory(plot_path: Path) -> Path:
+    """Return the versioned single-session export directory below a supplied root.
+
+    plot_path is a caller-supplied pathlib.Path. Return a child Path without
+    creating it. PNG filenames remain unchanged; old root-level figures cannot
+    satisfy the reduced-model cache. No data, units or numerical versions change.
+    """
+    return Path(plot_path) / SINGLE_SESSION_CHOICE_WINDOW_PLOT_VERSION
 
 
 def _choice_window_display_labels() -> dict[str, str]:
@@ -2107,14 +2137,15 @@ def _resolve_choice_window_agents(
     """Resolve ordered display keys and missing keys from saved-model identifiers.
 
     Inputs are unitless agent-name iterables and an optional versioned filename
-    profile. Selection/profile must be provided together; None preserves all
-    saved agents. Return (available, unavailable) string tuples in requested
-    order. Unknown identifiers, empty/duplicate selections and unsafe filename
+    profile. Selection/profile must be provided together; None selects the
+    shared eight-model comparison set. Return (available, unavailable) string
+    tuples in requested order. Unknown identifiers, empty/duplicate selections and unsafe filename
     profiles raise ValueError. No data, metadata, or filesystem is changed.
     """
     saved = tuple(saved_agents)
     if agent_selection is None and presentation_profile is None:
-        return saved, ()
+        return (tuple(agent for agent in CHOICE_WINDOW_COMPARISON_AGENTS if agent in saved),
+                tuple(agent for agent in CHOICE_WINDOW_COMPARISON_AGENTS if agent not in saved))
     if not isinstance(presentation_profile, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", presentation_profile):
         raise ValueError("A presentation profile with lowercase letters/digits/underscores is required for a selection.")
     if agent_selection is None or isinstance(agent_selection, str):

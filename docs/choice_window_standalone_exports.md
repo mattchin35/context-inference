@@ -7,10 +7,23 @@ PNG for each configured window size, alongside the existing diagnostic:
 - `<session>_choice_window_10_agreement.png`: 10-choice agreement only.
 - `<session>_choice_window_20_agreement.png`: 20-choice agreement only.
 
-All files use the existing session figures directory,
-`choice_window_agreement/<numerical run timestamp>/`. Other configured window
+All current single-session files use the session figures directory,
+`choice_window_agreement/<numerical run timestamp>/comparison_models_v1/`.
+Older full-model PNGs in the parent directory remain available. Other configured window
 sizes follow the same naming convention. Existing PNGs are reused, and missing
 standalone panels are generated even when the combined figure already exists.
+
+The default single-session comparison set is QL, FQL, HMM, Perseveration, WSLS,
+Ideal, Home E + Doubt, and Win-switch/lose-stay, in that order. HMM decay,
+Doubt+P, Probe+P, Expect+D+P, and Probe+P+D remain in numerical artifacts but
+are omitted from default plots. This includes both agreement and prediction
+coverage axes in the four-panel diagnostic and both standalone resolutions.
+The default summary subtitle is "Model Comparison" rather than "All Models".
+
+`performance_plots.CHOICE_WINDOW_COMPARISON_AGENTS` defines this shared display
+selection. The existing `MULTISESSION_CHOICE_WINDOW_AGENTS` name remains an alias,
+so cross-session selection is unchanged. Block-model registries and plots are
+unchanged. Missing retained models are listed in captions without substitution.
 
 Standalone figures use the same agent curves, colors, markers, labels,
 window-center trial coordinates, context-transition lines, and agreement limits
@@ -51,8 +64,13 @@ profile-to-model-key mappings. For direct export, pass its model tuple as
 `agent_selection` and the profile name as `presentation_profile` to the
 standalone exporter. Both keyword arguments must be supplied together.
 The profile identifies the selection in the filename; change its version
-when membership/order changes. Omitting both arguments preserves the original
-all-model API, filename and layout. Existing output files are reused.
+when membership/order changes. Omitting both arguments selects the default
+eight-model comparison. Explicit-selection arguments remain supported.
+All single-session exports resolve their own `comparison_models_v1` child
+directory beneath the supplied plot root. Pass the same root on repeat calls;
+the returned Path includes the versioned directory. Existing filenames remain
+unchanged within it. New-profile files are reused; parent-level PNGs cannot
+suppress these exports. The four-model preset memberships are unchanged.
 
 ### Win-switch/lose-stay values
 
@@ -106,7 +124,7 @@ exports were visually inspected. Their validation record is
 ## Single-session distribution summaries
 
 The plotting workflow also exports three standalone summary figures per
-configured window size: all saved models, `main_comparison_v1`, and
+configured window size: the default eight-model comparison, `main_comparison_v1`, and
 `strategy_comparison_v2`. For the default 10/20-choice sizes, these are six
 additional PNGs:
 
@@ -126,14 +144,14 @@ Each model's label reports its number of scored windows. Missing models are
 named in the caption; empty results produce a labeled placeholder.
 
 The summaries use an opaque white background, the existing model colors,
-readable labels, and 150-dpi PNG export. The all-model figure widens with the
+readable labels, and 150-dpi PNG export. The default comparison figure widens with the
 number of models. Horizontal jitter uses seed 0, recorded in the caption.
 No vertical jitter changes the agreement values.
 
 For direct export, call
 `performance_plots.plot_session_choice_window_agreement_summary` with the
 same first five arguments as the standalone timeline exporter. Omit selection
-arguments for all models, or supply both `agent_selection` and
+arguments for the default comparison, or supply both `agent_selection` and
 `presentation_profile` for a restricted figure. The optional `rng_seed`
 changes horizontal jitter only; use a separate output directory when changing
 it because existing filenames are reused.
