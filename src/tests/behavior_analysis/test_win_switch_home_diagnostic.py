@@ -55,6 +55,13 @@ def test_plot_has_only_requested_models_and_home_components(trials, monkeypatch,
     assert {line.get_label() for line in fig.axes[2].lines if not line.get_label().startswith("_")} == {
         "Home expectancy", "Home-model doubt"}
     assert "different scales" in " ".join(text.get_text() for text in fig.texts)
+    fig.tight_layout()
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    for axis in fig.axes:
+        label_bounds = axis.yaxis.label.get_window_extent(renderer)
+        assert label_bounds.y0 >= axis.bbox.y0
+        assert label_bounds.y1 <= axis.bbox.y1
     plt.close(fig)
 
 
