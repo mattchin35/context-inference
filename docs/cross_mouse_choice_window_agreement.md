@@ -69,6 +69,22 @@ cohort curve.
 
 ## Running after session results are ready
 
+For the usual quick-edit workflow, open `main_cross_mouse_choice_window_agreement`
+in `src/main.py`. Its opening settings block contains the data root, mouse list,
+window sizes, optional explicit run mapping, figure prefix and output directory.
+It defaults to CT016, CT017, CT019-CT025, `(10, 20)` windows and automatic selection.
+Set `collection_runs` to a mapping to override the mouse list with explicit runs.
+
+The bottom `if __name__ == "__main__"` block calls only this entry point.
+After editing the settings, run from the repository root:
+
+```bash
+uv run python -m src.main
+```
+
+The wrapper delegates to the existing saved-results workflow and prints its
+dated export directory. Importing `src.main` does not invoke the entry point.
+
 From the repository root, use `uv run python` with the following code for quick
 automatic selection:
 

@@ -5847,6 +5847,32 @@ def main_mouse_batch():
     )
 
 
+def main_cross_mouse_choice_window_agreement() -> None:
+    """Run saved-only cross-mouse Ideal curves using the quick-edit settings below.
+
+    No arguments. Mouse IDs and paths select saved collections; window_sizes
+    counts valid choices. Returns None after printing the dated export directory.
+    Agreement remains a unitless fraction; this does not run session analysis.
+    """
+    # Quick-edit settings. An explicit run mapping overrides the mouse list.
+    data_root = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData")
+    mice = ["CT016", "CT017", "CT019", "CT020", "CT021", "CT022", "CT023", "CT024", "CT025"]
+    window_sizes = (10, 20)
+    collection_runs = None  # Or {"CT016": Path(".../choice_window_agreement/SELECTED_RUN")}.
+    figure_id = "cross_mouse"
+    output_path = data_root / "cross_mouse_analysis"
+
+    _, run_directory = run_cross_mouse_choice_window_agreement_curves(
+        data_root=data_root,
+        output_path=output_path,
+        collection_runs=collection_runs,
+        window_sizes=window_sizes,
+        figure_id=figure_id,
+        mice=mice if collection_runs is None else None,
+    )
+    print(f"Saved cross-mouse choice-window agreement: {run_directory}")
+
+
 def main_cross_mouse_metrics(
     data_root: Path = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData"),
     use_discovered_mice: bool = False,
@@ -5945,9 +5971,10 @@ def main_cross_mouse_multisession_block_performance(
 
 
 if __name__ == '__main__':
+    main_cross_mouse_choice_window_agreement()
     # main_mouse()
-    main_mouse_batch()
-    main_multisession(agent_agreement_only=False)
+    # main_mouse_batch()
+    # main_multisession(agent_agreement_only=False)
     # main_simulation()
     # main_cross_mouse_metrics()
 
