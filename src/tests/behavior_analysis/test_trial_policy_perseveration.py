@@ -38,8 +38,8 @@ def replay(table, params=None):
 
 
 def test_replaces_default_persistence_and_records_approved_parameters():
-    """No inputs; select eight defaults and retain the former immediate-choice model."""
-    assert len(models.DEFAULT_MODEL_IDS) == 8
+    """No inputs; weighted perseveration remains selected with the former model optional."""
+    assert len(models.DEFAULT_MODEL_IDS) == 9
     assert models.DEFAULT_MODEL_IDS[5] == "perseveration"
     assert "immediate_persistence" not in models.DEFAULT_MODEL_IDS
     candidate, = models.resolve_trial_policy_candidates(("perseveration",))
@@ -145,7 +145,7 @@ def test_cache_identity_roundtrip_and_choice_only_provenance(trials, tmp_path):
     history, comparison = replay(trials)
     candidates = models.resolve_trial_policy_candidates(("perseveration",))
     meta = results.build_trial_policy_metadata(history, candidates, TaskParams(), parameter_source="test")
-    assert meta["analysis_version"] == "trial_policy_hmm_v8"
+    assert meta["analysis_version"] == results.ANALYSIS_VERSION
     assert meta["candidate_history_update_rules"] == {"perseveration": "observed_choice"}
     for kwargs in ({"feature_params": replace(TaskParams(), perseveration_decay=.5)},
                    {"choice_temperatures": {"perseveration": .7}}):

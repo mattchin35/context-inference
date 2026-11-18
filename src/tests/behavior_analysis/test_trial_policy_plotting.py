@@ -168,22 +168,24 @@ def test_probe_models_have_distinct_labeled_rows(tmp_path, capture_figure):
 
 
 def test_default_win_switch_row_and_discrete_caption(tmp_path, capture_figure):
-    """Path/Figure fixtures label eight defaults, retaining the discrete choice rule."""
+    """Path/Figure fixtures label nine defaults, including the explicit chance baseline."""
     from src.behavior_analysis import trial_policy_plotting as plotting
     from src.behavior_analysis.trial_policy_models import (
         effective_trial_policy_choice_parameters, resolve_trial_policy_candidates,
     )
 
-    result, metadata = diagnostic_result(models=8)
+    result, metadata = diagnostic_result(models=9)
     metadata["candidate_choice_parameters"] = effective_trial_policy_choice_parameters(resolve_trial_policy_candidates())
     plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "eight.png")
     figure = capture_figure[-1]
     labels = [label.get_text() for label in figure.axes[2].get_yticklabels()]
-    assert labels == ["FQL", "Bayes HMM", "WSLS", "QL", "Observer", "Perseveration", "Win-switch", "Home expectancy"]
-    assert len({plotting._model_color(str(model_id)) for model_id in result.model_ids}) == 8
+    assert labels == ["FQL", "Bayes HMM", "WSLS", "QL", "Observer", "Perseveration", "Win-switch", "Home expectancy", "Chance"]
+    assert len({plotting._model_color(str(model_id)) for model_id in result.model_ids}) == 9
     caption = " ".join(" ".join(text.get_text() for text in figure.texts).lower().split())
     assert "discrete policies: wsls, win-switch" in caption
     assert "perseveration=" in caption
+    assert "constant baseline: chance" in caption and "0.5" in caption
+    assert "chance=" not in caption
 
 
 def test_weighted_and_immediate_persistence_have_distinct_labels_and_colors(tmp_path, capture_figure):
@@ -192,11 +194,29 @@ def test_weighted_and_immediate_persistence_have_distinct_labels_and_colors(tmp_
     from src.behavior_analysis.trial_policy_models import DEFAULT_MODEL_IDS
 
     ids = (*DEFAULT_MODEL_IDS, "immediate_persistence")
-    result, metadata = diagnostic_result(models=9, model_ids=ids)
+    result, metadata = diagnostic_result(models=len(ids), model_ids=ids)
     plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "both.png")
     labels = [text.get_text() for text in capture_figure[-1].axes[2].get_yticklabels()]
     assert "Perseveration" in labels and "Persistence" in labels
     assert plotting._model_color("perseveration") != plotting._model_color("immediate_persistence")
+
+
+def test_chance_only_caption_has_constant_probability_without_error_or_temperature(tmp_path, capture_figure):
+    """Path/Figure fixtures give the baseline its own readout description."""
+    from src.behavior_analysis import trial_policy_plotting as plotting
+    from src.behavior_analysis.trial_policy_models import (
+        effective_trial_policy_choice_parameters, resolve_trial_policy_candidates,
+    )
+
+    result, metadata = diagnostic_result(models=1, model_ids=("chance",))
+    metadata["candidate_choice_parameters"] = effective_trial_policy_choice_parameters(
+        resolve_trial_policy_candidates(("chance",)))
+    plotting.plot_trial_policy_diagnostic(result, metadata, output_path=tmp_path / "chance.png")
+    figure = capture_figure[-1]
+    caption = " ".join(" ".join(text.get_text() for text in figure.texts).lower().split())
+    assert "constant baseline: chance" in caption and "0.5" in caption
+    assert "temperature" not in caption and "opposite-action error" not in caption
+    assert [label.get_text() for label in figure.axes[2].get_yticklabels()] == ["Chance"]
 
 
 def test_model_colors_are_stable_under_candidate_reordering(tmp_path, capture_figure):

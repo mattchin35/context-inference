@@ -39,7 +39,7 @@ def compare(table, ids=("win_switch_lose_stay",)):
 
 def test_eight_defaults_and_retained_optional_candidates():
     """No inputs; the selected defaults change while both former IDs remain usable."""
-    assert models.DEFAULT_MODEL_IDS == DEFAULT_IDS
+    assert models.DEFAULT_MODEL_IDS == DEFAULT_IDS + ("chance",)
     optional = ("reward_decay_hmm", "probe_persistence_doubt")
     assert tuple(candidate.model_id for candidate in models.resolve_trial_policy_candidates(optional)) == optional
     candidate, = models.resolve_trial_policy_candidates(("win_switch_lose_stay",))
@@ -53,7 +53,7 @@ def test_default_subset_accepts_temperature_settings_for_optional_graded_models(
     settings = models.effective_trial_policy_choice_parameters(
         models.resolve_trial_policy_candidates(),
         temperatures={"reward_decay_hmm": .4, "probe_persistence_doubt": .5})
-    assert set(settings) == set(DEFAULT_IDS)
+    assert set(settings) == set(DEFAULT_IDS + ("chance",))
 
 
 def test_reward_switch_omission_stay_matches_existing_benchmark(trials, monkeypatch):
