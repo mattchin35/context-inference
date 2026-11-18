@@ -7,7 +7,7 @@ from pathlib import Path
 from src.neural_analysis.task_decoding.config import SUPPORTED_BIN_WIDTH_MS
 
 
-ANALYSIS_VERSION = "condition-session-prediction-v3"
+ANALYSIS_VERSION = "condition-session-prediction-v4"
 SCHEMA_VERSION = 3
 RIDGE_ALPHA = 1.0
 LOGISTIC_C = 1.0
@@ -20,7 +20,7 @@ TARGET_NAMES = (
     "forgetting_q_relative_value", "hmm_signed_belief",
     "hmm_decay_signed_belief", "relative_doubt",
 )
-MIXED_TARGET_NAMES = (*TARGET_NAMES[:2], "current_reward")
+MIXED_TARGET_NAMES = (*TARGET_NAMES[:2], "current_reward", *TARGET_NAMES[2:])
 TRAINING_WINDOWS = {"full": (-1.0, 1.0), "before": (-1.0, 0.0), "after": (0.0, 1.0)}
 
 

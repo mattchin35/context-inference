@@ -7,7 +7,9 @@ from pathlib import Path
 import streamlit as st
 
 from src.neural_analysis.session_metadata import ResolvedSession
-from src.neural_analysis.task_decoding.session_prediction.config import ANALYSIS_MODES, GENERALIZATION_MODE, MIXED_MODE, TRAINING_WINDOWS
+from src.neural_analysis.task_decoding.session_prediction.config import (
+    ANALYSIS_MODES, GENERALIZATION_MODE, MIXED_MODE, TRAINING_WINDOWS, target_names_for_mode,
+)
 from src.neural_analysis.task_decoding.session_prediction.plotting import (
     PredictionDisplay, analysis_mode_label, prediction_target_label, training_population_label,
     training_window_label,
@@ -113,9 +115,11 @@ def render_prediction_controls(
     st_module.caption(f"Saved {analysis_mode_label(inputs.analysis_mode)} - {training_window_label(inputs.training_window)}: {selected}; "
                       f"{result.meta['effective_config']['bin_width_ms']} ms. "
                       "Preparation probe/bin controls do not change this saved basis.")
-    if inputs.analysis_mode == MIXED_MODE and "current_reward" not in inputs.target_names:
-        st_module.caption("Legacy mixed result: state/action only; reward is not prepared. "
-                          "Use Prepare predictions to create the expanded reward product.")
+    missing_targets = [name for name in target_names_for_mode(inputs.analysis_mode) if name not in inputs.target_names]
+    if inputs.analysis_mode == MIXED_MODE and missing_targets:
+        st_module.caption("Legacy mixed result: these targets are not prepared: "
+                          + ", ".join(missing_targets)
+                          + ". Use Prepare predictions to create the expanded mixed product.")
     if not show:
         return PredictionViewState(analysis_mode, True, result, None, training_window)
     target_labels = {name: prediction_target_label(inputs.analysis_mode, name, inputs.target_metadata[name]["display_label"])
@@ -196,7 +200,8 @@ def _render_performance_panel(
         label = prediction_target_label(inputs.analysis_mode, target, inputs.target_metadata[target]["display_label"])
         binary = inputs.target_families[inputs.target_names.index(target)] == "categorical"
         class_labels = inputs.target_metadata[target].get("class_labels", {})
-        aggregation = (f"Binary probabilities are averaged before the 0.5 threshold for {class_labels.get('1', 'class 1')}. " if binary else
+        aggregation = (f"Binary probabilities are averaged before the 0.5 threshold for {class_labels.get('1', 'class 1')}. "
+                       "Brier score is mean squared probability error (0-1); lower is better. " if binary else
                        "Predictions and RMSE retain target units; R2 uses target variation within each scored group. ")
         st_module.caption(f"{label}: one prediction per trial, averaged over {training_window_label(inputs.training_window)}. "
                           + aggregation +
@@ -225,7 +230,8 @@ def _render_performance_panel(
         st_module.dataframe(_performance_rows(side_rows, populations, class_labels=class_labels), hide_index=True)
         st_module.dataframe(_performance_rows(gap_rows, populations, differences=True), hide_index=True)
         interpretation = ("Positive accuracy differences (percentage points) favor left. "
-                          "Single-class groups have accuracy but no balanced accuracy. " if binary else
+                          "Positive Brier score differences mean larger left probability errors. "
+                          "Single-class groups have accuracy and Brier score but no balanced accuracy. " if binary else
                           "Positive R2 differences favor left; positive RMSE differences mean larger left errors. "
                           "RMSE uses the target units. Constant/singleton targets have RMSE but no R2. ")
         st_module.caption("Differences are left minus right. " + interpretation +
@@ -255,7 +261,7 @@ def _performance_rows(
 ) -> list[dict]:
     """Format small metric records for tables; fractions become percent/percentage points.
 
-    rows contain dimensionless accuracy/R2, native-unit RMSE and trial counts.
+    rows contain dimensionless accuracy/R2/Brier, native-unit RMSE and trial counts.
     populations maps canonical IDs to labels. Return new dictionaries without
     altering records. Side differences use ordinary accuracy, not balanced accuracy.
     Optional class_labels maps string 0/1 to target-specific class names.
@@ -265,7 +271,8 @@ def _performance_rows(
               "fit_reason": "Fit reason", "left_n_trials": "Left trials", "right_n_trials": "Right trials",
               "accuracy": "Accuracy difference (pp)" if differences else "Accuracy (%)",
               "balanced_accuracy": "Balanced accuracy (%)", "r2": "R2 difference" if differences else "R2",
-              "rmse": "RMSE difference" if differences else "RMSE"}
+              "rmse": "RMSE difference" if differences else "RMSE",
+              "brier_score": "Brier score difference" if differences else "Brier score"}
     for value in ("0", "1"):
         class_label = (class_labels or {}).get(value, f"Class {value}")
         labels[f"class_{value}_trials"] = f"{class_label.capitalize()} trials"

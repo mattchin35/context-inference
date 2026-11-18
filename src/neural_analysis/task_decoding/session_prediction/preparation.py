@@ -98,7 +98,7 @@ def prepare_prediction_inputs(
     target subset/alignment are locally replaced. Input objects are not changed.
     Reject mismatched choice identities using absolute UTC tolerance 1 us.
     training_window selects matched full/before/after fitting/scoring bins.
-    analysis_mode selects fixed seven- or three-target axes and the canonical
+    analysis_mode selects fixed seven- or eight-target axes and the canonical
     training-condition union; default retains correct-rewarded generalization.
     """
     target_names = target_names_for_mode(analysis_mode)

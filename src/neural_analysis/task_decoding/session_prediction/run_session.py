@@ -65,7 +65,7 @@ def prepare_session_predictions(
     analysis_mode is an optional canonical mode override; None uses controls
     or the seven-target correct-rewarded default. training_window optionally
     overrides the controls-file full/before/after choice-relative fit interval.
-    Mixed mode fits three targets.
+    Mixed mode fits eight targets, including the five continuous task quantities.
     """
     started = perf_counter()
     controls = load_prediction_config(metadata_path, config_path=config_path,

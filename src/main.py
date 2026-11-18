@@ -5822,13 +5822,9 @@ def run_single_session_batch(
 
 def main_mouse():
     """Analyze a single behavior session from start to finish."""
-    mouse = "CT026"
-    date = "2026-08-10"
-    behavior_timestamp = 130341  # Set to "HHMMSS" to choose one session on ambiguous dates.
-    # date = "2026-05-25"
-    # behavior_timestamp = 145938
-    # date = "2026-05-29"
-    # behavior_timestamp = 132812
+    mouse = "CT024"
+    date = "2026-06-09"
+    behavior_timestamp = 143852  # Set to "HHMMSS" to choose one session on ambiguous dates.
     task_tag = "latent_inference"
     session_data_root = Path(f"/home/matt/Documents/EXPERIMENTS/contextProjectData/{mouse}")
     multi_session_save_path = session_data_root / "cross_session_analysis"
@@ -6023,7 +6019,7 @@ def main_cross_mouse_metrics(
     if mice is None:
         mice = [
             "CT016", "CT017", "CT019", "CT020", "CT021", "CT022", "CT023", "CT024", "CT025",
-            "CT026",
+            "CT025",
         ]
 
     selected_mice = discover_mice_with_overall_performance(data_root) if use_discovered_mice else list(mice)
@@ -6090,12 +6086,11 @@ def main_cross_mouse_multisession_block_performance(
 
 
 if __name__ == '__main__':
-    main_cross_mouse_choice_window_agreement()
+    # main_cross_mouse_choice_window_agreement()
     # main_mouse()
-    # main_mouse_batch()
-    # main_multisession(agent_agreement_only=False)
+    main_mouse_batch()
+    main_multisession(multisession_collection_only=False, agent_agreement_only=False)
     # main_simulation()
     # main_cross_mouse_metrics()
-
     # main_mouse_expectant_model_refresh()
     # main_mouse_win_switch_home_diagnostic()

@@ -1,8 +1,19 @@
 # Condition Generalization and Mixed-Outcome Decoding on the Session Timeline
 
-Status: scientific decisions confirmed, document revision 4, 2026-11-09.
-Full/Before/After fits, actual reward as the third mixed target, and training/
-held-out outcome/laterality summaries are implemented. Synthetic integration
+Status: scientific decisions confirmed, document revision 5, 2026-11-11.
+Mixed-outcome decoding now includes the same five continuous value/belief/doubt
+targets as correct-rewarded generalization, after state/action/actual reward.
+The analysis version is v4; storage schema 3 is unchanged. Original v1-v3
+products retain their saved target sets and windows.
+
+Revision-5 validation: 222 prediction/webapp tests and 166 surrounding timeline,
+shared-target and documentation tests passed. One existing JavaScript lifecycle
+test was skipped because Node was unavailable. These checks use synthetic data;
+no experimental session was prepared for this expansion.
+
+Prior revision-4 evidence (2026-11-09): Full/Before/After fits, actual reward as
+the third mixed target, and training/held-out outcome/laterality summaries were
+implemented. Synthetic integration
 (408 tests) and saved-only browser checks are complete; the linked plan records
 the evidence. Original Full-window v1/v2 products remain inspectable under their
 original seven-/two-target contracts. No new experimental preparation was run;
@@ -32,8 +43,9 @@ Provide two explicitly named analyses using the same session timeline:
 - **Correct-rewarded generalization:** train the existing seven task-variable
   readouts on correct-rewarded trials and apply them across choice conditions.
 - **Mixed-outcome decoding:** train separate state, action and actual-reward
-  classifiers on correct-rewarded, correct-omission and incorrect training
-  trials. This measures decoding of recorded state, action and reward across
+  classifiers and five continuous value/belief/doubt ridge readouts on
+  correct-rewarded, correct-omission and incorrect training trials. This
+  measures decoding of recorded and model-derived task quantities across
   outcomes; it is a separate analysis from the correct-rewarded reference.
 
 Display predictions during individual choice windows throughout the session.
@@ -59,7 +71,7 @@ prospective or online pipeline.
 | --- | --- |
 | Analysis modes | Correct-rewarded generalization and mixed-outcome decoding; save and inspect separately. |
 | Generalization training / targets | Canonical `correct_rewarded`; all seven targets in Section 3. |
-| Mixed-outcome training / targets | Union of canonical `correct_rewarded`, `omission`, and `incorrect`; `current_state`, `current_action`, and new `current_reward`. Canonical `omission` means correct omission. |
+| Mixed-outcome training / targets | Union of canonical `correct_rewarded`, `omission`, and `incorrect`; state/action/reward followed by all five continuous targets in Section 3. Canonical `omission` means correct omission. |
 | Sampling / balancing | All eligible training trials; equal total weight per trial. No subsampling, class/outcome balancing, or additional training fraction. |
 | Training / scoring windows | Three independent fits: Full (`full`) `[-1, +1)` (existing default), Before (`before`) `[-1, 0)`, After (`after`) `[0, +1)` seconds relative to `choice_time`. Score each fit over its own selected interval. |
 | Prediction interval | The complete `[-2, +2)` second choice window. |
@@ -122,11 +134,16 @@ Correct-rewarded generalization retains its original seven-target order:
 `forgetting_q_relative_value`, `hmm_signed_belief`, `hmm_decay_signed_belief`,
 `relative_doubt`. All seven gain Before and After variants.
 New mixed preparations use `current_state`, `current_action`, `current_reward`,
-in that order, for all three windows. Existing two-target mixed archives keep
-their original meaning and remain inspectable; see Section 8.
-Do not train the five continuous targets on mixed outcomes or duplicate their
-existing fits in the mixed-outcome product. Target identifiers, source
-columns, and binary orientation do not change between modes.
+`qlearning_relative_value`, `forgetting_q_relative_value`, `hmm_signed_belief`,
+`hmm_decay_signed_belief`, `relative_doubt`, in that order, for all three
+windows. Continuous targets reuse their existing source definitions and ridge
+estimator; they are fitted on mixed eligible trials independently of the
+correct-rewarded models. Both modes require the five source columns; missing
+row values affect only the corresponding target, and entirely empty numerical
+columns stay unavailable without imputation. Existing two-/three-target mixed
+archives keep their original meaning and remain inspectable; see Section 8.
+Target identifiers, source columns, and binary orientation do not change
+between modes.
 
 Registering reward in the shared target definitions must preserve the old
 decoder's default target set, both when targets are omitted from a config and
@@ -361,9 +378,12 @@ Do not classify an averaged logit or count bins as independent trials.
 Continuous means retain native target units.
 
 Report binary accuracy and balanced accuracy (fractions displayed as
-percentages); continuous R2 and RMSE (RMSE in target units). Empty groups have
+percentages), plus Brier score (mean squared probability error against 0/1
+labels, dimensionless 0-1, lower is better). Score the mean probability for
+each trial, not its thresholded label or the mean of separate bin errors.
+Continuous targets retain R2 and RMSE (RMSE in target units). Empty groups have
 zero trials and unavailable metrics, not zero performance. Single-class groups
-retain ordinary accuracy but balanced accuracy is unavailable. Constant or
+retain ordinary accuracy and Brier score but balanced accuracy is unavailable. Constant or
 singleton continuous groups retain RMSE but R2 is unavailable; negative R2
 values remain visible.
 
@@ -403,7 +423,8 @@ grouping. Higher accuracy/R2 is better; lower RMSE is better. A laterality
 difference alone does not establish a hemisphere effect: outcome composition,
 class balance and behavior can also differ by side.
 Keep the existing binary difference display in ordinary-accuracy percentage
-points; show balanced accuracy for each side where defined. Continuous
+points; show balanced accuracy for each side where defined, and dimensionless
+left-minus-right Brier score differences (positive means larger left errors). Continuous
 differences retain R2 and native-unit RMSE. Counts are not performance metrics
 to subtract into an accuracy gap.
 
@@ -558,8 +579,8 @@ Preparation fits models and saves predictions/provenance; display interactions
 load saved products.
 Reuse compatible saved preparation by default. Require an explicit rerun
 action for a new result when an equivalent preparation already exists.
-Preparing expanded mixed-outcome decoding fits its three classifiers per
-region/fold: at most 30 fits with both regions per selected window, versus
+Preparing expanded mixed-outcome decoding fits three classifiers and five
+ridge readouts per region/fold: at most 80 fits with both regions per selected window, versus
 70 for generalization. These are per-window counts, not a requirement to
 prepare all three windows automatically.
 Reuse matching saved PCA; do not rebuild spikes/PCA or refit the other mode
@@ -585,7 +606,11 @@ Full-window mixed decoding with state/action only. Identify their supervised
 window as Full through their known versioned contract, not a filename guess.
 Do not edit archives, rerun their fits, synthesize missing reward predictions,
 or require raw data for saved inspection. Old two-target mixed products must
-remain usable without pretending the reward extension is prepared.
+remain usable without pretending the reward extension is prepared. Original
+v3/schema-3 products retain their matched windows and three mixed targets.
+New products use `condition-session-prediction-v4` / schema 3, with eight mixed
+targets and the unchanged seven generalization targets. Version-aware loading
+checks each exact target set; display never synthesizes additional models.
 
 The implementation plan must specify the new analysis/schema versions and
 exact array/metadata validation before coding the new contracts. Require the
@@ -593,7 +618,8 @@ selected window/bounds and expanded target set explicitly in new products;
 do not reinterpret missing new metadata as a half-window or a reward model.
 Mode/window/target contracts cannot satisfy each other's preparation-reuse
 requests. Include the scored window and scoring version in summary cache
-identity. Viewing a legacy product keeps its Full scoring definition.
+identity. Viewing a v1/v2 product keeps its Full scoring definition; v3 retains
+its saved Full/Before/After definition.
 
 Save named arrays in a session-local NPZ with `meta` metadata, consistent
 with repository rules. At minimum retain:
@@ -667,8 +693,9 @@ scientific and display invariants before experimental preparation:
 - Trial-i reward target uses recorded `reward`, class 1 rewarded, with manual/
   no-choice exclusions and no shift, correctness substitution, or expectation
   model. Missing labels affect valid fits/scoring as specified in Section 3.
-- New mixed target order is state/action/reward; generalization retains all
-  seven targets. Each target's Before and After fits are separate models.
+- New mixed target order is state/action/reward followed by the five continuous
+  targets; generalization retains all seven targets. Each target's Before and
+  After fits are separate models.
 - Shared target registration preserves the old decoder's omitted-target and
   session-setup-generated defaults; neither silently acquires reward.
 - Reconstruction of outputs from fold-specific weights and PC contributions.
@@ -728,9 +755,10 @@ evaluates offline block generalization, not future-only prediction.
 ## 12. Scope limits
 
 This revision covers same-session regional PC readouts in two fixed modes:
-seven-target correct-rewarded generalization and three-target mixed-outcome
-decoding (state/action/actual reward), each with Full/Before/After matched
-training/scoring and individual choice-window predictions. It does not require
+seven-target correct-rewarded generalization and eight-target mixed-outcome
+decoding (state/action/actual reward plus five continuous task quantities), each
+with Full/Before/After matched training/scoring and individual choice-window
+predictions. It does not require
 continuous intertrial prediction, cross-session models, combined PFC+HPC
 models, direct-unit decoders, arbitrary training-condition/target builders,
 hyperparameter searches, new behavioral-model fits, significance testing,

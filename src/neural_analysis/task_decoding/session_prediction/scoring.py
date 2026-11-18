@@ -11,7 +11,7 @@ from .modeling import RegionPredictions
 from .preparation import PredictionInputs
 
 
-SCORING_VERSION = "trial-mean-performance-v2"
+SCORING_VERSION = "trial-mean-performance-v3"
 SCORING_POPULATIONS = ("all", "training_outcomes", "correct_rewarded", "omission", "incorrect")
 
 
@@ -20,8 +20,9 @@ def trial_metrics(actual: np.ndarray, predictions: np.ndarray, family: str) -> d
 
     Categorical values are binary 0/1 and predictions are class-1 probabilities;
     threshold the trial-mean probability at >=0.5. Return n_trials, accuracy and
-    balanced_accuracy (fractions). Numerical values/predictions use native units;
-    return n_trials, dimensionless r2 and native-unit rmse. Empty/undefined
+    balanced_accuracy (fractions), and brier_score (mean squared probability
+    error, dimensionless [0,1], lower is better). Numerical values/predictions
+    use native units; return n_trials, dimensionless r2 and native-unit rmse. Empty/undefined
     metrics are None; constant/singleton targets still have an RMSE. Raise on
     malformed vectors. No input changes or bin-level independence assumptions.
     """
@@ -37,7 +38,8 @@ def trial_metrics(actual: np.ndarray, predictions: np.ndarray, family: str) -> d
         return {"n_trials": count,
                 "accuracy": float(accuracy_score(actual, classified)) if count else None,
                 "balanced_accuracy": (float(balanced_accuracy_score(actual, classified))
-                                      if np.unique(actual).size == 2 else None)}
+                                      if np.unique(actual).size == 2 else None),
+                "brier_score": float(np.mean((predictions - actual) ** 2)) if count else None}
     if family == "numerical":
         return {"n_trials": count, "r2": regression_r2(actual, predictions),
                 "rmse": float(np.sqrt(np.mean((actual - predictions) ** 2))) if count else None}
@@ -108,8 +110,8 @@ def compute_prediction_performance(
 def _performance_metrics(actual: np.ndarray, predictions: np.ndarray, family: str) -> dict:
     """Return trial metrics plus binary class counts from aligned finite (trial,) vectors.
 
-    Class counts are independent of laterality. Accuracy/R2 are dimensionless;
-    RMSE retains target units. The public trial_metrics contract is unchanged.
+    Class counts are independent of laterality. Accuracy/R2/Brier are dimensionless;
+    RMSE retains target units. Empty groups retain unavailable metrics.
     """
     metrics = trial_metrics(actual, predictions, family)
     if family == "categorical":
@@ -129,7 +131,7 @@ def _append_performance_records(
     region/split/fold/status scalars. Mutate only the small report lists; metrics
     retain fraction/native units. Neural products are reused across all masks.
     """
-    metric_names = ("accuracy", "balanced_accuracy") if family == "categorical" else ("r2", "rmse")
+    metric_names = ("accuracy", "balanced_accuracy", "brier_score") if family == "categorical" else ("r2", "rmse")
     for population, members in populations.items():
         selected = eligible & members
         identity = {**common, "population": population}

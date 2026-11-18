@@ -365,8 +365,9 @@ portable PCA references and scientific identities. `run_session.py` and
 `run_batch.py` compose preparation; `plotting.py` contains display-only helpers.
 Two fixed modes share the same source PCA and full-table block map:
 `correct_rewarded_generalization` (default seven targets) and
-`mixed_outcome_decoding` (state, action, and current-trial actual reward,
-training on correct-rewarded, correct-omission, and incorrect trials; up to 30
+`mixed_outcome_decoding` (state, action, current-trial actual reward, and the
+same five continuous value/belief/doubt targets as generalization,
+training on correct-rewarded, correct-omission, and incorrect trials; up to 80
 models per window across both regions/five folds). Each preparation selects
 exactly one matched **Training/scoring window**: Full `[-1,+1)`, Before `[-1,0)`,
 or After `[0,+1)` choice-relative seconds. All predict within the full `[-2,+2)`
@@ -377,12 +378,17 @@ to the session or batch runner. Each command prepares one mode/window pair;
 other pairs are explicit separate preparations. All windows reuse matching PCA
 and the same deterministic full-table block folds.
 
-New products use v3/schema 3 and persist explicit training membership and
+New products use v4/schema 3 and persist explicit training membership and
 matched scoring bounds. Original v1/schema-1 and v2/schema-2 Full-window
 products remain read-only displayable with their original contents and bytes;
 v1 is seven-target generalization, while v2 can be seven-target generalization
-or two-target mixed decoding without reward. To display current-trial reward,
-explicitly Prepare the expanded mixed product. There is no automatic rerun.
+or two-target mixed decoding without reward. V3/schema-3 products retain their
+original Full/Before/After windows and seven generalization or three mixed
+targets. To add missing mixed targets, explicitly Prepare predictions for the
+selected window. Compatible PCA is reused; existing products are not rewritten
+or automatically rerun. Both modes require all five continuous source columns;
+missing values use target-specific eligibility, and entirely empty numerical
+columns retain an unavailable target coordinate.
 At fixed C, mixed training changes sample size and regularization relative to
 average loss as well as outcome composition; it is not a controlled comparison
 of composition alone.
@@ -392,7 +398,10 @@ products, averaging probabilities/values over the selected matched window. It
 reports training/held-out, per-fold training/held-out, outcome, and separate
 left/right choice and state/context scores and counts. Reward reports class
 counts from actual recorded labels and mean `P(rewarded)`; prediction thresholds
-do not define those class counts. Single-class groups retain ordinary accuracy
+do not define those class counts. Binary tables show accuracy, balanced accuracy
+and Brier score (mean squared error of trial-mean probabilities against 0/1
+labels, range 0-1, lower is better). Continuous tables retain dimensionless R2
+and native-unit RMSE. Single-class groups retain ordinary accuracy, Brier score
 and counts while balanced accuracy is unavailable. Actual reward is the current
 trial's recorded reward flag. Before predicts eventual recorded reward, not
 subjective expectation; After is post-choice, not necessarily post-delivery.

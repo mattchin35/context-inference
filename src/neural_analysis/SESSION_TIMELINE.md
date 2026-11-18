@@ -579,11 +579,13 @@ on the selected regional session PCs:
   correct-rewarded trials. Binary tracks are **State generalization** and
   **Action generalization**.
 - **Mixed-outcome decoding**: **State decoding**, **Action decoding**, and
-  **Reward decoding**
-  classifiers trained on the union of correct-rewarded, correct-omission, and
-  incorrect trials. Actual reward is the current trial's recorded reward flag
+  **Reward decoding** classifiers, plus ridge readouts for Q-learning relative
+  value, forgetting Q-learning relative value, HMM signed belief, HMM-decay
+  signed belief, and relative doubt. All eight targets train on the union of
+  correct-rewarded, correct-omission, and incorrect trials, using each target's
+  valid labels. Actual reward is the current trial's recorded reward flag
   (`1=rewarded`, `0=unrewarded`); correctness is not a substitute. It fits
-  three targets, up to 30 models across both regions/five folds; generalization
+  eight targets, up to 80 models across both regions/five folds; generalization
   fits up to 70.
 
 Each preparation fits exactly one **Training/scoring window**: **Full**
@@ -653,9 +655,13 @@ State/action use mean left probability; reward uses mean `P(rewarded)`. Apply
 the 0.5 threshold to predictions for accuracy and balanced accuracy. Class 0/1
 counts come from actual target labels (rewarded/unrewarded for reward), not
 thresholded predictions.
-Single-class groups retain ordinary accuracy and counts; balanced accuracy is unavailable.
-Continuous targets show R2 and RMSE in target units. The panel covers the whole
-saved session, independently of pan or visible PCs.
+Binary tables also show **Brier score**: mean squared error between the trial's
+mean probability and its 0/1 actual label. It ranges from 0 to 1; lower is
+better. It is calculated before thresholding, so it retains probability
+uncertainty. Single-class groups retain ordinary accuracy, Brier score and
+counts; balanced accuracy is unavailable. Continuous targets show dimensionless
+R2 and RMSE in target units. The panel covers the whole saved session,
+independently of pan or visible PCs.
 
 Use **Scoring split** to choose training or held-out scores. **Scoring fold**
 offers folds 0-4 for per-fold inspection and, for held-out scores, a pooled view.
@@ -669,8 +675,8 @@ model and count it once per region.
 For laterality, select **Laterality scoring population** and compare left/right
 **Choice** and **State/context** rows separately for PFC and HPC. Counts and
 left-minus-right differences accompany the scores. A positive accuracy
-difference is in percentage points and favors left; a positive RMSE difference
-means larger left errors. Choice and context can disagree on incorrect trials.
+difference is in percentage points and favors left; a positive RMSE or Brier
+score difference means larger left errors. Choice and context can disagree on incorrect trials.
 Side differences can also reflect behavior/outcome composition, so they alone
 do not identify a hemisphere effect.
 
@@ -679,7 +685,7 @@ accuracy, constant/singleton targets still have RMSE, and zero-trial groups
 are not assigned zero performance. Missing actual targets, invalid baseline,
 missing blocks and unavailable models are excluded from scoring; missing side
 labels affect only that split. This does not remove otherwise usable timeline
-predictions. Performance is cached from v1/v2/v3 products and saved
+predictions. Performance is cached from v1-v4 products and saved
 coefficients/PCA, without refitting, raw inputs, new files or schema migration.
 
 The Analysis and Training/scoring window selectors filter saved runs and targets.
@@ -736,13 +742,18 @@ Saved display then needs only metadata and these products, even without raw
 behavior/spikes or the original machine paths. Current preparation widgets do
 not relabel a saved result as another resolution or basis. Viewing and target,
 event, PC or navigation changes do not refit or write analysis products.
-New products use `condition-session-prediction-v3` / schema 3 and explicitly
+New products use `condition-session-prediction-v4` / schema 3 and explicitly
 record mode, ordered targets, training membership, and matched training/scoring
 window bounds. Original v1/schema-1 and v2/schema-2 Full-window products remain
 selectable read-only. V1 has seven generalization targets; v2 retains its
-seven-target generalization or two-target mixed set. Legacy mixed products have
-no reward target. To view actual reward, explicitly Prepare the expanded
-product; legacy products are not automatically rerun. Loading old products
+seven-target generalization or two-target mixed set. V3/schema-3 products
+retain their original windows and seven-target generalization or three-target
+mixed set (state/action/reward). To add missing targets, explicitly **Prepare
+predictions** in Mixed-outcome decoding for the selected window; this reuses
+compatible PCA and creates a new product. Legacy products are not automatically
+rerun. Both modes require all five continuous source columns in the augmented
+table; missing row values affect only that target, and an entirely empty
+numerical column remains an unavailable target. Loading old products
 preserves their bytes and identity without raw inputs or migration.
 
 Fine-resolution viewport filtering limits contributions and browser payloads;

@@ -166,7 +166,7 @@ def save_prediction_result(
     validate_prediction_result(inputs, regions)
     _validate_mode_metadata(meta, inputs)
     if (meta.get("analysis_version"), meta.get("schema_version")) != (ANALYSIS_VERSION, SCHEMA_VERSION):
-        raise ValueError("New prediction products require v3/schema-3 metadata")
+        raise ValueError("New prediction products require v4/schema-3 metadata")
     arrays = {name: getattr(inputs, name) for name in SHARED_ARRAYS}
     arrays["training_condition_mask"] = inputs.training_condition_mask
     arrays.update({"choices": inputs.timeline.choices.to_records(index=False),
@@ -240,7 +240,9 @@ def load_prediction_result(path: Path | str, *, session_root: Path | str | None 
                 raise ValueError("Regional prediction choice map differs from PCA source")
             regions[role] = RegionPredictions(**{field.name: archive[prefix + field.name]
                                                  for field in fields(RegionPredictions)})
-    validate_prediction_result(inputs, regions)
+    validate_prediction_result(
+        inputs, regions, expected_target_names=tuple(meta["effective_config"]["target_names"]),
+    )
     _validate_mode_metadata(meta, inputs)
     return SessionPredictions(inputs, regions, meta)
 
@@ -280,17 +282,23 @@ def find_saved_prediction(session_root: Path | str, identity: str) -> Path | Non
     return None
 
 
-def validate_prediction_result(inputs: PredictionInputs, regions: dict[str, RegionPredictions]) -> None:
+def validate_prediction_result(
+    inputs: PredictionInputs, regions: dict[str, RegionPredictions], *,
+    expected_target_names: tuple[str, ...] | None = None,
+) -> None:
     """Validate saved N/W/B/T/F/K shapes, units-related conventions and block exclusion.
 
     Inputs and region records follow their documented contracts. Return None or
     raise ValueError before publication/display. No array is changed or refitted.
+    expected_target_names is an ordered tuple of dimensionless target IDs, or
+    None for the current mode's target set. Loading supplies historical IDs only
+    after _normalize_mode_metadata has verified the saved version contract.
     """
     targets = inputs.target_names
-    current_targets = target_names_for_mode(inputs.analysis_mode)
-    legacy_mixed = inputs.analysis_mode == MIXED_MODE and targets == TARGET_NAMES[:2] and inputs.training_window == "full"
+    if expected_target_names is None:
+        expected_target_names = target_names_for_mode(inputs.analysis_mode)
     n, t, b = len(inputs.timeline.choices), len(targets), len(inputs.bin_edges_s) - 1
-    if (targets != current_targets and not legacy_mixed) or inputs.condition_names != CONDITION_IDENTIFIERS:
+    if targets != expected_target_names or inputs.condition_names != CONDITION_IDENTIFIERS:
         raise ValueError("Noncanonical target or condition order")
     families = tuple(TARGET_DEFINITION_BY_IDENTIFIER[name].family for name in targets)
     if inputs.target_families != families:
@@ -330,13 +338,14 @@ def validate_prediction_result(inputs: PredictionInputs, regions: dict[str, Regi
 
 # Validation helpers keep file loading separate from scientific array checks.
 def _normalize_mode_metadata(meta: dict) -> str:
-    """Resolve the small v1/v2/v3 contract; normalize legacy Full fields in memory.
+    """Resolve the v1-v4 contract; normalize legacy Full fields in memory.
 
     meta is a saved provenance dictionary. Return its canonical mode string;
     legacy identity/version remain unchanged and no source files are accessed.
     """
     pair = (meta.get("analysis_version"), meta.get("schema_version"))
     if pair not in (("condition-session-prediction-v1", 1), ("condition-session-prediction-v2", 2),
+                    ("condition-session-prediction-v3", 3),
                     (ANALYSIS_VERSION, SCHEMA_VERSION)):
         raise ValueError("Unsupported session prediction result version/schema pair")
     config = meta["effective_config"]
@@ -354,6 +363,9 @@ def _normalize_mode_metadata(meta: dict) -> str:
         config.setdefault("scoring_window_s", [-1.0, 1.0])
         if config["training_window"] != "full":
             raise ValueError("Legacy supervised window must be Full")
+    elif pair[0] == "condition-session-prediction-v3" and mode == MIXED_MODE:
+        # The storage layout is unchanged; v3 mixed fits contain only these classifiers.
+        targets = (*TARGET_NAMES[:2], "current_reward")
     bounds = list(training_window_bounds(config.get("training_window")))
     if (config.get("target_names") != list(targets)
             or config.get("training_condition_names") != list(training_conditions_for_mode(mode))):
