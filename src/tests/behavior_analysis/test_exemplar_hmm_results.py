@@ -3,7 +3,9 @@
 from dataclasses import replace
 import importlib
 import json
+import os
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -223,6 +225,89 @@ def test_preserve_exports_reuses_legacy_archive_without_renaming_it(results_modu
     results_module.preserve_current_exports(tmp_path, "session")
     assert legacy.read_bytes() == content and current.read_bytes() == content
     assert list(legacy.parent.iterdir()) == [legacy]
+
+
+def _interrupt_archive_write(path: Path, content: bytes) -> int:
+    """Write a prefix of scalar bytes to a Path, then raise a simulated I/O error."""
+    with path.open("wb") as output:
+        output.write(content[:5])
+    raise OSError("simulated interrupted archive write")
+
+
+def test_preserve_exports_publishes_complete_bytes_atomically(results_module, tmp_path, monkeypatch):
+    """Publish one complete byte snapshot from a sibling temporary Path; retain source."""
+    from hashlib import sha256
+
+    source = tmp_path / "session_augmented_trials.csv"
+    content = b"cur_block,action\n0,1\n"
+    source.write_bytes(content)
+    publish = Mock(wraps=os.replace)
+    monkeypatch.setattr(os, "replace", publish)
+
+    results_module.preserve_current_exports(tmp_path, "session")
+
+    destination = tmp_path / "exemplar_hmm" / "archives" / sha256(content).hexdigest() / "session_augmented_trials.archived.csv"
+    publish.assert_called_once()
+    temporary, target = map(Path, publish.call_args.args)
+    assert target == destination and temporary.parent == destination.parent
+    assert temporary != destination and not temporary.exists()
+    assert destination.read_bytes() == content and source.read_bytes() == content
+    assert list(destination.parent.iterdir()) == [destination]
+    results_module.preserve_current_exports(tmp_path, "session")
+    publish.assert_called_once()
+
+
+def test_preserve_exports_write_failure_leaves_no_partial_archive(results_module, tmp_path, monkeypatch):
+    """An interrupted byte write must leave source unchanged and no archive/temp file."""
+    source = tmp_path / "session_augmented_trials.csv"
+    content = b"cur_block,action\n0,1\n"
+    source.write_bytes(content)
+    monkeypatch.setattr(Path, "write_bytes", _interrupt_archive_write)
+
+    with pytest.raises(OSError, match="simulated interrupted archive write"):
+        results_module.preserve_current_exports(tmp_path, "session")
+
+    assert source.read_bytes() == content
+    assert not [path for path in (tmp_path / "exemplar_hmm").rglob("*") if path.is_file()]
+
+
+def test_preserve_exports_publication_failure_cleans_temporary_file(results_module, tmp_path, monkeypatch):
+    """Failed publication propagates its I/O error without changing source bytes."""
+    source = tmp_path / "session_augmented_trials.csv"
+    content = b"cur_block,action\n0,1\n"
+    source.write_bytes(content)
+    publish = Mock(side_effect=OSError("simulated publication failure"))
+    monkeypatch.setattr(os, "replace", publish)
+
+    with pytest.raises(OSError, match="simulated publication failure"):
+        results_module.preserve_current_exports(tmp_path, "session")
+
+    publish.assert_called_once()
+    assert source.read_bytes() == content
+    assert not [path for path in (tmp_path / "exemplar_hmm").rglob("*") if path.is_file()]
+
+
+@pytest.mark.parametrize("archived_content", [b"cur_block,act", b"unrelated bytes\n"])
+@pytest.mark.parametrize("legacy_name", [False, True])
+def test_preserve_exports_rejects_mismatched_archives_unchanged(
+    results_module, tmp_path, archived_content, legacy_name,
+):
+    """Truncated or unrelated archive bytes raise; both Path contents stay unchanged."""
+    from hashlib import sha256
+
+    source = tmp_path / "session_augmented_trials.csv"
+    content = b"cur_block,action\n0,1\n"
+    source.write_bytes(content)
+    directory = tmp_path / "exemplar_hmm" / "archives" / sha256(content).hexdigest()
+    directory.mkdir(parents=True)
+    archive = directory / (source.name if legacy_name else "session_augmented_trials.archived.csv")
+    archive.write_bytes(archived_content)
+
+    with pytest.raises(ValueError, match="Archived export content does not match its digest"):
+        results_module.preserve_current_exports(tmp_path, "session")
+
+    assert source.read_bytes() == content and archive.read_bytes() == archived_content
+    assert list(directory.iterdir()) == [archive]
 
 
 @pytest.mark.parametrize("empty", [False, True])
