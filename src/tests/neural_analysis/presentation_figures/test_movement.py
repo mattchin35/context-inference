@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.neural_analysis.population_decoding.targets import build_population_targets
 from src.neural_analysis.presentation_figures.movement import (
     bin_speed_magnitude,
     compute_movement,
@@ -49,6 +50,9 @@ def movement_inputs(synthetic_presentation_session):
     trials["start_time"] = trial_times - 4.
     trials["choice_time"] = trial_times
     trials.loc[rows, ["action", "reward"]] = [1, 1]
+    targets = build_population_targets(
+        trials.state_int, trials.action, trials.reward, trials.experimenter_reward_given,
+    )
     choices = prepared.choices.copy()
     choices["choice_time"] = trial_times[choices.row_position]
     events = pd.DataFrame({
@@ -59,7 +63,7 @@ def movement_inputs(synthetic_presentation_session):
     activity = np.broadcast_to(np.arange(40)[None, :, None] % 2, (len(rows), 40, 1)).copy()
     window = replace(prepared.windows[PAIRED_WINDOW_S, 100],
                      row_positions=rows, bin_edges_s=edges, counts={"PFC": activity, "HPC": activity})
-    prepared = replace(prepared, trials=trials, choices=choices, events=events,
+    prepared = replace(prepared, trials=trials, choices=choices, events=events, targets=targets,
                        unit_ids={"PFC": ("B:0",), "HPC": ("A:0",)},
                        windows={(PAIRED_WINDOW_S, 100): window})
     starts = trial_times[rows, None] + edges[:-1]
