@@ -26,7 +26,7 @@ def test_cohort_uses_completed_sessions_and_full_roster_for_medians(tmp_path):
         results.save_result(directory / "regional.npz", {"scores": scores}, meta)
         results.save_result(directory / "prediction.npz", {"curves": curves}, meta)
         results.save_result(directory / "replays.npz", {"episodes": pd.DataFrame(
-            {"motif": ["ideal_transition"], "status": ["ok" if number in (0, 3) else "unavailable"]})}, meta)
+            {"motif": ["ideal_transition"], "status": ["available" if number in (0, 3) else "unavailable"]})}, meta)
         manifest = results.complete_run(directory, kind="session", identity=str(number), session_ids=[session_id],
                                         archives={s: s + ".npz" for s in ("regional", "prediction", "replays")})
         reports.append({"session_id": session_id, "manifest": str(manifest), "status": "computed"})
