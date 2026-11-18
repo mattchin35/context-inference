@@ -105,13 +105,18 @@ def test_saved_perseveration_decay_and_graded_readout_are_used(tmp_path):
     """Path fixture resolves a saved decay into weighted scores[T,1] and cache metadata."""
     import src.main as main
     from src.behavior_analysis import trial_features
+    from src.behavior_analysis.trial_policy_models import resolve_trial_policy_candidates
     from src.behavior_analysis.trial_policy_results import load_trial_policy_results
 
     source = source_session(tmp_path)
     (source.session.processed_data_path / "trial_feature_params.json").write_text(
         json.dumps({"perseveration_decay": .6}), encoding="ascii")
+    params, parameter_source, _ = main._resolve_trial_policy_feature_params(
+        source.session, resolve_trial_policy_candidates(("perseveration",)), None)
+    assert "trial_feature_params.json" in parameter_source
     _, comparison, path = main.run_dynamax_trial_analysis(
-        source.augmented_trial_df, source.session, model_ids=("perseveration",), plot=False)
+        source.augmented_trial_df, source.session, feature_params=params,
+        model_ids=("perseveration",), plot=False)
     expected = trial_features.perseveration_regressor(source.augmented_trial_df.action.to_numpy(), decay=.6)
     np.testing.assert_array_equal(comparison.policy_scores[:, 0], expected)
     np.testing.assert_allclose(comparison.p_right[:, 0], 1 / (1 + np.exp(expected * np.log(9))))

@@ -1,6 +1,17 @@
 # Codex specification: trialwise comparison of fixed behavioral policies
 
-**Current defaults (2026-11-16, v7):** FQL, Bayesian HMM, WSLS, Q-learning,
+**Current defaults (2026-11-17, v8):** FQL, Bayesian HMM, WSLS, Q-learning,
+ideal observer, weighted perseveration, win-switch/lose-stay, and home-referenced
+expectancy doubt. `perseveration` replaces default `immediate_persistence`, which
+remains selectable. It reuses the window feature's exponentially weighted
+choice-history regressor with `perseveration_decay=.25` per eligible choice.
+Excluded attempts freeze history; missing rewards still allow choice updates.
+Each retained session/crop starts neutral. The fixed graded temperature is
+`1/ln(9)`, so `P(Left)=expit(ln(9)*score)`: zero gives .5 and scores +/-1 give
+.9/.1. This is an ordinary logistic rule with no fitted scale or clipping.
+Home E+D parameters and all other policy readouts remain unchanged.
+
+**Previous defaults (2026-11-16, v7):** FQL, Bayesian HMM, WSLS, Q-learning,
 ideal observer, immediate persistence, win-switch/lose-stay, and home-referenced
 expectancy doubt, in that order. `win_switch_lose_stay` replaces probe-doubt;
 standalone `reward_decay_hmm` also leaves the defaults. Both displaced models

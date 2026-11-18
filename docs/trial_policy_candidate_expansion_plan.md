@@ -4,6 +4,60 @@ Status: implemented and validated on 2026-11-08 after user approval. This extend
 first round in `trial_dynamax_hmm_implementation_plan.md` and follows the causal
 history and probability contracts in `trial_dynamax_hmm_spec.md`.
 
+2026-11-17 perseveration revision (v8): the user approved replacing default
+`immediate_persistence` with `perseveration`, retaining the former as an optional
+candidate. This aligns the choice-history computation with the window plots:
+reuse `trial_features.perseveration_regressor` on eligible observed choices, then
+scatter its pre-choice signed scores back to the retained trial rows. Default
+decay is .25 per eligible choice. Excluded attempts freeze history without decay
+advancement; missing rewards still update this choice-only model. Fresh source
+sessions and crops initialize neutral.
+
+The approved choice rule is ordinary logistic with fixed temperature `1/ln(9)`
+(approximately .455), giving 90% preference at a maximum score of one and weaker
+preferences approaching 50/50. This differs from the earlier in-memory diagnostic
+that used fixed 90/10 for every nonzero score. No parameters are fitted. Home E+D
+keeps threshold 2.5, scale .5, doubt rate .5, and its existing weights/readout.
+
+Only the candidate adapter/registry, provenance/version/warning text, and plot
+label/color change. Existing main defaults inherit the new tuple; main.py and
+window analysis code are not edited. The replay reuses the existing linear-time
+helper, the HMM still has eight states, and there are no new dependencies.
+
+Tests were written, confirmed failing, and committed first as `53e44a6`:
+hand-calculated weighted values, shared window-feature parity, graded endpoint
+and weak-preference probabilities, exclusions and missing-reward updates,
+causality/crops, decay validation and zero-decay uniform history, parameter/cache
+identity, historical immediate-persistence subsets, distinct labels/colors,
+saved source decay, and single/multisession cache and threaded replay paths.
+
+Validation passed: 308 policy/model/plotting tests and 20 main trial-workflow
+tests (328 distinct tests). A further focused results/perseveration check passed
+after the metadata-unit update. One new workflow test was corrected to resolve
+saved parameters explicitly before calling the existing runner, whose required
+`feature_params` argument and public interface remain unchanged.
+
+Synthetic validation passed on the deterministic 140-trial history, including
+exclusions and missing reward. CT016 2026-05-29 then passed with all 858 retained
+choices eligible. Weighted scores match the saved window regressor to CSV
+rounding (maximum absolute difference 1.11e-16), with identical directions.
+The seven retained models' scores, probabilities, likelihoods, and availability
+are exactly unchanged from v7; Home E+D's effective parameters are unchanged.
+Eight prior numerical artifacts, the prior current CSV, non-policy columns,
+block output, and parameter file were preserved. Existing main.py user edits
+were checked unchanged; no main source edits or experimental batch were made.
+
+The inspected v8 PNG and validation report/driver/main/batch/log snapshots are in
+this directory (UTC timestamp, November 17 local date):
+
+`/home/matt/Documents/EXPERIMENTS/contextProjectData/CT016/CT016_20260529_latent_inference/figures/trial_policy_hmm/2026-11-18_04-12-58_220025_UTC/`
+
+Largest-posterior membership is 56.4% perseveration, 7.1% win-switch, and 20.7%
+Home E+D. These conditional retrospective assignments differ from the earlier
+fixed-90/10 sensitivity calculation because the approved production readout is
+graded. They are not independent strategy-validation statistics. User inspection
+precedes any broader experimental run.
+
 2026-11-16 default revision (v7): the user approved replacing default
 `probe_persistence_doubt` with `win_switch_lose_stay` and removing standalone
 `reward_decay_hmm` from the defaults. Both displaced candidates remain selectable;

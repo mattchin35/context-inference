@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 DEFAULT_MODEL_IDS = (
     "forgetting_q_learning", "bayesian_hmm", "win_stay_lose_switch",
-    "q_learning", "ideal_observer", "immediate_persistence",
+    "q_learning", "ideal_observer", "perseveration",
     "win_switch_lose_stay", "home_referenced_expectancy_doubt",
 )
 FLAG_COLUMN_NAMES = ("give_reward", "experimenter_reward_given")
@@ -47,7 +47,7 @@ class PreparedTrialHistory:
     actions/rewards/manual_reward_flags are float64[T], dimensionless binary
     codes with NaN for missing/unknown values; actions use 0=Right, 1=Left.
     adapter_skip_flags and eligibility arrays are bool[T]. history_update_valid
-    denotes a usable choice/outcome pair; choice-only persistence instead uses
+    denotes a usable choice/outcome pair; choice-only policies instead use
     comparison_valid, including choices with missing rewards. Reasons and original
     display identifiers are Unicode[T]; row_position is int64[T], zero-based.
     metadata is a plain provenance dictionary including schema-bearing digest.
@@ -77,7 +77,7 @@ class TrialPolicyCandidate:
     parameter_names records TaskParams attributes used by the adapter; labels
     and indifference_rule are strings for plain saved provenance. The default
     history_update_rule requires an observed choice/outcome pair; choice-only
-    persistence records observed_choice instead and does not require reward.
+    policies record observed_choice instead and do not require reward.
     choice_rule is fixed_error or logistic; choice_temperature is a positive
     fixed scale in this adapter's score units for logistic choices, else None.
     """
@@ -257,6 +257,9 @@ def resolve_trial_policy_candidates(
                              choice_rule="logistic", choice_temperature=.40),
         TrialPolicyCandidate("immediate_persistence", "Immediate persistence", _replay_immediate_persistence,
                              history_update_rule="observed_choice"),
+        TrialPolicyCandidate("perseveration", "Weighted perseveration", _replay_perseveration,
+                             ("perseveration_decay",), history_update_rule="observed_choice",
+                             choice_rule="logistic", choice_temperature=1 / np.log(9.)),
         TrialPolicyCandidate("probe_persistence_doubt", "Probe persistence doubt", _replay_probe_doubt,
                              ("probe_doubt_persistence_weight", "probe_doubt_probe_weight",
                               "probe_doubt_doubt_weight", "probe_doubt_lambda"),
@@ -311,6 +314,8 @@ def effective_trial_policy_parameters(
                 parameters["omission_lam"] = _finite_parameter(feature_params, "omission_lam", 0, np.inf)
                 if parameters["omission_lam"] == 0:
                     raise ValueError("omission_lam must be strictly positive")
+        elif candidate.model_id == "perseveration":
+            parameters = {"decay": _finite_parameter(feature_params, "perseveration_decay", 0, np.inf)}
         elif candidate.model_id == "probe_persistence_doubt":
             parameters = asdict(_probe_doubt_parameters(feature_params))
         elif candidate.model_id == "home_referenced_expectancy_doubt":
@@ -339,7 +344,7 @@ def effective_trial_policy_choice_parameters(
     if not np.isfinite(error) or not 0 < error < .5 or not 0 < 1 - error < 1:
         raise ValueError("error probability and its complement must be representable inside (0,1), error < .5")
     overrides = {} if temperatures is None else dict(temperatures)
-    selectable_ids = (*DEFAULT_MODEL_IDS, "reward_decay_hmm", "probe_persistence_doubt")
+    selectable_ids = (*DEFAULT_MODEL_IDS, "reward_decay_hmm", "probe_persistence_doubt", "immediate_persistence")
     known_graded = {candidate.model_id for candidate in (*resolve_trial_policy_candidates(selectable_ids), *candidates)
                     if candidate.choice_rule == "logistic"}
     unknown = set(overrides) - known_graded
@@ -547,6 +552,22 @@ def _replay_immediate_persistence(history: PreparedTrialHistory, params: "TaskPa
     return _feature_arrays(trial_features.immediate_persistence_regressor(
         actions=history.actions, experimenter_reward_given=history.adapter_skip_flags,
     ), history.adapter_skip_flags)
+
+
+def _replay_perseveration(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
+    """Replay weighted eligible choices[T]; return unitless left-positive float/bool[T].
+
+    Reuse the window feature's regressor on the eligible-choice sequence, then
+    scatter predictions back to retained trial rows. Excluded attempts neither
+    update memory nor advance decay. Missing rewards do not block choice updates.
+    Each session/crop initializes at zero; decay is inverse eligible choices.
+    """
+    parameters = effective_trial_policy_parameters(resolve_trial_policy_candidates(("perseveration",)), params)
+    available = history.comparison_valid
+    scores = np.full(len(history.actions), np.nan, dtype=float)
+    scores[available] = trial_features.perseveration_regressor(
+        history.actions[available], **parameters["perseveration"])
+    return _feature_arrays(scores, history.adapter_skip_flags)
 
 
 def _replay_q_learning(history: PreparedTrialHistory, params: "TaskParams") -> tuple[np.ndarray, np.ndarray]:
