@@ -628,7 +628,8 @@ def plot_expectant_switching_for_session(
     Returns
     -------
     dict[str, pathlib.Path]
-        Paths for the legacy and candidate value and diagnostic plots.
+        Paths for legacy/candidate plots and the additional Win-switch/Home
+        diagnostic. Existing filenames and keys remain unchanged.
     """
     plot_paths = {}
     if include_legacy:
@@ -674,7 +675,105 @@ def plot_expectant_switching_for_session(
             "candidate_diagnostic_plot": candidate_diagnostic_path,
         }
     )
+    additional_paths = save_and_plot_win_switch_home_for_session(
+        session, augmented_trial_df, feature_parameters=params,
+    )
+    plot_paths["win_switch_home_diagnostic_plot"] = additional_paths["plot"]
     return plot_paths
+
+
+def save_and_plot_win_switch_home_for_session(
+    session: Session,
+    trial_df: pd.DataFrame | None = None,
+    *, feature_parameters: object | None = None,
+    rerun: bool = False,
+) -> dict[str, Path]:
+    """Export the saved-only diagnostic without replacing source session files.
+
+    session supplies processed_data_path, figure_path and sess_id_full. Optional
+    trial_df is (N, columns), chronological, with actions 0=right/1=left and
+    saved Home/Ideal scores; otherwise the augmented CSV is read. Parameters
+    are provenance only (dict/dataclass or saved JSON), never model defaults.
+    rerun requests a fresh dated output. Returns results NPZ and plot PNG Paths.
+    Original rows, units and source files are preserved. Cache identity includes
+    input values, available parameter provenance, analysis version and sources.
+    """
+    from datetime import datetime
+    import hashlib
+    import shutil
+    import time
+    from src.behavior_analysis import win_switch_home
+    from src.behavior_analysis.performance_plots import plot_win_switch_home_diagnostics
+
+    started = time.perf_counter()
+    processed = Path(session.processed_data_path)
+    source_csv = processed / f"{session.sess_id_full}_augmented_trials.csv"
+    if trial_df is None:
+        trial_df = pd.read_csv(source_csv, na_filter=False)
+        source = str(source_csv)
+    else:
+        source = "in-memory augmented trial table"
+    parameters = _choice_window_feature_parameters(processed, feature_parameters)
+    saved_parameter_files = {}
+    for name in ("trial_feature_params.json", "candidate_expectant_model_params.json"):
+        path = processed / name
+        if path.exists():
+            saved_parameter_files[name] = json.loads(path.read_text())
+    sources = [Path(__file__), Path(win_switch_home.__file__)]
+    sources += [Path(win_switch_home.__file__).with_name(name) for name in (
+        "performance_plots.py", "choice_window_analysis.py", "session_analysis.py",
+        "trial_features.py", "project_utils.py",
+    )]
+    source_digests = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
+    digest = hashlib.sha256(pd.util.hash_pandas_object(trial_df, index=True).values.tobytes())
+    digest.update(json.dumps({"session_id": session.sess_id_full,
+                             "columns": list(trial_df.columns), "parameters": parameters,
+                             "saved_parameter_files": saved_parameter_files,
+                             "source_digests": source_digests}, sort_keys=True).encode())
+    input_digest = digest.hexdigest()
+    relative = Path("win_switch_home_diagnostic") / win_switch_home.ANALYSIS_VERSION / input_digest
+    candidates = sorted((processed / relative).glob("*/results.npz"))
+    if candidates and not rerun:
+        result_path = candidates[-1]
+        prepared, spans, meta = win_switch_home.load_win_switch_home_data(result_path)
+        timestamp = result_path.parent.name
+    else:
+        # Validate and compute before creating output directories.
+        prepared, spans, provenance = win_switch_home.prepare_win_switch_home_data(trial_df)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+        result_path = processed / relative / timestamp / "results.npz"
+        meta = {"generator": "main.save_and_plot_win_switch_home_for_session",
+                "analysis_version": win_switch_home.ANALYSIS_VERSION,
+                "session_id": session.sess_id_full, "source": source,
+                "input_digest": input_digest, "source_digests": source_digests,
+                "parameters": parameters, "saved_parameter_files": saved_parameter_files,
+                "preparation": provenance, "random_seed": None,
+                "units": "unitless left-positive scores; agreement fraction; task reward units",
+                "axes": "original chronological trial rows; block spans in positional trial units"}
+        result_path.parent.mkdir(parents=True)
+        win_switch_home.save_win_switch_home_data(result_path, prepared, spans, meta)
+    figure_directory = Path(session.figure_path) / relative / timestamp
+    figure_path = figure_directory / f"{session.sess_id_full}_win_switch_home_diagnostic.png"
+    if not figure_path.exists():
+        figure_directory.mkdir(parents=True, exist_ok=True)
+        # Rendering consumes the saved plotting dataset, including cached block spans.
+        prepared, spans, meta = win_switch_home.load_win_switch_home_data(result_path)
+        plot_win_switch_home_diagnostics(prepared, figure_directory, session.sess_id_full, block_spans=spans)
+        (figure_directory / "metadata.json").write_text(json.dumps(meta, indent=2))
+        (figure_directory / "summary.md").write_text(
+            f"# Win-switch and Home E+D diagnostic\n\nSession: {session.sess_id_full}\n\n"
+            "Goal: compare saved Win-switch, Home E+D and Ideal predictions and block agreement.\n"
+            "Scripts: main.py (single-session entry; no batch run), win_switch_home.py, performance_plots.py.\n"
+            "Raw scores have different scales; no statistical tests or model fitting were performed.\n"
+        )
+        for path in sources:
+            shutil.copy2(path, figure_directory / path.name)
+        (figure_directory / "run.log").write_text(
+            f"session={session.sess_id_full}\nsource={source}\nresults={result_path}\n"
+            f"parameters={json.dumps(parameters)}\ninput_digest={input_digest}\n"
+            f"warnings=none\nelapsed_seconds={time.perf_counter() - started:.3f}\n"
+        )
+    return {"results": result_path, "plot": figure_path}
 
 
 def save_and_plot_expectant_model_selectivity_for_session(
@@ -5847,6 +5946,26 @@ def main_mouse_batch():
     )
 
 
+def main_mouse_win_switch_home_diagnostic() -> None:
+    """Export one saved-session diagnostic using the quick-edit settings below.
+
+    No inputs; returns None after printing the PNG path. Resolves exactly one
+    saved session for the mouse/date, without raw preprocessing or model fitting.
+    Trial axes and scores retain their recorded units and signed conventions.
+    """
+    # Quick-edit settings for saved behavior-only or neural sessions.
+    data_root = Path("/home/matt/Documents/EXPERIMENTS/contextProjectData")
+    mouse = "CT016"
+    date = "2026-05-29"
+
+    session = find_saved_session_by_date(
+        mouse=mouse, date=date, session_data_root=data_root / mouse,
+        multi_session_save_path=data_root / mouse / "cross_session_analysis",
+    )
+    paths = save_and_plot_win_switch_home_for_session(session)
+    print(f"Saved Win-switch/Home diagnostic: {paths['plot']}")
+
+
 def main_cross_mouse_choice_window_agreement() -> None:
     """Run saved-only cross-mouse Ideal curves using the quick-edit settings below.
 
@@ -5979,3 +6098,4 @@ if __name__ == '__main__':
     # main_cross_mouse_metrics()
 
     # main_mouse_expectant_model_refresh()
+    # main_mouse_win_switch_home_diagnostic()

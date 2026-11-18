@@ -495,35 +495,99 @@ def plot_candidate_expectant_switching_diagnostics(
     pathlib.Path
         Saved opaque-white PNG path.
     """
-    required_columns = {
-        "action",
-        "reward",
-        "cur_block",
-        "probe_persistence_doubt_value",
-        "probe_persistence_doubt_previous_choice",
-        "probe_persistence_doubt_reward_probe",
-        "probe_persistence_doubt_doubt_choice",
-        "home_referenced_expectancy_doubt_value",
-        "observer_value",
-        "home_referenced_expectancy_doubt_expectancy_choice",
-        "home_referenced_expectancy_doubt_doubt_choice",
-        "home_referenced_expectancy_doubt_reward_count",
-        "home_referenced_expectancy_doubt_expectancy_strength",
-    }
+    return _plot_home_candidate_diagnostics(
+        trial_df, plot_path, sess_id_full,
+        prepare_candidate_expectant_block_agreement_spans(trial_df),
+        (("probe_persistence_doubt_value", "Probe+P+D"),
+         ("home_referenced_expectancy_doubt_value", "Home E+D"), ("observer_value", "Ideal")),
+        (("probe_persistence_doubt_mouse_agreement", "Probe+P+D"),
+         ("home_referenced_expectancy_doubt_mouse_agreement", "Home E+D"),
+         ("observer_mouse_agreement", "Ideal")),
+        {
+            "probe_persistence_doubt_previous_choice": ("Probe-model persistence", "#111111"),
+            "probe_persistence_doubt_reward_probe": ("Reward probe", "#0072B2"),
+            "probe_persistence_doubt_doubt_choice": ("Probe-model doubt", "#56B4E9"),
+            "home_referenced_expectancy_doubt_expectancy_choice": ("Home expectancy", "#D55E00"),
+            "home_referenced_expectancy_doubt_doubt_choice": ("Home-model doubt", "#CC79A7"),
+        },
+        "Candidate expectant-switching diagnostics", "candidate_expectant_switching",
+    )
+
+
+def prepare_win_switch_home_block_agreement_spans(trial_df: pd.DataFrame) -> pd.DataFrame:
+    """Map (N, columns) prepared trials to B contiguous block agreement spans.
+
+    Input scores are signed left-positive; actions use 0=right/1=left. Returns
+    original positional trial coordinates and unitless agreement fractions,
+    using shared exclusions and full-history initial-right/repeat-last ties.
+    """
+    return _prepare_model_block_agreement_spans(trial_df, {
+        "win_switch_lose_stay_mouse_agreement": "win_switch_lose_stay_regressor",
+        "home_referenced_expectancy_doubt_mouse_agreement": "home_referenced_expectancy_doubt_value",
+        "observer_mouse_agreement": "observer_value",
+    })
+
+
+def plot_win_switch_home_diagnostics(
+    trial_df: pd.DataFrame, plot_path: Path, sess_id_full: str,
+    *, block_spans: pd.DataFrame | None = None,
+) -> Path:
+    """Save light four-panel Win-switch/Home/Ideal PNG and return its Path.
+
+    Input is (N, columns) chronological trials with action 0=right/1=left,
+    reward, block, Home component states, Ideal and WSLS or prepared Win-switch.
+    Scores are unitless left-positive; optional spans are B rows from the
+    companion span function aligned to these same N rows. With saved spans,
+    prepared Win-switch values are used directly. No input mutation occurs.
+    """
+    if block_spans is None:
+        from .win_switch_home import prepare_win_switch_home_data
+        trial_df, block_spans, _ = prepare_win_switch_home_data(trial_df)
+    return _plot_home_candidate_diagnostics(
+        trial_df, plot_path, sess_id_full, block_spans,
+        (("win_switch_lose_stay_regressor", "Win-switch/lose-stay"),
+         ("home_referenced_expectancy_doubt_value", "Home E+D"), ("observer_value", "Ideal")),
+        (("win_switch_lose_stay_mouse_agreement", "Win-switch/lose-stay"),
+         ("home_referenced_expectancy_doubt_mouse_agreement", "Home E+D"),
+         ("observer_mouse_agreement", "Ideal")),
+        {"home_referenced_expectancy_doubt_expectancy_choice": ("Home expectancy", "#D55E00"),
+         "home_referenced_expectancy_doubt_doubt_choice": ("Home-model doubt", "#CC79A7")},
+        "Win-switch and Home E+D", "win_switch_home_diagnostic",
+        " Raw scores have different scales; they are not calibrated confidence.",
+        figure_size=(24, 14), value_label="Choice / score",
+    )
+
+
+def _plot_home_candidate_diagnostics(
+    trial_df: pd.DataFrame, plot_path: Path, sess_id_full: str, block_spans: pd.DataFrame,
+    model_specs: tuple[tuple[str, str], ...], agreement_specs: tuple[tuple[str, str], ...],
+    component_styles: dict[str, tuple[str, str]], title: str, output_name: str,
+    caption: str = "",
+    *, figure_size: tuple[float, float] = (24, 10),
+    value_label: str = "Choice / context / model value",
+) -> Path:
+    """Render the shared four-panel Home-state diagnostic, returning PNG Path.
+
+    Trials are (N, columns), block_spans are B rows in original positional trial
+    units. Model/component specs map signed unitless columns to labels/colors;
+    agreement specs identify unitless fractions. Strings label the title,
+    filename suffix and caption. figure_size is (width, height) in inches;
+    value_label labels the first y axis. Inputs are unchanged; figure is saved.
+    """
+    required_columns = {"action", "reward", "cur_block", *[column for column, _ in model_specs],
+                        *component_styles, "home_referenced_expectancy_doubt_reward_count",
+                        "home_referenced_expectancy_doubt_expectancy_strength"}
     missing_columns = sorted(required_columns.difference(trial_df.columns))
     if missing_columns:
-        raise ValueError(
-            f"trial_df is missing candidate diagnostic columns: {missing_columns}"
-        )
+        raise ValueError(f"trial_df is missing candidate diagnostic columns: {missing_columns}")
 
     trial_index = np.arange(trial_df.shape[0])
     numeric_columns = required_columns.difference({"cur_block"})
     numeric = trial_df[list(numeric_columns)].apply(pd.to_numeric, errors="coerce")
-    block_spans = prepare_candidate_expectant_block_agreement_spans(trial_df)
     fig, axes = plt.subplots(
         4,
         1,
-        figsize=(24, 10),
+        figsize=figure_size,
         sharex=True,
         facecolor="white",
     )
@@ -575,44 +639,18 @@ def plot_candidate_expectant_switching_diagnostics(
             label="True context (post hoc)",
             zorder=1,
         )
-    axes[0].plot(
-        trial_index,
-        numeric["probe_persistence_doubt_value"],
-        color=AGENT_MOUSE_AGREEMENT_COLORS["Probe+P+D"],
-        linewidth=0.8,
-        alpha=0.75,
-        label="Probe+P+D value",
-        zorder=2,
-    )
-    axes[0].plot(
-        trial_index,
-        numeric["home_referenced_expectancy_doubt_value"],
-        color=AGENT_MOUSE_AGREEMENT_COLORS["Home E+D"],
-        linewidth=0.8,
-        alpha=0.75,
-        label="Home E+D value",
-        zorder=2,
-    )
-    axes[0].plot(
-        trial_index,
-        numeric["observer_value"],
-        color=AGENT_MOUSE_AGREEMENT_COLORS["Ideal"],
-        linewidth=0.8,
-        linestyle="--",
-        alpha=0.85,
-        label="History ideal value",
-        zorder=2,
-    )
+    for column, label in model_specs:
+        axes[0].plot(
+            trial_index, numeric[column], color=AGENT_MOUSE_AGREEMENT_COLORS[label],
+            linewidth=0.8, alpha=0.85 if label == "Ideal" else 0.75,
+            linestyle="--" if label == "Ideal" else "-",
+            label="History ideal value" if label == "Ideal" else f"{label} value", zorder=2,
+        )
     axes[0].axhline(0.0, color="#aaaaaa", linewidth=0.6, zorder=0)
-    axes[0].set_ylabel("Choice / context / model value")
+    axes[0].set_ylabel(value_label)
     axes[0].margins(y=0.08)
     axes[0].legend(loc="upper right", frameon=False, ncol=5)
 
-    agreement_specs = (
-        ("probe_persistence_doubt_mouse_agreement", "Probe+P+D"),
-        ("home_referenced_expectancy_doubt_mouse_agreement", "Home E+D"),
-        ("observer_mouse_agreement", "Ideal"),
-    )
     for agreement_column, agent_label in agreement_specs:
         first_segment = True
         for _, block_row in block_spans.iterrows():
@@ -647,22 +685,6 @@ def plot_candidate_expectant_switching_diagnostics(
                 zorder=0,
             )
 
-    component_styles = {
-        "probe_persistence_doubt_previous_choice": (
-            "Probe-model persistence",
-            "#111111",
-        ),
-        "probe_persistence_doubt_reward_probe": ("Reward probe", "#0072B2"),
-        "probe_persistence_doubt_doubt_choice": ("Probe-model doubt", "#56B4E9"),
-        "home_referenced_expectancy_doubt_expectancy_choice": (
-            "Home expectancy",
-            "#D55E00",
-        ),
-        "home_referenced_expectancy_doubt_doubt_choice": (
-            "Home-model doubt",
-            "#CC79A7",
-        ),
-    }
     for column, (label, color) in component_styles.items():
         axes[2].plot(
             trial_index,
@@ -706,7 +728,7 @@ def plot_candidate_expectant_switching_diagnostics(
     )
 
     fig.suptitle(
-        f"Candidate expectant-switching diagnostics: {sess_id_full}",
+        f"{title}: {sess_id_full}",
         color="black",
     )
     fig.text(
@@ -714,11 +736,11 @@ def plot_candidate_expectant_switching_diagnostics(
         0.005,
         "Pre-trial model traces use only preceding valid choices and outcomes; "
         "true context is displayed only for post hoc interpretation. "
-        "Block-agreement segments span the contributing trial rows.",
+        "Block-agreement segments span the contributing trial rows." + caption,
         color="black",
         fontsize=9,
     )
-    save_path = plot_path / f"{sess_id_full}_candidate_expectant_switching.png"
+    save_path = plot_path / f"{sess_id_full}_{output_name}.png"
     save_performance_figure(fig, save_path)
     return save_path
 
