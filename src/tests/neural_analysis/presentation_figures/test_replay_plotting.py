@@ -23,11 +23,14 @@ def saved_replays():
             "missing_deliveries": 0,
         }]),
         "tracks": pd.DataFrame.from_records([
-            (motif, width, region, target, row, 20 + row, start, start + width / 1000, value, 1 - value)
+            (motif, width, region, target, row, 20 + row, start, start + width / 1000,
+             value + .1 * (index % 2), 1 - value - .1 * (index % 2))
             for width, value in [(500, .27), (100, .81)]
             for region in ["PFC", "HPC"]
             for target in ["context", "choice"]
-            for row, start in [(0, 1.0), (1, 4.0)]
+            for row, choice in [(0, 1.3), (1, 4.1)]
+            for index in range(2000 // width)
+            for start in [choice - 1. + index * width / 1000]
         ], columns=["motif", "width_ms", "region", "target", "row_position", "trial_id",
                     "bin_left_elapsed_s", "bin_right_elapsed_s", "p_0", "p_1"]),
         "events": pd.DataFrame.from_records([
@@ -73,17 +76,16 @@ def test_regional_width_selector_uses_saved_probabilities_and_gaps(saved_replays
     assert set(by_width) == {100, 500}
     assert by_width[500].visible is True
     assert by_width[100].visible is False
-    assert tuple(by_width[500].x) == (1., 1.5, None, 4., 4.5, None)
-    assert tuple(by_width[500].y) == (.27, .27, None, .27, .27, None)
-    assert tuple(by_width[100].x) == (1., 1.1, None, 4., 4.1, None)
-    assert tuple(by_width[100].y) == (.81, .81, None, .81, .81, None)
+    for width, expected in [(500, .32), (100, .86)]:
+        assert tuple(by_width[width].x) == (1.3, 4.1)
+        np.testing.assert_allclose(by_width[width].y, [expected, expected])
+        assert by_width[width].mode == "markers"
     assert [button.label for button in fig.layout.updatemenus[0].buttons] == ["500 ms", "100 ms"]
     assert fig.layout.hovermode == "x"
     assert any(axis.showspikes for axis in fig.select_xaxes())
     html = fig.to_html(full_html=True, include_plotlyjs=True)
     assert "<script src=" not in html
     assert '"series":"PFC:context"' in html
-    assert '"y":[0.81,0.81,null,0.81,0.81,null]' in html
 
 
 def test_matplotlib_and_interactive_movement_preserve_measured_values_and_events(
@@ -109,11 +111,52 @@ def test_matplotlib_and_interactive_movement_preserve_measured_values_and_events
         np.testing.assert_allclose(speed_line.get_ydata(), [13.2, 13.2, np.nan, 22.5, 22.5, np.nan])
         regional_lines = [line for axis in figures["figure4_new_side_omission"].axes for line in axis.get_lines()]
         regional = next(line for line in regional_lines if line.get_gid() == "PFC:context")
-        np.testing.assert_allclose(regional.get_ydata(), [.27, .27, np.nan, .27, .27, np.nan])
+        np.testing.assert_allclose(regional.get_ydata(), [.32, .32])
+        np.testing.assert_allclose(regional.get_xdata(), [1.3, 4.1])
         static.canvas.draw()
     finally:
         for figure in figures.values():
             plt.close(figure)
+
+
+def test_outcome_replay_stacks_post_choice_means_and_labels_observed_choice(saved_replays):
+    """Both renderers show one four-state composition per complete choice and region."""
+    replay, _, meta = saved_replays
+    for name in ("episodes", "trials", "events"):
+        replay[name]["motif"] = "four_outcome"
+    rows = []
+    for width in (100, 500):
+        for region in ("PFC", "HPC"):
+            for trial in replay["trials"].itertuples():
+                for index in range(1000 // width):
+                    start = trial.choice_elapsed_s + index * width / 1000
+                    values = [.2, .3, .4, .1] if index % 2 else [.6, .1, .1, .2]
+                    rows.append(("four_outcome", width, region, "outcome", trial.row_position,
+                                 trial.trial_id, start, start + width / 1000, *values))
+    replay["tracks"] = pd.DataFrame(rows, columns=[*replay["tracks"].columns, "p_2", "p_3"])
+    # Incomplete class predictions cannot produce a four-state composition.
+    replay["tracks"].loc[0, "p_2"] = np.nan
+    fig = interactive_replays(replay, {}, meta, "light")["figure4_four_outcome"]
+    assert fig.layout.barmode == "stack"
+    for trace in [trace for trace in fig.data if trace.meta["width_ms"] is not None]:
+        assert trace.type == "bar"
+        region, _, state = trace.meta["series"].split(":")
+        incomplete = region == "PFC" and trace.meta["width_ms"] == 100
+        assert list(trace.x) == ([4.1] if incomplete else [1.3, 4.1])
+        np.testing.assert_allclose(trace.y, [.4, .2, .25, .15][int(state)])
+    assert any("L-" in text for text in fig.layout.xaxis3.ticktext)
+    assert any("R+" in text for text in fig.layout.xaxis3.ticktext)
+    static = render_replays(replay, {}, meta, "light")["figure4_four_outcome"]
+    try:
+        for axis in static.axes[1:]:
+            assert len(axis.patches) == 8
+            heights = np.array([bar.get_height() for bar in axis.patches]).reshape(4, 2)
+            np.testing.assert_allclose(heights.sum(axis=0), 1)
+            terminal = axis.patches[-1]
+            assert terminal.get_y() + terminal.get_height() == pytest.approx(1.)
+        assert any("L-" in tick.get_text() for tick in static.axes[-1].get_xticklabels())
+    finally:
+        plt.close(static)
 
 
 def test_movement_block_summary_shows_finite_dots_medians_and_support(saved_replays):
