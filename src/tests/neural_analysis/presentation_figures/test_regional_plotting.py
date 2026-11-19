@@ -101,6 +101,43 @@ def test_cohort_with_no_saved_sessions_renders_reasons(roster_data):
             plt.close(figure)
 
 
+@pytest.mark.parametrize("limit", [10, 30])
+def test_pc_figures_preserve_legacy_ranges_and_show_extended_recovery(regional_fields, limit):
+    """Display saved PC counts and recovery labels for legacy and extended archives."""
+    from src.neural_analysis.presentation_figures.regional_plotting import (
+        render_regional, render_regional_cohort,
+    )
+
+    regional_fields["recovery"] = regional_fields["recovery"].drop(columns="requested_max_pc", errors="ignore")
+    if limit == 30:
+        regional_fields["recovery"]["requested_max_pc"] = 30
+        scores = regional_fields["scores"]
+        chosen = scores.query("width_ms == 500 and region == 'PFC' and target == 'context' "
+                              "and regime == 'all' and group == 'overall' and n_pcs == 3")
+        regional_fields["scores"] = pd.concat([scores, chosen.assign(n_pcs=30)], ignore_index=True)
+        recovery = regional_fields["recovery"]
+        recovery.loc[recovery.index[0], ["recovery_count", "max_supported_pc", "status"]] = [30, 30, "reached"]
+
+    session = render_regional(regional_fields, {"session_id": "day-1"}, "light")
+    cohort_fields = {key: table.assign(session_id="day-1") for key, table in regional_fields.items()}
+    cohort_fields["roster"] = pd.DataFrame({"session_id": ["day-1"], "reason": [""]})
+    cohort = render_regional_cohort(cohort_fields, {"subject_id": "mouse-25"}, "light")
+    try:
+        for figure in (session["figure_3_pc"], cohort["figure_7_pc_curves"]):
+            panel = next(axis for axis in figure.axes if axis.get_gid() == "PFC:all:context")
+            assert max(panel.get_xticks()) == limit
+            assert panel.get_xlim()[1] > limit
+            if limit == 30:
+                assert any(30 in line.get_xdata() for line in panel.lines)
+        if limit == 30:
+            for figure in (session["figure_3_pc"], cohort["figure_7_pc_recovery"]):
+                panel = next(axis for axis in figure.axes if axis.get_gid() == "PFC:all:context")
+                assert any("30 PCs through 30" in artist.get_text() for artist in panel.texts)
+    finally:
+        for figure in (*session.values(), *cohort.values()):
+            plt.close(figure)
+
+
 @pytest.fixture
 def roster_data(regional_fields):
     """Return two named synthetic sessions and one unavailable roster member."""

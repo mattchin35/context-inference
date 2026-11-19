@@ -151,3 +151,20 @@ def test_missing_training_class_makes_impacted_pooled_score_unavailable(syntheti
     assert score.reason == "missing_predictions"
     assert np.isnan(score.balanced_accuracy)
     assert "training_class_missing" in set(result["folds"].reason)
+
+
+def test_decoding_tests_all_thirty_supported_pc_prefixes(synthetic_decoding):
+    """Use full-rank features to verify scores and support through PC 30."""
+    from src.neural_analysis.presentation_figures.decoding import decode_region
+
+    prepared = synthetic_decoding
+    window = prepared.windows[((-1., 1.), 500)]
+    rng = np.random.default_rng(553)
+    window.counts["PFC"] = rng.poisson(8, size=(len(window.row_positions), 4, 32))
+    prepared.unit_ids["PFC"] = tuple(str(index) for index in range(32))
+    result = decode_region(prepared, "PFC", "context", "all", 500)
+    scores = result["scores"].query("group == 'overall' and period == 'full'")
+    assert set(scores.n_pcs) == set(range(31))
+    assert set(scores.n_predicted) == {len(window.row_positions)}
+    overall = result["recovery"].query("group == 'overall'").iloc[0]
+    assert overall.max_supported_pc == overall.requested_max_pc == 30
