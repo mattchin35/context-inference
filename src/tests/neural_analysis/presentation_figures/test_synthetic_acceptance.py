@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 
-def test_synthetic_batch_publishes_every_session_and_partial_ten_pc_support(
+def test_synthetic_batch_publishes_every_session_and_partial_thirty_pc_support(
     synthetic_presentation_roster, tmp_path,
 ):
     """Exercise real recording loaders, held-out fits, archives and cohort assembly."""
@@ -39,10 +39,12 @@ def test_synthetic_batch_publishes_every_session_and_partial_ten_pc_support(
 
         prediction = fields["prediction"]
         assert prediction["alpha"] == 0.1
+        assert prediction["panel_d_pcs"] == 30
         assert prediction["seed"] == 7
         assert prediction["curves"].query("panel == 'A'").n_draws.eq(5).all()
-        ten_pc = prediction["curves"].query("panel == 'D' and model == 'rrr'")
-        assert ten_pc.n_draws.eq(5 if position < 3 else 0).all()
+        thirty_pc = prediction["curves"].query("panel == 'D' and model == 'rrr'")
+        assert set(thirty_pc["count"]) == set(range(1, 31))
+        assert thirty_pc.n_draws.eq(5 if position < 3 else 0).all()
 
         movement = fields["movement"]
         assert movement["n_complete_speed_bins"] == movement["n_paired_bins"] > 0
@@ -53,10 +55,10 @@ def test_synthetic_batch_publishes_every_session_and_partial_ten_pc_support(
     cohort_manifest = Path(report["manifest"])
     cohort, _ = load_result(cohort_manifest.parent / "cohort.npz")
     assert cohort["roster"].session_id.to_list() == [s["session_id"] for s in session_reports]
-    ten_pc = cohort["prediction_medians"].query("panel == 'D'")
-    assert not ten_pc.empty
-    assert ten_pc.roster_size.eq(4).all()
-    assert ten_pc.n_sessions.eq(3).all()
-    assert np.isnan(ten_pc.mean_r2).all()
+    thirty_pc = cohort["prediction_medians"].query("panel == 'D'")
+    assert not thirty_pc.empty
+    assert thirty_pc.roster_size.eq(4).all()
+    assert thirty_pc.n_sessions.eq(3).all()
+    assert np.isnan(thirty_pc.mean_r2).all()
     assert cohort["prediction_medians"].query("panel == 'A' and count == 1").mean_r2.notna().all()
     assert len(cohort["presentation_examples"]) == 3

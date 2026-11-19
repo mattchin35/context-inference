@@ -15,7 +15,7 @@ def prediction_inputs():
     offsets = np.arange(10)[:, None, None]
     counts = {
         region: shared + offsets + rng.poisson(2, (10, 40, n_units))
-        for region, n_units in (("PFC", 24), ("HPC", 26))
+        for region, n_units in (("PFC", 64), ("HPC", 66))
     }
     splits = tuple(
         SimpleNamespace(
@@ -45,20 +45,21 @@ def test_prediction_draws_and_sweep_contract(prediction_inputs, prediction_resul
     """Check five shared disjoint draws, nested sizes, matched directions and folds."""
     result = prediction_result
     assert result["alpha"] == 0.1
+    assert result["panel_d_pcs"] == 30
     assert result["seed"] == 24
-    assert result["source_pool_size"] == 12
+    assert result["source_pool_size"] == 32
     assert set(result["curves"].direction) == {"PFC->PFC", "PFC->HPC", "HPC->HPC", "HPC->PFC"}
-    assert set(result["curves"].query("panel == 'A'")["count"]) == {1, 2, 4, 8, 12}
-    assert set(result["curves"].query("panel == 'B'")["count"]) == {*range(1, 11), 12}
-    assert set(result["curves"].query("panel == 'C'")["count"]) == set(range(1, 13))
-    assert set(result["curves"].query("panel == 'D'")["count"]) == set(range(1, 11))
+    assert set(result["curves"].query("panel == 'A'")["count"]) == {1, 2, 4, 8, 16, 32}
+    assert set(result["curves"].query("panel == 'B'")["count"]) == {*range(1, 31), 32}
+    assert set(result["curves"].query("panel == 'C'")["count"]) == set(range(1, 33))
+    assert set(result["curves"].query("panel == 'D'")["count"]) == set(range(1, 31))
     assert result["curves"].n_draws.eq(5).all()
-    assert len(result["populations"]) == 5 * 2 * 2 * 12
+    assert len(result["populations"]) == 5 * 2 * 2 * 32
     for _, units in result["populations"].groupby(["draw", "region"]):
         assert units.unit_id.is_unique
-        assert set(units.groupby("role").size()) == {12}
+        assert set(units.groupby("role").size()) == {32}
         for _, role in units.groupby("role"):
-            assert tuple(sorted(role.pool_position)) == tuple(range(12))
+            assert tuple(sorted(role.pool_position)) == tuple(range(32))
     for saved, split in zip(result["folds"].itertuples(), prediction_inputs.windows[((-2., 2.), 100)].splits):
         assert saved.fold == split.fold_id
         assert tuple(saved.train_indices) == tuple(split.train_indices)
@@ -78,17 +79,18 @@ def test_fold_score_matches_training_only_ridge_and_pc_prefix(prediction_inputs,
         indices[region] = [prediction_inputs.unit_ids[region].index(name) for name in names]
     x = window.counts["PFC"][:, :, indices["PFC"]]
     y = window.counts["HPC"][:, :, indices["HPC"]]
-    x_train, x_test = (x[index].reshape(-1, 12) for index in (fold.train_indices, fold.test_indices))
-    y_train, y_test = (y[index].reshape(-1, 12) for index in (fold.train_indices, fold.test_indices))
+    x_train, x_test = (x[index].reshape(-1, 32) for index in (fold.train_indices, fold.test_indices))
+    y_train, y_test = (y[index].reshape(-1, 32) for index in (fold.train_indices, fold.test_indices))
     mean_x, scale_x = x_train.mean(0), x_train.std(0)
     mean_y, scale_y = y_train.mean(0), y_train.std(0)
     x_train_z, x_test_z = (x_train - mean_x) / scale_x, (x_test - mean_x) / scale_x
     _, _, pc_vectors = np.linalg.svd(x_train_z, full_matrices=False)
     cases = (
         ("A", 2, x_train_z[:, :2], x_test_z[:, :2]),
-        ("A", 12, x_train_z, x_test_z),
+        ("A", 32, x_train_z, x_test_z),
         ("B", 2, x_train_z @ pc_vectors[:2].T, x_test_z @ pc_vectors[:2].T),
-        ("B", 12, x_train_z @ pc_vectors.T, x_test_z @ pc_vectors.T),
+        ("B", 30, x_train_z @ pc_vectors[:30].T, x_test_z @ pc_vectors[:30].T),
+        ("B", 32, x_train_z @ pc_vectors.T, x_test_z @ pc_vectors.T),
     )
     scores = prediction_result["fold_scores"].query("draw == 0 and fold == 0 and direction == 'PFC->HPC'")
     for panel, count, train, test in cases:
@@ -104,14 +106,15 @@ def test_fold_score_matches_training_only_ridge_and_pc_prefix(prediction_inputs,
                                    ((y_test - mean_y) ** 2).sum(0))
     draws = prediction_result["draw_scores"]
     for direction, points in draws.groupby("direction"):
-        full_units = points.query("panel == 'A' and count == 12").sort_values("draw")
-        full_pcs = points.query("panel == 'B' and count == 12").sort_values("draw")
-        full_rank = points.query("panel == 'C' and count == 12 and model == 'rrr'").sort_values("draw")
-        full_pc_rank = points.query("panel == 'D' and count == 10 and model == 'rrr'").sort_values("draw")
-        ten_pcs = points.query("panel == 'B' and count == 10").sort_values("draw")
+        full_units = points.query("panel == 'A' and count == 32").sort_values("draw")
+        full_pcs = points.query("panel == 'B' and count == 32").sort_values("draw")
+        full_rank = points.query("panel == 'C' and count == 32 and model == 'rrr'").sort_values("draw")
+        full_pc_rank = points.query("panel == 'D' and count == 30 and model == 'rrr'").sort_values("draw")
+        thirty_pcs = points.query("panel == 'B' and count == 30").sort_values("draw")
+        assert len(full_pc_rank) == len(thirty_pcs) == 5
         np.testing.assert_allclose(full_units.mean_r2, full_pcs.mean_r2, err_msg=direction)
         np.testing.assert_allclose(full_units.mean_r2, full_rank.mean_r2, err_msg=direction)
-        np.testing.assert_allclose(ten_pcs.mean_r2, full_pc_rank.mean_r2, err_msg=direction)
+        np.testing.assert_allclose(thirty_pcs.mean_r2, full_pc_rank.mean_r2, err_msg=direction)
 
 
 def test_draw_r2_pools_squared_errors_before_equal_neuron_average():
@@ -144,24 +147,24 @@ def test_rank_references_and_both_directions_use_the_same_draw_intersection():
     rows = []
     for direction in ("PFC->PFC", "HPC->PFC"):
         for draw in range(5):
-            for panel, count, model in (("D", 10, "rrr"), ("A", 12, "ridge"), ("B", 10, "ridge")):
+            for panel, count, model in (("D", 30, "rrr"), ("A", 32, "ridge"), ("B", 30, "ridge")):
                 value = 0.10 if draw < 3 else 0.20
                 if panel == "D" and (draw == 4 or (direction == "HPC->PFC" and draw == 3)):
                     value = np.nan
                 rows.append(dict(draw=draw, direction=direction, panel=panel, count=count,
                                  model=model, mean_r2=value, n_folds=5 if np.isfinite(value) else 4,
-                                 n_neurons=12 if np.isfinite(value) else 0,
+                                 n_neurons=32 if np.isfinite(value) else 0,
                                  status="ok" if np.isfinite(value) else "incomplete", reason=""))
-    curves = _summarize_curves(pd.DataFrame(rows), source_pool_size=12)
+    curves = _summarize_curves(pd.DataFrame(rows), source_pool_size=32)
     d = curves.query("panel == 'D' and target_region == 'PFC'")
     assert len(d) == 6
-    assert set(d.model) == {"rrr", "ridge_10pc", "ridge_units"}
+    assert set(d.model) == {"rrr", "ridge_30pc", "ridge_units"}
     assert set(d.draw_ids) == {(0, 1, 2)}
     assert d.n_draws.eq(3).all()
     np.testing.assert_allclose(d.mean_r2, 0.10)
 
 
-def test_ten_pc_panel_is_unavailable_below_ten_source_units(prediction_inputs):
+def test_thirty_pc_panel_is_unavailable_below_thirty_source_units(prediction_inputs):
     """Check explicit panel D unavailability alongside supported smaller panels."""
     from src.neural_analysis.presentation_figures.prediction import compute_prediction
 
@@ -175,5 +178,5 @@ def test_ten_pc_panel_is_unavailable_below_ten_source_units(prediction_inputs):
     assert set(d.direction) == set(curves.direction)
     assert d.n_draws.eq(0).all()
     assert d.mean_r2.isna().all()
-    assert d.reason.str.contains("ten", case=False).all()
+    assert d.reason.str.contains("thirty|30", case=False).all()
     assert curves.query("panel == 'A'").n_draws.eq(5).all()
