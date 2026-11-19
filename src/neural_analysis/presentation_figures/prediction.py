@@ -22,7 +22,7 @@ from .preparation import BlockSplit, PAIRED_WINDOW_S, PreparedChoices, PreparedW
 
 
 ALPHA = 0.1
-TEN_PCS = 10
+PANEL_D_PCS = 30
 MODEL_KEYS = ["draw", "direction", "panel", "count", "model"]
 FOLD_COLUMNS = MODEL_KEYS + ["fold", "score_index", "status", "reason"]
 DRAW_COLUMNS = MODEL_KEYS + ["n_folds", "n_neurons", "mean_r2", "status", "reason"]
@@ -85,6 +85,7 @@ def compute_prediction(prepared: PreparedChoices, seed: int = 0) -> dict:
     draw_scores = _summarize_draw_scores(fold_scores, model_sse, baseline_sse, expected_folds)
     return {
         "alpha": ALPHA, "seed": seed, "source_pool_size": source_pool_size,
+        "panel_d_pcs": PANEL_D_PCS,
         "row_positions": window.row_positions, "bin_edges_s": window.bin_edges_s,
         "available_units": pd.DataFrame(unit_counts.items(), columns=["region", "n_units"]),
         "populations": pd.DataFrame(population_rows, columns=[
@@ -164,15 +165,15 @@ def _score_direction(
             outcomes.append(("B", count, "ridge", None, reason))
             continue
         train, test = pc_design
-        ranks = range(1, TEN_PCS + 1) if count == TEN_PCS else ()
+        ranks = range(1, PANEL_D_PCS + 1) if count == PANEL_D_PCS else ()
         ridge, rank_scores, reason = _score_design(train[:, :count], test[:, :count], target, ranks)
         outcomes.append(("B", count, "ridge", ridge, reason if ridge is None else ""))
         outcomes.extend(("D", rank, "rrr", errors, rank_reason)
                         for rank, errors, rank_reason in rank_scores)
-    if pc_count < TEN_PCS:
+    if pc_count < PANEL_D_PCS:
         detail = pc_design if isinstance(pc_design, str) else f"Only {pc_count} training PCs supported."
-        outcomes.extend(("D", rank, "rrr", None, f"Ten source PCs are required. {detail}")
-                        for rank in range(1, TEN_PCS + 1))
+        outcomes.extend(("D", rank, "rrr", None, f"{PANEL_D_PCS} source PCs are required. {detail}")
+                        for rank in range(1, PANEL_D_PCS + 1))
     return outcomes
 
 
@@ -300,7 +301,7 @@ def _summarize_curves(
         if panel in ("C", "D"):
             models.append(("ridge_units", "A", source_pool_size, "ridge"))
         if panel == "D":
-            models.append(("ridge_10pc", "B", TEN_PCS, "ridge"))
+            models.append((f"ridge_{PANEL_D_PCS}pc", "B", PANEL_D_PCS, "ridge"))
         for target in ("PFC", "HPC"):
             comparison = [
                 (direction, source, name, (direction, fit_panel, fit_count, fit_model))
@@ -317,7 +318,7 @@ def _summarize_curves(
             if setup_reason:
                 reason = setup_reason
             elif not draw_ids and panel == "D":
-                reason = "No shared draws support ten source PCs and all displayed fits."
+                reason = f"No shared draws support {PANEL_D_PCS} source PCs and all displayed fits."
             elif not draw_ids:
                 reason = "No shared draws support all displayed fits."
             else:
@@ -345,7 +346,7 @@ def _summarize_curves(
 def _sizes(size: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
     """Return nominal source-unit and source-PC sweep counts for matched pool size n."""
     unit_sizes = tuple(sorted({size} | {2 ** exponent for exponent in range(size.bit_length())}))
-    pc_sizes = tuple(sorted(set(range(1, min(size, TEN_PCS) + 1)) | set(unit_sizes)))
+    pc_sizes = tuple(sorted(set(range(1, min(size, PANEL_D_PCS) + 1)) | set(unit_sizes)))
     return unit_sizes, pc_sizes
 
 
@@ -355,7 +356,7 @@ def _main_models(size: int) -> tuple[tuple[str, int, str], ...]:
     return (tuple(("A", count, "ridge") for count in unit_sizes) +
             tuple(("B", count, "ridge") for count in pc_sizes) +
             tuple(("C", rank, "rrr") for rank in range(1, max(size, 1) + 1)) +
-            tuple(("D", rank, "rrr") for rank in range(1, TEN_PCS + 1)))
+            tuple(("D", rank, "rrr") for rank in range(1, PANEL_D_PCS + 1)))
 
 
 def _population_rows(

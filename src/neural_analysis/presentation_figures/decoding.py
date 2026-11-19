@@ -24,7 +24,8 @@ READOUTS = (
     ("choice", "correct_rewarded"), ("outcome", "all"),
 )
 GROUPS = ("overall", "correct_rewarded", "omission", "incorrect")
-PCS = tuple(range(11))
+MAX_REGIONAL_PCS = 30
+PCS = tuple(range(MAX_REGIONAL_PCS + 1))
 PROBABILITY_COLUMNS = ("p_0", "p_1", "p_2", "p_3")
 
 
@@ -324,6 +325,7 @@ def _summarize_readout(prepared: PreparedChoices, identity: dict, positions: np.
         status = "unavailable" if reason else "unreached" if recovered is None else "reached"
         recoveries.append(dict(**identity, group=group, all_unit_accuracy=all_accuracy,
                                recovery_count=recovered, max_supported_pc=max(pc_scores, default=0),
+                               requested_max_pc=MAX_REGIONAL_PCS,
                                status=status, reason=reason))
     return pd.DataFrame(scores), pd.DataFrame(recoveries).astype({"recovery_count": float})
 

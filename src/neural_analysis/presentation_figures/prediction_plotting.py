@@ -17,9 +17,11 @@ from src.neural_analysis.communication_subspace.configuration import DRAW_COUNT
 
 
 PANEL_LABELS = {"A": "Source units", "B": "Source PCs",
-                "C": "Rank with source units", "D": "Rank with ten source PCs"}
+                "C": "Rank with source units"}
 MODEL_STYLES = {"ridge": ("Ridge", "-"), "rrr": ("Reduced rank", "-"),
-                "ridge_units": ("All-unit ridge", "--"), "ridge_10pc": ("Ten-PC ridge", ":")}
+                "ridge_units": ("All-unit ridge", "--"), "ridge_10pc": ("Ten-PC ridge", ":"),
+                "ridge_30pc": ("30-PC ridge", ":")}
+PC_REFERENCE_COUNTS = {"ridge_10pc": 10, "ridge_30pc": 30}
 DIRECTION_COLORS = {"PFC->PFC": "#246C9A", "HPC->PFC": "#D87439",
                     "HPC->HPC": "#188274", "PFC->HPC": "#9860AE"}
 TARGET_COLORS = {"PFC": "#246C9A", "HPC": "#188274"}
@@ -33,9 +35,11 @@ def render_prediction(fields: dict, meta: dict, theme: str) -> dict[str, Figure]
     active Matplotlib theme. No fits or I/O occur.
     """
     curves = fields["curves"]
+    panel_d_pcs = _panel_d_count(fields, meta, curves)
     figure = plt.figure(figsize=(13.5, 9))
     grid = figure.add_gridspec(nrows=2, ncols=2, hspace=0.48, wspace=0.22)
-    for location, (panel, label) in enumerate(PANEL_LABELS.items()):
+    for location, panel in enumerate("ABCD"):
+        label = _panel_label(panel, panel_d_pcs)
         axis, support_axis = _paired_axes(figure, grid[location // 2, location % 2], panel)
         panel_rows = curves.loc[curves.panel.eq(panel)]
         for (direction, model), points in panel_rows.groupby(["direction", "model"], sort=False):
@@ -62,7 +66,7 @@ def render_prediction(fields: dict, meta: dict, theme: str) -> dict[str, Figure]
     figure.suptitle(f"Figure 5. Regional population prediction | {session_id}", y=0.985, fontsize=19)
     handles = [Line2D([], [], color=color, label=_direction_text(direction), linewidth=2)
                for direction, color in DIRECTION_COLORS.items()]
-    handles.extend(_model_handles())
+    handles.extend(_model_handles(panel_d_pcs))
     figure.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.94),
                   ncols=7, fontsize=9, frameon=False)
     available = ", ".join(f"{row.region} {row.n_units}" for row in fields["available_units"].itertuples())
@@ -98,6 +102,7 @@ def render_prediction_cohort(fields: dict, meta: dict, theme: str) -> dict[str, 
         "panel", "direction", "model", "session_id", "source_pool_size", "mean_r2", "reason"]))
     medians = fields.get("prediction_medians", pd.DataFrame(columns=["panel", "direction", "model"]))
     roster = fields["roster"]
+    panel_d_pcs = _panel_d_count(fields, meta, curves)
     session_ids = tuple(roster.session_id)
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     session_colors = {session: colors[index % len(colors)] for index, session in enumerate(session_ids)}
@@ -111,15 +116,15 @@ def render_prediction_cohort(fields: dict, meta: dict, theme: str) -> dict[str, 
                 points = curves.loc[curves.panel.eq(panel) & curves.direction.eq(direction)]
                 support = medians.loc[medians.panel.eq(panel) & medians.direction.eq(direction)]
                 _cohort_curves(axis, support_axis, points, support, session_colors, _main_model(panel))
-                title = f"{panel}  {PANEL_LABELS[panel]} | {_direction_text(direction)}"
+                title = f"{panel}  {_panel_label(panel, panel_d_pcs)} | {_direction_text(direction)}"
                 _label_axes(axis, support_axis, title, _x_label(panel), "Sessions", len(session_ids))
                 _mark_unavailable(axis, points.loc[points.model.eq(_main_model(panel))])
 
         title = "source counts" if kind == "counts" else "regression rank"
         subject = meta.get("mouse_id") or meta.get("subject_id") or "Cohort"
         figure.suptitle(f"Figure 8. Regional prediction by {title} | {subject}", y=0.985, fontsize=19)
-        _cohort_legend(figure, curves, session_colors, include_ranks=kind == "ranks")
-        _cohort_caption(figure, roster, curves, panels)
+        _cohort_legend(figure, curves, session_colors, panel_d_pcs, include_ranks=kind == "ranks")
+        _cohort_caption(figure, roster, curves, panels, panel_d_pcs)
         figure.subplots_adjust(left=0.10, right=0.985, top=0.89, bottom=0.13)
         figures[f"figure8_{kind}"] = figure
     return figures
@@ -155,7 +160,8 @@ def _draw_line(
 
 
 def _cohort_legend(
-    figure: Figure, curves: pd.DataFrame, session_colors: dict[str, str], *, include_ranks: bool,
+    figure: Figure, curves: pd.DataFrame, session_colors: dict[str, str], panel_d_pcs: int,
+    *, include_ranks: bool,
 ) -> None:
     """Add a stable session-ID legend with matched source pool sizes on rank slides."""
     handles = []
@@ -170,12 +176,12 @@ def _cohort_legend(
                   ncols=min(len(handles), 3 if uses_long_labels else 5), fontsize=9, frameon=False)
     if include_ranks:
         model_y = 0.911 if uses_long_labels else 0.93
-        figure.legend(handles=_model_handles(), loc="upper center", bbox_to_anchor=(0.5, model_y),
+        figure.legend(handles=_model_handles(panel_d_pcs), loc="upper center", bbox_to_anchor=(0.5, model_y),
                       ncols=3, fontsize=9, frameon=False)
 
 
 def _cohort_caption(
-    figure: Figure, roster: pd.DataFrame, curves: pd.DataFrame, panels: str,
+    figure: Figure, roster: pd.DataFrame, curves: pd.DataFrame, panels: str, panel_d_pcs: int,
 ) -> None:
     """Caption the held-out scores, roster failures and unavailable session panels."""
     caption = ("Same-bin prediction in 100 ms bins from -2 to +2 s around choices. Held-out per-neuron "
@@ -186,7 +192,7 @@ def _cohort_caption(
     panel_rows = curves.loc[curves.panel.isin(list(panels))]
     for (session_id, panel), points in panel_rows.groupby(["session_id", "panel"], sort=False):
         if not np.isfinite(points.mean_r2.to_numpy(dtype=float)).any():
-            if panel == "D" and points.source_pool_size.iloc[0] < 10:
+            if panel == "D" and points.source_pool_size.iloc[0] < panel_d_pcs:
                 reason = f"only {points.source_pool_size.iloc[0]} sampled source units"
             else:
                 reason = next((str(reason) for reason in points.reason if reason), "no supported scores")
@@ -230,10 +236,28 @@ def _mark_unavailable(axis: Axes, points: pd.DataFrame) -> None:
                   va="center", ha="center", fontsize=9)
 
 
-def _model_handles() -> list[Line2D]:
-    """Return Matplotlib legend line handles for rank models and their references."""
+def _model_handles(panel_d_pcs: int) -> list[Line2D]:
+    """Return rank-model legend handles using the saved Panel D PC input count."""
+    models = ("rrr", "ridge_units", f"ridge_{panel_d_pcs}pc")
     return [Line2D([], [], color=plt.rcParams["axes.labelcolor"], label=label, linestyle=style)
-            for model, (label, style) in MODEL_STYLES.items() if model != "ridge"]
+            for label, style in (MODEL_STYLES[model] for model in models)]
+
+
+def _panel_d_count(fields: dict, meta: dict, curves: pd.DataFrame) -> int:
+    """Read the integer Panel D input count, inferring it from references in older archives."""
+    count = fields.get("panel_d_pcs", meta.get("parameters", {}).get("panel_d_pcs"))
+    if count is not None:
+        return int(count)
+    saved_models = set(curves.model)
+    return next((size for model, size in PC_REFERENCE_COUNTS.items() if model in saved_models), 30)
+
+
+def _panel_label(panel: str, panel_d_pcs: int) -> str:
+    """Return the label for one panel and its saved number of Panel D input PCs."""
+    if panel == "D":
+        count = "ten" if panel_d_pcs == 10 else str(panel_d_pcs)
+        return f"Rank with {count} source PCs"
+    return PANEL_LABELS[panel]
 
 
 def _main_model(panel: str) -> str:

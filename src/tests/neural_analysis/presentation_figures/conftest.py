@@ -65,7 +65,7 @@ def synthetic_presentation_session(synthetic_communication_session):
 def synthetic_presentation_roster(tmp_path, synthetic_presentation_session):
     """Return four metadata Paths with full switch, delivery, and speed coverage.
 
-    The first three sessions support ten source PCs with matched good pools.
+    The first three sessions support thirty source PCs with matched good pools.
     The fourth has a smaller pool. All activity and treadmill values are
     generated from seeded models of the prescribed behavior.
     """
@@ -90,7 +90,7 @@ def synthetic_presentation_roster(tmp_path, synthetic_presentation_session):
         speed = (6 + 3 * trial_in_block[:, None] + 3 * np.sin(bins / 4)[None, :]
                  + rng.uniform(0, 2, size=(len(trials), len(bins))))
         _write_acceptance_speed(path, trials.choice_time.to_numpy(), speed, origin_s)
-        for probe_id, large_count in (("A", 24), ("B", 22)):
+        for probe_id, large_count in (("A", 64), ("B", 62)):
             n_units = large_count if session_number < 3 else 8
             _write_acceptance_spikes(root / probe_id, trials, speed, origin_s, n_units, rng)
         roster.append(path)

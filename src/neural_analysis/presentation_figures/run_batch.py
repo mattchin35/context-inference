@@ -13,7 +13,7 @@ from time import perf_counter
 from src.neural_analysis.population.run_session_timeline_batch import choose_worker_count, read_session_list
 from . import results
 from .cohort import assemble_cohort
-from .run_session import new_run_directory, run_session
+from .run_session import new_run_directory, run_session, scientific_parameters
 
 
 def _run_one(path: Path, *, seed: int, dry_run: bool, rerun: bool) -> dict:
@@ -61,7 +61,7 @@ def run_batch(metadata_paths: list[Path] | tuple[Path, ...], *, output_root: Pat
     directory = new_run_directory(output_root)
     mouse_id = next((s["mouse_id"] for s in sessions if s.get("mouse_id")), "")
     meta = dict(producer="presentation_figures.assemble_cohort", mouse_id=mouse_id, seed=seed, session_ids=ids,
-                parameters={"alpha": 0.1, "draws": 5}, axes={"tables": "one row per labeled observation"},
+                parameters=scientific_parameters(), axes={"tables": "one row per labeled observation"},
                 units={"balanced_accuracy": "fraction", "mean_r2": "dimensionless"})
     results.save_result(directory / "cohort.npz", fields, meta)
     for name in ("run_session.py", "run_batch.py"):

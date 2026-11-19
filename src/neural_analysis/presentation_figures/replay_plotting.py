@@ -1,4 +1,4 @@
-"""Render saved Figure 4 and Figure 6 replay bins and block correlations."""
+"""Render Figure 4 choice summaries and Figure 6 movement replays and correlations."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ MOTIF_NAMES = {
     "four_outcome": "Four-outcome sequence",
 }
 OUTCOMES = ("Left rewarded", "Right rewarded", "Left unrewarded", "Right unrewarded")
+OUTCOME_CODES = ("L+", "R+", "L-", "R-")
 PALETTE = ("#3679bd", "#d96d20", "#188b67", "#ab56a2")
 EVENT_STYLES = {
     "choice": ("Choice", "circle", "o", "#758393"),
@@ -45,7 +46,7 @@ class _Trace:
     y: list[float | None]
     detail: list[str | None]
     width_ms: int | None = None
-    marker: bool = False
+    kind: str = "line"
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class _Replay:
     extent: tuple[float, float] | None = None
     widths_ms: tuple[int, ...] = ()
     regional: bool = False
+    observed: tuple[tuple[float, str], ...] = ()
 
 
 def render_replays(replay_fields: dict, movement_fields: dict, meta: dict, theme: str) -> dict[str, Figure]:
@@ -102,7 +104,7 @@ def _replay_views(replay: dict, movement: dict, meta: dict) -> dict[str, _Replay
 
 
 def _regional_view(fields: dict, episode: object, session: str) -> _Replay:
-    """Build one episode's behavior markers and per-region/width probability traces."""
+    """Build behavior markers and one mean probability vector per choice/region/width."""
     motif = episode.motif
     title = MOTIF_NAMES.get(motif, motif.replace("_", " ").capitalize())
     lanes = ("Recorded behavior", "PFC probability", "HPC probability")
@@ -112,36 +114,55 @@ def _regional_view(fields: dict, episode: object, session: str) -> _Replay:
     selected = {name: fields[name].loc[fields[name].motif.eq(motif)] for name in ("tracks", "events", "trials")}
     traces = _regional_behavior(selected["events"], selected["trials"], extent)
     tracks = selected["tracks"]
-    widths = (500, 100)
+    trials = selected["trials"].set_index("row_position")
     for (width, region, target), rows in tracks.groupby(["width_ms", "region", "target"], sort=False):
         lane = 1 if region == "PFC" else 2
-        edges = (rows.bin_left_elapsed_s, rows.bin_right_elapsed_s)
+        # A choice contributes only if every bin and class in its fitted window is available.
+        outcome = target == "outcome"
+        columns = [f"p_{i}" for i in range(4 if outcome else 2)]
+        grouped = rows.groupby("row_position")[columns]
+        n_bins = (1000 if outcome else 2000) // width
+        complete = grouped.count().eq(n_bins).all(axis=1)
+        means = grouped.mean().loc[complete]
+        if means.empty:
+            continue
+        choices = trials.loc[means.index]
+        x = choices.choice_elapsed_s.to_list()
+        detail = [f"Trial {trial_id}" for trial_id in choices.trial_id]
         if target == "outcome":
             for class_id, label in enumerate(OUTCOMES):
-                traces.append(_bin_trace(lane, f"{region}:outcome:{class_id}", label, PALETTE[class_id],
-                                         edges, rows[f"p_{class_id}"], rows.trial_id, int(width)))
+                traces.append(_Trace(lane, f"{region}:outcome:{class_id}", label, PALETTE[class_id],
+                                     x, means[f"p_{class_id}"].to_list(), detail, int(width), "bar"))
         else:
             label = "Right context" if target == "context" else "Right choice"
             color = PALETTE[0] if target == "context" else PALETTE[1]
-            traces.append(_bin_trace(lane, f"{region}:{target}", label, color,
-                                     edges, rows.p_0, rows.trial_id, int(width)))
+            traces.append(_Trace(lane, f"{region}:{target}", label, color,
+                                 x, means.p_0.to_list(), detail, int(width), "point"))
+    widths = tuple(w for w in (500, 100) if any(t.width_ms == w for t in traces))
+    observed = ()
     caption = (
         f"{session}, trials {episode.first_trial_id} to {episode.last_trial_id}. "
-        "Probabilities come from fixed fits that held out the entire excerpt blocks. "
-        "Each segment shows a measured bin."
+        "The decoders held out all blocks in this excerpt. "
     )
+    if motif != "four_outcome":
+        caption += "Each point averages right-side probability from 1 s before to 1 s after the marked choice."
     if motif == "ideal_transition" and pd.notna(episode.repeat_count):
         caption += f" {int(episode.repeat_count)} incorrect old-side repeat choices."
     if motif == "four_outcome":
+        caption += ("Each bar averages four outcome probabilities over the first second after choice. "
+                    "Labels show observed side (L/R) and reward (+/-).")
+        observed = tuple((float(t.choice_elapsed_s), OUTCOME_CODES[int(t.outcome)]
+                          if t.outcome in range(4) else "?")
+                         for t in trials.itertuples() if pd.notna(t.choice_elapsed_s))
         types = selected["trials"].loc[selected["trials"].in_motif, "trial_type"].drop_duplicates()
         caption += " Trial types in the sequence include " + ", ".join(types.str.replace("_", " ")) + "."
     if episode.missing_deliveries:
         caption += f" {int(episode.missing_deliveries)} rewarded choices lack a recorded delivery time."
     if episode.reason:
         caption += " " + str(episode.reason).replace("_", " ").capitalize() + "."
-    if tracks.empty:
-        caption += " The saved episode has no supported decoder tracks."
-    return _Replay(title, caption, lanes, tuple(traces), extent, widths, regional=True)
+    if not widths:
+        caption += " No choices have a complete decoder window."
+    return _Replay(title, caption, lanes, tuple(traces), extent, widths, regional=True, observed=observed)
 
 
 def _regional_behavior(
@@ -215,7 +236,7 @@ def _event_trace(event: str, times: pd.Series, heights: np.ndarray, detail: list
     label, _, _, color = EVENT_STYLES[event]
     valid = np.isfinite(times)
     return _Trace(0, event, label, color, np.asarray(times)[valid].tolist(),
-                  np.asarray(heights)[valid].tolist(), np.asarray(detail)[valid].tolist(), marker=True)
+                  np.asarray(heights)[valid].tolist(), np.asarray(detail)[valid].tolist(), kind="event")
 
 
 def _bin_trace(
@@ -242,21 +263,27 @@ def _interactive(view: _Replay, theme: str) -> go.Figure:
         rows=max(1, len(view.lanes)), cols=1, shared_xaxes=True, vertical_spacing=.1,
         row_heights=[1., 1.15, 1.15] if view.lanes else None,
     )
+    default_width = view.widths_ms[0] if view.widths_ms else None
     for trace in view.traces:
-        shape = EVENT_STYLES[trace.series][1] if trace.marker else "circle"
-        figure.add_trace(go.Scatter(
+        settings = dict(
             x=trace.x, y=trace.y, name=trace.label, text=trace.detail,
             meta={"series": trace.series, "width_ms": trace.width_ms},
-            mode="markers" if trace.marker else "lines", connectgaps=False,
-            line={"color": trace.color, "width": 2,
-                  "dash": "dot" if trace.series.endswith(":context") else "solid"},
-            marker={"color": trace.color, "symbol": shape, "size": 9},
-            visible=trace.width_ms in (None, 500),
+            visible=trace.width_ms in (None, default_width),
             showlegend=trace.lane != 2 or not view.regional,
             legendgroup=trace.label,
-            hovertemplate="%{text}<extra>%{fullData.name}</extra>" if trace.marker
+            hovertemplate="%{text}<extra>%{fullData.name}</extra>" if trace.kind == "event"
             else "%{text}<br>%{y:.3f}<extra>%{fullData.name}</extra>",
-        ), row=trace.lane + 1, col=1)
+        )
+        if trace.kind == "bar":
+            glyph = go.Bar(**settings, marker_color=trace.color, width=_outcome_bar_width(view.observed))
+        else:
+            symbol = EVENT_STYLES[trace.series][1] if trace.kind == "event" else (
+                "diamond-open" if trace.series.endswith(":context") else "circle")
+            glyph = go.Scatter(**settings, mode="lines" if trace.kind == "line" else "markers",
+                               line={"color": trace.color, "width": 2},
+                               marker={"color": trace.color, "symbol": symbol,
+                                       "size": 13 if symbol == "diamond-open" else 8})
+        figure.add_trace(glyph, row=trace.lane + 1, col=1)
     for trace in view.traces:
         if trace.series in VERTICAL_EVENTS:
             for time in trace.x:
@@ -271,15 +298,20 @@ def _interactive(view: _Replay, theme: str) -> go.Figure:
     if view.regional:
         figure.update_yaxes(range=[-.025, 1.025], row=2, col=1)
         figure.update_yaxes(range=[-.025, 1.025], row=3, col=1)
+    if view.observed:
+        figure.update_layout(barmode="stack")
+        figure.update_xaxes(tickvals=[t for t, _ in view.observed],
+                            ticktext=[f"{t:.1f}<br>{label}" for t, label in view.observed],
+                            row=3, col=1)
     if view.extent is not None:
         figure.update_xaxes(range=list(view.extent))
     figure.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor", spikecolor=ink)
-    title = view.title + (" | 500 ms" if view.widths_ms else "")
+    title = view.title + (f" | {default_width} ms decoder" if view.widths_ms else "")
     if view.widths_ms:
         buttons = [
             dict(label=f"{width} ms", method="update", args=[
                 {"visible": [trace.width_ms in (None, width) for trace in view.traces]},
-                {"title.text": f"{view.title} | {width} ms"},
+                {"title.text": f"{view.title} | {width} ms decoder"},
             ]) for width in view.widths_ms
         ]
         figure.update_layout(updatemenus=[dict(buttons=buttons, x=1., xanchor="right", y=1.17)])
@@ -299,6 +331,12 @@ def _interactive(view: _Replay, theme: str) -> go.Figure:
     return figure
 
 
+def _outcome_bar_width(observed: tuple[tuple[float, str], ...]) -> float:
+    """Return a bar width in seconds below the minimum spacing of labeled choices."""
+    gaps = np.diff(np.unique([time for time, _ in observed]))
+    return min(1.2, .7 * gaps.min()) if len(gaps) else 1.2
+
+
 def _static(view: _Replay, theme: str) -> Figure:
     """Draw the default-width replay as a Matplotlib Figure with the same gaps and markers."""
     style = "dark_background" if theme == "dark" else "default"
@@ -309,15 +347,27 @@ def _static(view: _Replay, theme: str) -> Figure:
             height_ratios=[.85, 1.15, 1.15] if view.lanes else None,
         )
         axes = axes[:, 0]
+        default_width = view.widths_ms[0] if view.widths_ms else None
+        bottoms = {}
         for trace in view.traces:
-            if trace.width_ms not in (None, 500):
+            if trace.width_ms not in (None, default_width):
                 continue
-            glyph = EVENT_STYLES[trace.series][2] if trace.marker else None
-            linestyle = ":" if trace.series.endswith(":context") else "-"
+            if trace.kind == "bar":
+                bottom = bottoms.setdefault(trace.lane, np.zeros(len(trace.x)))
+                axes[trace.lane].bar(trace.x, trace.y, bottom=bottom, color=trace.color,
+                                     width=_outcome_bar_width(view.observed), label=trace.label)
+                bottoms[trace.lane] = bottom + trace.y
+                continue
+            glyph = None
+            if trace.kind == "event":
+                glyph = EVENT_STYLES[trace.series][2]
+            elif trace.kind == "point":
+                glyph = "D" if trace.series.endswith(":context") else "o"
             axes[trace.lane].plot(np.asarray(trace.x, dtype=float), np.asarray(trace.y, dtype=float),
-                                  color=trace.color, marker=glyph, linestyle="None" if glyph else linestyle,
-                                  label=trace.label, gid=trace.series, markersize=6., linewidth=1.7,
-                                  zorder=3 if linestyle == ":" else 2)
+                                  color=trace.color, marker=glyph, linestyle="None" if glyph else "-",
+                                  label=trace.label, gid=trace.series, linewidth=1.7,
+                                  markerfacecolor="none" if glyph == "D" and trace.kind == "point" else trace.color,
+                                  markersize=8 if trace.series.endswith(":context") else 5)
             if trace.series in VERTICAL_EVENTS:
                 for time in trace.x:
                     for axis in axes:
@@ -326,7 +376,7 @@ def _static(view: _Replay, theme: str) -> Figure:
             axis.set_ylabel(label, fontsize=11)
             axis.grid(axis="x", alpha=.2)
             handles, labels = axis.get_legend_handles_labels()
-            if labels and lane == 0:
+            if labels and (lane == 0 or view.regional and lane == 1):
                 axis.legend(handles, labels, loc="lower left", bbox_to_anchor=(0., 1.01),
                             fontsize=8, ncol=min(4, len(labels)), frameon=False)
             elif labels and (lane != 2 or not view.regional):
@@ -340,12 +390,17 @@ def _static(view: _Replay, theme: str) -> Figure:
         if view.regional:
             for axis in axes[1:]:
                 axis.set_ylim(-.025, 1.025)
+        if view.observed:
+            axes[-1].set_xticks([t for t, _ in view.observed],
+                                [f"{t:.1f}\n{label}" for t, label in view.observed],
+                                fontsize=9)
         if view.extent is not None:
             axes[-1].set_xlim(*view.extent)
-        suffix = " | 500 ms" if view.widths_ms else ""
+        suffix = f" | {default_width} ms decoder" if view.widths_ms else ""
         figure.suptitle(view.title + suffix, fontsize=17, fontweight="bold")
         figure.text(.1, .027, fill(view.caption, 123), fontsize=10, ha="left", va="bottom")
-        figure.subplots_adjust(left=.1, right=.97, bottom=.17, top=.855, hspace=.24)
+        figure.subplots_adjust(left=.1, right=.97, bottom=.22 if view.observed else .17,
+                               top=.855, hspace=.24)
     return figure
 
 

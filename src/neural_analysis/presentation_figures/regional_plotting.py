@@ -84,10 +84,11 @@ def render_regional_cohort(fields: dict, meta: dict, theme: str = "light") -> di
     )
     recovery = fields["recovery"].loc[fields["recovery"].width_ms.eq(500)]
     figures["figure_7_pc_recovery"] = _cohort_recovery(recovery, subject, colors, roster_notes, theme)
+    pc_limit = _pc_display_limit(full, recovery)
     for group in GROUPS:
         key = "figure_7_pc_curves" if group == "overall" else f"figure_7_pc_curves_{group}"
         figures[key] = _cohort_pc_curves(
-            full, group, subject, colors, roster_notes, theme,
+            full, group, subject, colors, roster_notes, theme, pc_limit,
         )
     for number, session in enumerate(sessions, start=1):
         confusion = fields["confusion"]
@@ -359,6 +360,7 @@ def _pc_session(fields: dict, scores: pd.DataFrame, width_ms: int, session: str,
     """Render regional PC-prefix curves and matched all-unit references."""
     readouts = READOUTS[:-1] if subgroups else READOUTS
     recovery = fields["recovery"].loc[fields["recovery"].width_ms.eq(width_ms)]
+    pc_limit = _pc_display_limit(scores, recovery)
     caption = (f"{session} | {width_ms} ms, choice-aligned [-1, +1) s for context and choice, "
                "[0, +1) s for outcome. Solid curves show supported training-fold PC counts. "
                "Dashed lines show matched all-unit scores. A ring marks sustained recovery within 5 points.")
@@ -372,7 +374,7 @@ def _pc_session(fields: dict, scores: pd.DataFrame, width_ms: int, session: str,
         for index, (target, regime) in enumerate(readouts):
             axis = axes[region_index, index]
             axis.set_gid(f"{region}:{regime}:{target}")
-            _pc_axis(axis, target, region if not index else "")
+            _pc_axis(axis, target, region if not index else "", pc_limit)
             if region_index == 0:
                 axis.set_title(_pc_title(target, regime), fontsize=12, fontweight="semibold")
             elif subgroups:
@@ -397,11 +399,19 @@ def _pc_session(fields: dict, scores: pd.DataFrame, width_ms: int, session: str,
     return figure
 
 
-def _pc_axis(axis, target: str, region: str) -> None:
+def _pc_display_limit(scores: pd.DataFrame, recovery: pd.DataFrame) -> int:
+    """Return a shared count axis, with a ten-PC fallback for legacy saved tables."""
+    requested = recovery.get("requested_max_pc", pd.Series(dtype=int)).dropna()
+    observed = scores.n_pcs.dropna()
+    return int(max(10, max(requested, default=0), max(observed, default=0)))
+
+
+def _pc_axis(axis, target: str, region: str, pc_limit: int) -> None:
     """Set bounded axes for positive PC counts and dimensionless accuracy."""
     _accuracy_axis(axis, .25 if target == "outcome" else .5)
-    axis.set_xlim(.7, 10.3)
-    axis.set_xticks((1, 5, 10))
+    axis.set_xlim(.7, pc_limit + .3)
+    ticks = sorted({1, *range(5, pc_limit, 5), pc_limit})
+    axis.set_xticks(ticks)
     if region:
         axis.set_ylabel(f"{region}\nBalanced accuracy", fontsize=11)
 
@@ -577,7 +587,7 @@ def _cohort_recovery(recovery: pd.DataFrame, subject: str, colors: dict,
 
 
 def _cohort_pc_curves(scores: pd.DataFrame, group: str, subject: str, colors: dict,
-                      roster_notes: str, theme: str) -> Figure:
+                      roster_notes: str, theme: str, pc_limit: int) -> Figure:
     """Draw thin per-session PC curves and equal-weight medians on supported counts."""
     label = GROUP_LABELS[GROUPS.index(group)]
     caption = (f"{subject} | 500 ms bins. Thin curves show each named session through its available "
@@ -590,7 +600,7 @@ def _cohort_pc_curves(scores: pd.DataFrame, group: str, subject: str, colors: di
         for index, (target, regime) in enumerate(readouts):
             axis = axes[region_index, index]
             axis.set_gid(f"{region}:{regime}:{target}")
-            _pc_axis(axis, target, region if not index else "")
+            _pc_axis(axis, target, region if not index else "", pc_limit)
             if region_index == 0:
                 axis.set_title(_pc_title(target, regime), fontsize=12, fontweight="semibold")
             else:

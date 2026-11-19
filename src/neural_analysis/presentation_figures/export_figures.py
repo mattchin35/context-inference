@@ -54,7 +54,8 @@ def _session_panels(manifest: Path, data: dict, group: str, theme: str) -> tuple
     path = manifest.parent / data["archives"][group]
     if group == "prediction":
         from .prediction_plotting import render_prediction
-        fields, meta = results.load_result(path, keys=("curves", "available_units", "source_pool_size", "row_positions"))
+        fields, meta = results.load_result(path, keys=("curves", "available_units", "source_pool_size",
+                                                       "row_positions", "panel_d_pcs"))
         return render_prediction(fields, meta, theme), {}
     if group == "regional":
         from .regional_plotting import render_regional

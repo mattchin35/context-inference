@@ -21,12 +21,15 @@ from . import preparation, results
 
 
 def run_session(metadata_path: str | Path, *, seed: int = 0, dry_run: bool = False,
-                rerun: bool = False, probe_roles: dict[str, str] | None = None) -> dict:
+                rerun: bool = False, probe_roles: dict[str, str] | None = None,
+                reuse_fixed_from: Path | None = None) -> dict:
     """Run Figures 1-6 on one session Path, returning a JSON-compatible run report.
 
     Seed controls population draws. Dry runs inspect source identities, labels,
     and coverage only. A completed compatible run is reused unless rerun is set.
-    Physical axes and units are recorded in the published session-local NPZs.
+    reuse_fixed_from names a reviewed prior manifest whose all-unit episode
+    fits and movement analysis are unchanged. The PC analyses are computed
+    together. Physical axes and units are recorded in the session-local NPZs.
     """
     if type(seed) is not int or seed < 0:
         raise ValueError("The population draw seed must be a nonnegative integer.")
@@ -53,6 +56,10 @@ def run_session(metadata_path: str | Path, *, seed: int = 0, dry_run: bool = Fal
         if matches:
             return dict(report, status="reused", manifest=str(matches[0]))
 
+    reused = {}
+    if reuse_fixed_from is not None:
+        reuse_fixed_from = Path(reuse_fixed_from).resolve()
+        reused = reviewed_stages(reuse_fixed_from, inspection, seed)
     directory = new_run_directory(root)
     for name in ("run_session.py", "run_batch.py"):
         shutil.copyfile(Path(__file__).with_name(name), directory / name)
@@ -67,9 +74,13 @@ def run_session(metadata_path: str | Path, *, seed: int = 0, dry_run: bool = Fal
             if set(prepared.unavailable).intersection(prepared.probe_roles):
                 raise ValueError(f"Population load failed: {prepared.unavailable}")
             with threadpool_limits(limits=1):
-                for stage, fields in compute_stages(prepared, seed):
+                stages = compute_stages(prepared, seed, reused) if reused else compute_stages(prepared, seed)
+                for stage, fields in stages:
                     archives[stage] = f"{stage}.npz"
                     header = stage_metadata(prepared, seed, stage, identity, mouse_id)
+                    if stage in reused:
+                        header["reused_from_manifest"] = str(reuse_fixed_from)
+                        log.write(f"{stage} reused from {reuse_fixed_from}\n")
                     results.save_result(directory / archives[stage], fields, header)
                     log.write(f"{stage} saved at {perf_counter() - started:.3f} seconds\n")
                     note = stage_observation(stage, fields)
@@ -96,7 +107,25 @@ def run_session(metadata_path: str | Path, *, seed: int = 0, dry_run: bool = Fal
                 peak_rss_kib=peak_rss_kib, archive_bytes=archive_bytes)
 
 
-def compute_stages(prepared: preparation.PreparedChoices, seed: int) -> Iterator[tuple[str, dict]]:
+def reviewed_stages(manifest: Path, inspection: preparation.PreparedChoices, seed: int) -> dict:
+    """Read unchanged replay/movement fields from a compatible, completed session manifest."""
+    if manifest not in results.discover_runs(inspection.session.session_root / "analysis_runs"):
+        raise ValueError("Expected a completed manifest from this session.")
+    data = json.loads(manifest.read_text())
+    if data["kind"] != "session" or data["session_ids"] != [inspection.session_id]:
+        raise ValueError("The selected manifest is incompatible with this session.")
+    reused = {}
+    for stage in ("replays", "movement"):
+        fields, meta = results.load_result(manifest.parent / data["archives"][stage])
+        if (meta["sources"] != inspection.meta["sources"] or meta["probe_roles"] != inspection.probe_roles
+                or meta["identity"] != data["identity"] or meta["seed"] != seed):
+            raise ValueError(f"{stage} source identities, probe roles, run identity or seed have changed.")
+        reused[stage] = fields
+    return reused
+
+
+def compute_stages(prepared: preparation.PreparedChoices, seed: int,
+                   reused: dict | None = None) -> Iterator[tuple[str, dict]]:
     """Yield four stage names and result fields using one prepared session and draw seed.
 
     Regional arrays use choice/bin/unit axes; prediction and movement share the
@@ -108,8 +137,11 @@ def compute_stages(prepared: preparation.PreparedChoices, seed: int) -> Iterator
     from .replays import compute_replays
 
     yield "regional", compute_decoding(prepared)
-    yield "replays", compute_replays(prepared)
+    yield "replays", reused["replays"] if reused else compute_replays(prepared)
     yield "prediction", compute_prediction(prepared, seed=seed)
+    if reused:
+        yield "movement", reused["movement"]
+        return
     try:
         speed_report = session_speed.run_session_speed(prepared.session.metadata_path)
         speed = session_speed.load_speed_result(speed_report.result_path)
@@ -156,12 +188,20 @@ def stage_metadata(prepared: preparation.PreparedChoices, seed: int, stage: str,
                 trial_audit=prepared.meta["trial_audit"], trial_ids=prepared.trials.cur_trial.to_numpy(),
                 block_ids=prepared.trials.cur_block.to_numpy(), fold_ids=prepared.fold_ids,
                 unavailable=prepared.unavailable,
-                parameters=dict(regional_widths_ms=[100, 500], wide_width_ms=100, alpha=0.1, draws=5),
+                parameters=scientific_parameters(),
                 axes={"counts": ["choice", "bin", "unit"], "class_probabilities": "one row per choice/bin",
                       "model_sse": ["fit", "target pool position"], "baseline_sse": ["fit", "target pool position"]},
                 units={"choice_time": "UTC seconds", "elapsed": "seconds from first trial start",
                        "accuracy": "fraction", "probability": "dimensionless", "r2": "dimensionless",
                        "speed": "mm/s", "counts": "spikes/bin", "rates": "Hz", "sse": "(spikes/bin)^2"})
+
+
+def scientific_parameters() -> dict:
+    """Return the shared archive settings including bin widths in ms and dimensionless PC limits."""
+    from .decoding import MAX_REGIONAL_PCS
+    from .prediction import PANEL_D_PCS
+    return dict(regional_widths_ms=[100, 500], wide_width_ms=100, alpha=0.1, draws=5,
+                max_regional_pcs=MAX_REGIONAL_PCS, panel_d_pcs=PANEL_D_PCS)
 
 
 def stage_observation(stage: str, fields: dict) -> str:
@@ -197,8 +237,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--rerun", action="store_true")
+    parser.add_argument("--reuse-fixed-from", type=Path, metavar="MANIFEST",
+                        help="Reuse reviewed, scientifically unchanged replay and movement fits from this session.")
     args = parser.parse_args(argv)
-    report = run_session(args.session_metadata, seed=args.seed, dry_run=args.dry_run, rerun=args.rerun)
+    report = run_session(args.session_metadata, seed=args.seed, dry_run=args.dry_run, rerun=args.rerun,
+                         reuse_fixed_from=args.reuse_fixed_from)
     print(json.dumps(report, indent=2))
     return 1 if report["status"] == "excluded" else 0
 
